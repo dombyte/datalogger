@@ -1,0 +1,211 @@
+// Package mqtt provides MQTT output functionality.
+package mqtt
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/dombyte/datalogger/config"
+	"github.com/dombyte/datalogger/datasource"
+	"github.com/eclipse/paho.golang/paho"
+	"github.com/rs/zerolog"
+)
+
+// MQTTWriter writes DataPoints to an MQTT broker.
+type MQTTWriter struct {
+	config  config.Output
+	logger  zerolog.Logger
+	client  *paho.Client
+	devices []string
+}
+
+// NewMQTTWriter creates a new MQTTWriter.
+func NewMQTTWriter(outputConfig config.Output, logger *zerolog.Logger) (*MQTTWriter, error) {
+	w := &MQTTWriter{
+		config:  outputConfig,
+		logger:  logger.With().Str("output", "mqtt").Str("name", outputConfig.Name).Logger(),
+		devices: outputConfig.Devices,
+	}
+
+	return w, w.createClient()
+}
+
+// createClient creates and configures the MQTT client.
+func (w *MQTTWriter) createClient() error {
+	mqttConfig := w.config.OutputSpecific.Mqtt
+
+	// Parse the broker URL
+	brokerURL, err := parseURL(mqttConfig.Address)
+	if err != nil {
+		return fmt.Errorf("failed to parse MQTT broker URL: %w", err)
+	}
+
+	// Create connection
+	conn, err := net.Dial(brokerURL.Scheme, brokerURL.Host)
+	if err != nil {
+		return fmt.Errorf("failed to dial MQTT broker: %w", err)
+	}
+
+	// Wrap in TLS if needed
+	if brokerURL.Scheme == "tls" || brokerURL.Scheme == "ssl" || mqttConfig.Insecure {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: mqttConfig.Insecure,
+		}
+		conn = tls.Client(conn, tlsConfig)
+	}
+
+	// Create client configuration
+	clientConfig := paho.ClientConfig{
+		ClientID: mqttConfig.ClientID,
+		Conn:     conn,
+	}
+
+	// Create the client
+	w.client = paho.NewClient(clientConfig)
+
+	return nil
+}
+
+// parseURL parses the MQTT broker URL.
+func parseURL(address string) (*url.URL, error) {
+	// If address doesn't have a scheme, default to tcp
+	if !strings.Contains(address, "://") {
+		address = "tcp://" + address
+	}
+	return url.Parse(address)
+}
+
+// Name returns the output name.
+func (w *MQTTWriter) Name() string {
+	return w.config.Name
+}
+
+// Devices returns the list of device names this output accepts.
+func (w *MQTTWriter) Devices() []string {
+	return w.devices
+}
+
+// Validate validates the MQTT writer configuration.
+func (w *MQTTWriter) Validate() error {
+	// Configuration was already validated when creating the writer
+	return nil
+}
+
+// Start starts the MQTT writer goroutine.
+func (w *MQTTWriter) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
+	errCh := make(chan error, 1)
+
+	connect := &paho.Connect{
+		ClientID: w.config.OutputSpecific.Mqtt.ClientID,
+		KeepAlive: 30,
+		CleanStart: true,
+	}
+
+	mqttConfig := w.config.OutputSpecific.Mqtt
+	if mqttConfig.Username != "" {
+		connect.Username = mqttConfig.Username
+		connect.Password = []byte(mqttConfig.Password)
+		connect.UsernameFlag = true
+		connect.PasswordFlag = true
+	}
+
+	connack, err := w.client.Connect(ctx, connect)
+	if err != nil {
+		w.logger.Error().Err(err).Msg("Failed to connect to MQTT broker")
+		errCh <- err
+		return errCh
+	}
+
+	_ = connack
+	w.logger.Info().
+		Str("broker", mqttConfig.Address).
+		Msg("Connected to MQTT broker")
+
+	go func() {
+		defer func() {
+			disconnect := &paho.Disconnect{}
+			w.client.Disconnect(disconnect)
+			_ = w.client.Done()
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				w.drainRemainingPoints(input)
+				return
+			case dp, ok := <-input:
+				if !ok {
+					return
+				}
+				w.logger.Debug().Str("device", dp.DeviceName).Str("point", dp.PointName).Msg("MQTT writer: publishing point")
+				w.publish(ctx, dp)
+			}
+		}
+	}()
+
+	return errCh
+}
+
+// drainRemainingPoints drains remaining points from the input channel during shutdown.
+func (w *MQTTWriter) drainRemainingPoints(input <-chan datasource.DataPoint) {
+	w.logger.Info().Msg("MQTT writer: shutdown started, draining remaining points")
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer drainCancel()
+
+	w.logger.Info().Msg("MQTT writer: draining remaining points")
+	for {
+		select {
+		case dp, ok := <-input:
+			if !ok {
+				return
+			}
+			w.publish(drainCtx, dp)
+		default:
+			return
+		}
+	}
+}
+
+// publish publishes a DataPoint to the MQTT broker.
+func (w *MQTTWriter) publish(ctx context.Context, dp datasource.DataPoint) {
+	mqttConfig := w.config.OutputSpecific.Mqtt
+
+	// Build topic: datalogger/{device}/{point}
+	topic := fmt.Sprintf("%s/%s/%s",
+		mqttConfig.Topic,
+		dp.DeviceName,
+		dp.PointName,
+	)
+
+	// Build JSON payload
+	payload := map[string]interface{}{
+		"value":     dp.Value,
+		"unit":      dp.Unit,
+		"timestamp": dp.Timestamp.Format(time.RFC3339Nano),
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		w.logger.Error().Err(err).Msg("Failed to marshal MQTT payload")
+		return
+	}
+
+	// Create publish packet
+	publish := &paho.Publish{
+		Topic:   topic,
+		Payload: jsonPayload,
+		QoS:     byte(mqttConfig.QoS),
+		Retain:  mqttConfig.Retain,
+	}
+
+	// Publish the message
+	if _, err := w.client.Publish(ctx, publish); err != nil {
+		w.logger.Error().Err(err).Str("topic", topic).Msg("Failed to publish MQTT message")
+	}
+}

@@ -1,0 +1,201 @@
+# Datalogger Example Configuration
+# Complete reference showing all available configuration options.
+#
+# Run with: datalogger -config example_config.yaml [-debug]
+
+# Devices: Define data sources
+# Each device can be of type "modbus" or "http"
+# For HTTP devices with JSON responses, json_path uses gjson syntax: https://github.com/tidwall/gjson/blob/master/SYNTAX.md
+#
+# Modbus point types: int16, uint16, int32, uint32, float32, bool
+# Register mode: direct (individual reads) or range (batch reads)
+#   - direct: Each point is read individually (slower but more flexible)
+#   - range: Multiple registers read in batches (faster, requires ranges config)
+# Function code: 3 (Holding Registers) or 4 (Input Registers)
+# Parallelism: 1-100 concurrent reads within device poll
+#   - For Modbus devices: Use 1 (most devices don't support concurrent requests)
+#   - For HTTP devices: Higher values (e.g., 5-10) can improve performance
+# Poll interval: How often to poll the device (e.g., 100ms, 1s, 5s, 1m)
+# Timeout: Maximum time to wait for a response (e.g., 2s, 10s)
+
+devices:
+  # ===== Modbus TCP Example =====
+  # register_mode: range - reads registers in batches for efficiency
+  # ranges: Define contiguous register blocks to read together
+  # function_code: 4 = Input Registers (read-only)
+  # type: uint32 - uses 2 registers (count: 2)
+  - name: solis_tcp
+    type: modbus
+    poll_interval: 1s
+    timeout: 2s
+    parallelism: 1
+    device_specific:
+      modbus:
+        address: "tcp://modbus.example.com:502"
+        slave_id: 1
+        register_mode: range
+        ranges: ["33057-33065"]
+        # For RTU mode (serial):
+        # address: "rtu:///dev/ttyUSB0"
+        # speed: 9600
+        # data_bits: 8
+        # parity: "N"  # N=none, E=even, O=odd
+        # stop_bits: 1
+    points:
+      - name: pv_power_total
+        register: 33057
+        count: 2
+        type: uint32
+        function_code: 4
+        scale: 0.1
+        offset: 0
+        unit: "W"
+
+  # ===== Modbus RTU Example =====
+  # register_mode: direct - each point read individually
+  # function_code: 4 = Input Registers (read-only)
+  # type: int16 - uses 1 register (count: 1)
+  # Serial settings for RTU: speed, data_bits, parity, stop_bits
+  - name: modbus_rtu_device
+    type: modbus
+    poll_interval: 5s
+    timeout: 3s
+    parallelism: 1
+    device_specific:
+      modbus:
+        address: "rtu:///dev/ttyUSB0"
+        slave_id: 1
+        speed: 9600
+        data_bits: 8
+        parity: "N"
+        stop_bits: 1
+        register_mode: direct
+    points:
+      - name: temperature
+        register: 100
+        count: 1
+        type: int16
+        function_code: 4
+        scale: 0.1
+        offset: -40
+        unit: "C"
+
+  # ===== HTTP GET JSON Example =====
+  - name: sm
+    type: http
+    poll_interval: 1s
+    timeout: 10s
+    parallelism: 1
+    device_specific:
+      http:
+        address: "https://api.example.com/health"
+        method: GET
+        headers:
+          Accept: "application/json"
+          Authorization: "Bearer token"
+        response_type: json
+        insecure: true
+    points:
+      - name: last_poll
+        json_path: "last_poll"
+
+  # ===== HTTP POST JSON Example =====
+  - name: spine
+    type: http
+    poll_interval: 1s
+    timeout: 10s
+    parallelism: 1
+    device_specific:
+      http:
+        address: "http://data.example.com/rpc/EM.GetStatus"
+        method: POST
+        headers:
+          Accept: "application/json"
+          Content-Type: "application/json"
+        body: '{"action": "GetStatus"}'
+        response_type: json
+        insecure: true
+    points:
+      - name: a_voltage
+        json_path: "a_voltage"
+        scale: 1
+        unit: "V"
+      - name: b_voltage
+        json_path: "b_voltage"
+        scale: 1
+        unit: "V"
+      - name: c_voltage
+        json_path: "c_voltage"
+        scale: 1
+        unit: "V"
+      - name: nested_value
+        json_path: "data.measurements.0.value"
+        scale: 0.01
+        unit: "kW"
+
+# Outputs: Define where to write the collected data
+# Each output can be of type "influxdb", "mqtt", or "csv"
+outputs:
+  # ===== InfluxDB 3.x Example =====
+  - name: influxdb_main
+    type: influxdb
+    buffer_size: 1000
+    batch_size: 100
+    batch_timeout: 5s
+    max_retries: 3
+    retry_delay: 1s
+    output_specific:
+      influxdb:
+        address: "http://influxdb.example.com:8181"
+        token: "your-api-token"
+        database: "logger"
+        insecure: true
+    devices:
+      - spine
+      - solis_tcp
+
+  # ===== MQTT Example with Authentication =====
+  - name: mqtt_broker
+    type: mqtt
+    buffer_size: 500
+    output_specific:
+      mqtt:
+        address: "tcp://mqtt.example.com:1883"
+        client_id: "datalogger-01"
+        topic: "datalogger"
+        qos: 1
+        retain: false
+        username: "user"
+        password: "pass"
+        insecure: false
+    devices:
+      - sm
+
+  # ===== MQTT Example without Authentication =====
+  - name: mqtt_simple
+    type: mqtt
+    buffer_size: 500
+    output_specific:
+      mqtt:
+        address: "mqtt.example.com:1883"
+        topic: "sensors"
+        qos: 0
+        retain: false
+    devices:
+      - modbus_rtu_device
+
+  # ===== CSV Example with Rotation =====
+  - name: csv_logger
+    type: csv
+    buffer_size: 10000
+    batch_size: 1000
+    batch_timeout: 30s
+    output_specific:
+      csv:
+        file_path: "./data/data.csv"
+        max_age: 10s
+        max_backups: 5
+    devices:
+      - sm
+      - spine
+      - solis_tcp

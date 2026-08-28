@@ -1,0 +1,12 @@
+---
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./examples/config.yaml:/app/config.yaml:ro
+    environment:
+      - TZ=Europe/Berlin
+    command: -config=/app/config.yaml
+    restart: unless-stopped

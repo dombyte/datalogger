@@ -1,0 +1,10 @@
+FROM alpine:latest AS builder
+RUN apk --update add ca-certificates tzdata
+
+FROM scratch
+WORKDIR /app
+ARG TARGETPLATFORM
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+COPY $TARGETPLATFORM/datalogger /app
+ENTRYPOINT ["/app/datalogger"]

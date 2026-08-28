@@ -1,0 +1,101 @@
+version: 2
+
+project_name: datalogger
+before:
+  hooks:
+    - go mod tidy
+    - go fmt ./...
+
+builds:
+  - id: logger
+    main: ./main.go
+    binary: datalogger
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm
+      - arm64
+    goamd64:
+      - v3
+    goarm:
+      - 7
+    goarm64:
+      - v8.0
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - "-s -w -X main.Version={{.Version}} -X main.Commit={{.ShortCommit}} -X main.BuildDate={{.Date}} -X main.GoVersion={{ .Env.GOVERSION }}"
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: ["tar.gz"]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+          - LICENSE
+          - README.md
+
+changelog:
+  sort: asc
+  use: github
+  format: |
+    {{ .Message -}}
+        {{- if .Logins }} by {{ .Logins | englishJoin }}{{- end -}}
+        {{- if .SHA }}
+          {{- $sha := split .SHA "" -}}
+          {{- if .Logins }} in {{ else }} in {{ end }}[#{{ index $sha 0 }}{{ index $sha 1 }}{{ index $sha 2 }}{{ index $sha 3 }}{{ index $sha 4 }}{{ index $sha 5 }}{{ index $sha 6 }}]({{ .GitURL }}/commit/{{ .SHA }})
+        {{- end }}
+  filters:
+    exclude:
+      - "^test: "
+      - "^chore:"
+      - "Merge branch"
+      - "Merge pull request"
+      - "^test:"
+      - "^rebase:"
+
+release:
+  github:
+      owner: dombyte    # Change!
+      name: datalogger  # Change!
+  name_template: "v{{.Version}}"
+  prerelease: auto
+  header: |
+    {{- if .Prerelease }}
+    > [!WARNING]
+    > **This is a pre-release version. Use with caution and report any issues you encounter.**
+    {{- end }}
+
+  footer: |
+    {{- if and .PreviousTag .Tag -}}
+    **Full Changelog**: [{{ .PreviousTag }}...{{ .Tag }}]({{ .GitURL }}/compare/{{ .PreviousTag }}...{{ .Tag }})
+    {{- end -}}
+
+
+dockers_v2:
+  - id: logger
+    ids:
+      - logger
+    images:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY }}"
+    tags:
+      - "v{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - "linux/amd64"
+      - "linux/arm64"
+    dockerfile: Dockerfile.goreleaser
+    labels:
+      "org.opencontainers.image.description": "Datalogger Multi-Architecture AMD64_v3 and ARM64_v8"
+      "org.opencontainers.image.created": "{{.Date}}"
+      "org.opencontainers.image.name": "{{.ProjectName}}"
+      "org.opencontainers.image.revision": "{{.FullCommit}}"
+      "org.opencontainers.image.version": "{{.Version}}"
+      "org.opencontainers.image.source": "{{.GitURL}}"
+    annotations:
+      "org.opencontainers.image.description": "Datalogger Multi-Architecture AMD64_v3 and ARM64_v8"
+
+
+checksum:
+  name_template: "checksums.txt"
