@@ -19,10 +19,11 @@ import (
 
 // MQTTWriter writes DataPoints to an MQTT broker.
 type MQTTWriter struct {
-	config  config.Output
-	logger  zerolog.Logger
-	client  *paho.Client
-	devices []string
+	config      config.Output
+	logger      zerolog.Logger
+	client      *paho.Client
+	devices     []string
+	lastPubErr  error // Track if previous publish failed
 }
 
 // NewMQTTWriter creates a new MQTTWriter.
@@ -207,5 +208,14 @@ func (w *MQTTWriter) publish(ctx context.Context, dp datasource.DataPoint) {
 	// Publish the message
 	if _, err := w.client.Publish(ctx, publish); err != nil {
 		w.logger.Error().Err(err).Str("topic", topic).Msg("Failed to publish MQTT message")
+		w.lastPubErr = err
+	} else {
+		// Check if this is recovery from a previous error
+		if w.lastPubErr != nil {
+			w.logger.Info().Str("topic", topic).Msg("Successfully published MQTT message (recovered from previous error)")
+		} else {
+			w.logger.Debug().Str("topic", topic).Msg("Successfully published MQTT message")
+		}
+		w.lastPubErr = nil
 	}
 }

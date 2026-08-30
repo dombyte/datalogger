@@ -32,6 +32,7 @@ type InfluxDBWriter struct {
 	batchTimeout time.Duration
 	maxRetries   int
 	retryDelay   time.Duration
+	lastWriteErr error // Track if previous write failed
 }
 
 // NewInfluxDBWriter creates a new InfluxDBWriter.
@@ -347,11 +348,18 @@ func (w *InfluxDBWriter) attemptWrite(
 	// Attempt the write
 	err := w.client.WritePoints(ctx, batch)
 	if err == nil {
-		w.logger.Debug().Int("points", len(batch)).Msg("Successfully wrote batch")
+		// Check if this is recovery from a previous error
+		if w.lastWriteErr != nil {
+			w.logger.Info().Int("points", len(batch)).Msg("Successfully wrote batch to InfluxDB (recovered from previous error)")
+		} else {
+			w.logger.Debug().Int("points", len(batch)).Msg("Successfully wrote batch to InfluxDB")
+		}
+		w.lastWriteErr = nil
 		return nil
 	}
 
 	w.logger.Error().Err(err).Int("attempt", attempt+1).Int("points", len(batch)).Msg("Batch write failed")
+	w.lastWriteErr = err
 	return err
 }
 

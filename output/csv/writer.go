@@ -28,6 +28,7 @@ type CSVWriter struct {
 	maxBackups  int
 	lastWrite   time.Time
 	fileCreated time.Time // When the current file was created (for rotation)
+	lastWriteErr error    // Track if previous write failed
 }
 
 // NewCSVWriter creates a new CSVWriter.
@@ -113,6 +114,15 @@ func (w *CSVWriter) Start(ctx context.Context, input <-chan datasource.DataPoint
 				w.logger.Debug().Str("device", dp.DeviceName).Str("point", dp.PointName).Msg("CSV writer: writing point")
 				if err := w.writePoint(dp); err != nil {
 					w.logger.Error().Err(err).Msg("Failed to write CSV point")
+					w.lastWriteErr = err
+				} else {
+					// Check if this is recovery from a previous error
+					if w.lastWriteErr != nil {
+						w.logger.Info().Str("device", dp.DeviceName).Str("point", dp.PointName).Msg("Successfully wrote CSV point (recovered from previous error)")
+					} else {
+						w.logger.Debug().Str("device", dp.DeviceName).Str("point", dp.PointName).Msg("Successfully wrote CSV point")
+					}
+					w.lastWriteErr = nil
 				}
 			}
 		}

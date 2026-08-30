@@ -330,12 +330,20 @@ func (r *ModbusReader) handlePollError(err error) {
 
 // handlePollSuccess handles a successful poll attempt.
 func (r *ModbusReader) handlePollSuccess(points []datasource.DataPoint, dataCh chan<- datasource.DataPoint) {
+	// Check if this is recovery from a previous error
+	recoveredFromError := r.lastError != nil || r.failCount > 0
+
 	// Reset failure tracking on success
 	r.failCount = 0
 	r.backoffWait = 0
 	r.lastError = nil
 
-	r.logger.Debug().Int("count", len(points)).Msg("Modbus poll completed")
+	// Log at INFO level if recovering from an error, DEBUG otherwise
+	if recoveredFromError {
+		r.logger.Info().Int("count", len(points)).Msg("Modbus poll completed successfully (recovered from previous error)")
+	} else {
+		r.logger.Debug().Int("count", len(points)).Msg("Modbus poll completed")
+	}
 
 	// Send each point to channel
 	for _, dp := range points {
@@ -360,8 +368,9 @@ func (r *ModbusReader) handleReconnect() {
 	if reconnectErr := r.reconnect(); reconnectErr != nil {
 		r.logger.Error().Err(reconnectErr).Msg("Modbus reconnection failed")
 	} else {
-		r.failCount = 0 // Reset on successful reconnect
+		r.failCount = 0      // Reset on successful reconnect
 		r.backoffWait = 0
+		r.lastError = nil   // Reset last error on successful reconnect
 		r.logger.Info().Msg("Modbus reconnected successfully")
 	}
 }
