@@ -60,6 +60,11 @@ func (d *Device) Validate() error {
 	// as many Modbus devices can only handle one request at a time.
 	// For HTTP devices, higher parallelism is generally safe.
 
+	// Validate that device has at least one point
+	if len(d.Points) == 0 {
+		return fmt.Errorf("device must have at least one point")
+	}
+
 	switch d.Type {
 	case "modbus":
 		return d.DeviceSpecific.Modbus.Validate()

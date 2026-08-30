@@ -20,9 +20,12 @@ import (
 
 // HttpReader reads data from an HTTP API endpoint.
 type HttpReader struct {
-	config config.Device
-	logger zerolog.Logger
-	client *http.Client
+	config      config.Device
+	logger      zerolog.Logger
+	client      *http.Client
+	failCount   int
+	lastError   error
+	backoffWait time.Duration
 }
 
 // NewHttpReader creates a new HttpReader.
@@ -58,6 +61,99 @@ func (r *HttpReader) Validate() error {
 	return nil
 }
 
+// shouldReconnect determines if an error indicates a connection issue that warrants reconnection.
+func (r *HttpReader) shouldReconnect(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "connection") ||
+		strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "refused") ||
+		strings.Contains(errStr, "unreachable") ||
+		strings.Contains(errStr, "reset by peer") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "EOF") ||
+		strings.Contains(errStr, "dial") ||
+		strings.Contains(errStr, "TLS") ||
+		strings.Contains(errStr, "net.Error")
+}
+
+// applyBackoff applies exponential backoff to the wait duration.
+func (r *HttpReader) applyBackoff() {
+	const maxBackoff = 30 * time.Second
+	r.backoffWait = r.backoffWait * 2
+	if r.backoffWait == 0 {
+		r.backoffWait = 100 * time.Millisecond
+	}
+	if r.backoffWait > maxBackoff {
+		r.backoffWait = maxBackoff
+	}
+}
+
+// resetBackoff resets the backoff state.
+func (r *HttpReader) resetBackoff() {
+	r.failCount = 0
+	r.backoffWait = 0
+	r.lastError = nil
+}
+
+// reconnect recreates the HTTP client for reconnection.
+func (r *HttpReader) reconnect() error {
+	r.logger.Warn().Msg("Attempting to reconnect HTTP client")
+
+	httpConfig := r.config.DeviceSpecific.Http
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: httpConfig.Insecure,
+		},
+	}
+
+	// Close existing client
+	if r.client != nil {
+		r.client.CloseIdleConnections()
+	}
+
+	// Create new client
+	r.client = &http.Client{
+		Transport: transport,
+		Timeout:   r.config.Timeout,
+	}
+
+	r.logger.Info().Msg("HTTP client reconnected successfully")
+	return nil
+}
+
+// handleReconnect attempts to reconnect the HTTP client.
+func (r *HttpReader) handleReconnect() {
+	if reconnectErr := r.reconnect(); reconnectErr != nil {
+		r.logger.Error().Err(reconnectErr).Msg("HTTP reconnection failed")
+	} else {
+		r.resetBackoff()
+		r.logger.Info().Msg("HTTP reconnected successfully")
+	}
+}
+
+// handlePollError handles an error from a poll attempt.
+func (r *HttpReader) handlePollError(err error) {
+	r.failCount++
+	r.lastError = err
+
+	r.logger.Error().
+		Err(err).
+		Int("failure_count", r.failCount).
+		Msg("Failed to read HTTP points")
+
+	// Apply exponential backoff
+	r.applyBackoff()
+
+	// Try to reconnect if connection-related error
+	if r.shouldReconnect(err) {
+		r.handleReconnect()
+	}
+}
+
 // Start starts the polling loop and returns channels for data, done, and errors.
 func (r *HttpReader) Start(ctx context.Context) (<-chan datasource.DataPoint, <-chan struct{}, <-chan error) {
 	dataCh := make(chan datasource.DataPoint)
@@ -86,6 +182,12 @@ func (r *HttpReader) pollLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Apply backoff wait if we had previous failures
+			if r.backoffWait > 0 {
+				r.logger.Warn().Dur("wait", r.backoffWait).Msg("Waiting before retry due to previous failure")
+				time.Sleep(r.backoffWait)
+			}
+
 			r.logger.Debug().Msg("Starting HTTP poll")
 
 			// Read all points (timestamp captured inside readAllPoints after response)
@@ -95,10 +197,13 @@ func (r *HttpReader) pollLoop(
 				if ctx.Err() != nil {
 					r.logger.Debug().Err(err).Msg("HTTP poll cancelled during shutdown")
 				} else {
-					r.logger.Error().Err(err).Msg("Failed to read HTTP points")
+					r.handlePollError(err)
 				}
 				continue
 			}
+
+			// Reset failure tracking on success
+			r.resetBackoff()
 
 			r.logger.Debug().Int("count", len(points)).Msg("HTTP poll completed")
 

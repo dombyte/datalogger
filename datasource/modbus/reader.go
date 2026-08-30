@@ -152,13 +152,7 @@ func (r *ModbusReader) shouldReconnect(err error) bool {
 func (r *ModbusReader) reconnect() error {
 	r.logger.Warn().Msg("Attempting to reconnect Modbus client")
 
-	// Close existing client
-	if r.client != nil {
-		r.client.Close()
-		r.client = nil
-	}
-
-	// Create new client
+	// Create new client first, so we always have a valid client or error
 	modbusConfig := r.config.DeviceSpecific.Modbus
 	modbusStdLogger := newModbusLogger(&r.logger)
 
@@ -185,6 +179,12 @@ func (r *ModbusReader) reconnect() error {
 	if err := client.SetUnitId(modbusConfig.SlaveID); err != nil {
 		client.Close()
 		return fmt.Errorf("failed to set unit ID: %w", err)
+	}
+
+	// Only close old client after new one is successfully created
+	// This prevents r.client from ever being nil during normal operation
+	if r.client != nil {
+		r.client.Close()
 	}
 
 	r.client = client
@@ -464,33 +464,9 @@ func (r *ModbusReader) createDataPointFromValues(
 }
 
 // applyScaleAndOffsetForPoint applies scale and offset to a decoded value for a specific point.
+// Deprecated: Use applyScaleAndOffset instead. Kept for backwards compatibility.
 func (r *ModbusReader) applyScaleAndOffsetForPoint(value interface{}, point config.Point) float64 {
-	// Convert value to float64 for scaling
-	var scaled float64
-	switch v := value.(type) {
-	case int16:
-		scaled = float64(v)*point.Scale + point.Offset
-	case uint16:
-		scaled = float64(v)*point.Scale + point.Offset
-	case int32:
-		scaled = float64(v)*point.Scale + point.Offset
-	case uint32:
-		scaled = float64(v)*point.Scale + point.Offset
-	case float32:
-		scaled = float64(v)*point.Scale + point.Offset
-	case float64:
-		scaled = v*point.Scale + point.Offset
-	case bool:
-		if v {
-			scaled = 1.0*point.Scale + point.Offset
-		} else {
-			scaled = 0.0*point.Scale + point.Offset
-		}
-	default:
-		// This should not happen if decodeValue is correct, but handle it
-		r.logger.Error().Str("point", point.Name).Str("type", fmt.Sprintf("%T", value)).Msg("Unsupported type for scaling")
-	}
-	return scaled
+	return r.applyScaleAndOffset(value, point)
 }
 
 // readRegistersForPoint reads registers for a point using Register+Count.
@@ -669,12 +645,14 @@ func (r *ModbusReader) decodePointsFromRangeData(rangeData map[uint16]RangeValue
 }
 
 // decodeAndScalePoint decodes a single point value and applies scale/offset.
+// Uses the common createDataPointFromValues and applyScaleAndOffset functions.
 func (r *ModbusReader) decodeAndScalePoint(
 	point config.Point,
 	values []uint16,
 	timestamp time.Time,
 ) *datasource.DataPoint {
-	value, err := decodeValue(values, point.Type)
+	// Use the common function to create DataPoint
+	dp, err := r.createDataPointFromValues(point, values, timestamp)
 	if err != nil {
 		r.logger.Warn().
 			Str("point", point.Name).
@@ -682,17 +660,7 @@ func (r *ModbusReader) decodeAndScalePoint(
 			Msg("Failed to decode value")
 		return nil
 	}
-
-	// Apply scale and offset
-	scaled := r.applyScaleAndOffset(value, point)
-
-	return &datasource.DataPoint{
-		DeviceName: r.config.Name,
-		PointName:  point.Name,
-		Value:      scaled,
-		Timestamp:  timestamp,
-		Unit:       point.Unit,
-	}
+	return dp
 }
 
 // applyScaleAndOffset applies scale and offset to a decoded value.
