@@ -369,6 +369,11 @@ func (r *ModbusReader) handleReconnect() {
 // readAllPoints reads all configured points using the appropriate mode (direct or range).
 // Timestamps are captured at data reception time within each mode.
 func (r *ModbusReader) readAllPoints(ctx context.Context) ([]datasource.DataPoint, error) {
+	// Check if client is connected before attempting to read
+	if r.client == nil {
+		return nil, fmt.Errorf("modbus client is not connected")
+	}
+
 	modbusConfig := r.config.DeviceSpecific.Modbus
 
 	if modbusConfig.RegisterMode == "range" {
