@@ -12,7 +12,7 @@ BUILD_FLAGS := -ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X 
 
 .PHONY: build
 build:
-	CGO_ENABLED=0 go build $(BUILD_FLAGS) -o $(BINARY_NAME)
+	CGO_ENABLED=0 go build $(BUILD_FLAGS) -o $(BINARY_NAME) .
 
 .PHONY: clean
 clean:
@@ -24,3 +24,7 @@ all: build
 .PHONY: run
 run: build
 	./$(BINARY_NAME) -config config.yaml
+
+.PHONY: check
+check:
+	./scripts/pre-commit.sh
