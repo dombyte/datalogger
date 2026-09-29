@@ -13,8 +13,8 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/dombyte/datalogger/config"
-	"github.com/dombyte/datalogger/datasource"
+	"github.com/dombyte/datalogger/internal/config"
+	"github.com/dombyte/datalogger/internal/datasource"
 )
 
 const (

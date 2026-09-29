@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dombyte/datalogger/config"
+	"github.com/dombyte/datalogger/internal/config"
 )
 
 // TestNewHttpReader tests creating a new HTTP reader

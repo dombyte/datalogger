@@ -1,42 +1,26 @@
-// Datalogger is a robust, configurable datalogger that reads data from multiple sources
-// (Modbus TCP/RTU, HTTP APIs) and writes to multiple outputs (InfluxDB3, MQTT, CSV) with proper
-// timestamp preservation, error handling, and concurrent execution.
-package main
+// Package app is the composition root: it creates readers and writers from the
+// config, routes data points between them and runs the two-phase shutdown.
+package app
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"runtime"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
 
-	"github.com/dombyte/datalogger/config"
-	"github.com/dombyte/datalogger/datasource"
-	"github.com/dombyte/datalogger/datasource/http"
-	"github.com/dombyte/datalogger/datasource/modbus"
-	"github.com/dombyte/datalogger/output"
-	"github.com/dombyte/datalogger/output/csv"
-	"github.com/dombyte/datalogger/output/influxdb"
-	"github.com/dombyte/datalogger/output/mqtt"
-)
-
-// Build info, set via -ldflags.
-//
-//nolint:gochecknoglobals // written by the linker at build time
-var (
-	Version   = "dev"
-	Commit    = "unknown"
-	BuildDate = "unknown"
-	GoVersion = "unknown"
+	"github.com/dombyte/datalogger/internal/config"
+	"github.com/dombyte/datalogger/internal/datasource"
+	"github.com/dombyte/datalogger/internal/datasource/http"
+	"github.com/dombyte/datalogger/internal/datasource/modbus"
+	"github.com/dombyte/datalogger/internal/output"
+	"github.com/dombyte/datalogger/internal/output/csv"
+	"github.com/dombyte/datalogger/internal/output/influxdb"
+	"github.com/dombyte/datalogger/internal/output/mqtt"
 )
 
 const (
@@ -53,101 +37,31 @@ const (
 	signalBuffer = 2
 )
 
-// errConfigRequired is returned when -config is missing.
-var errConfigRequired = errors.New("-config flag is required")
-
-// cliFlags holds the parsed command line flags.
-type cliFlags struct {
-	configPath  string
-	debug       bool
-	showVersion bool
-}
-
-// parseFlags parses args (without the program name); usage and errors go to output.
-func parseFlags(name string, args []string, output io.Writer) (cliFlags, error) {
-	var f cliFlags
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(output)
-	fs.StringVar(&f.configPath, "config", "", "Path to configuration file (required)")
-	fs.BoolVar(&f.debug, "debug", false, "Enable debug logging")
-	fs.BoolVar(&f.showVersion, "version", false, "Show version and exit")
-
-	if err := fs.Parse(args); err != nil {
-		return f, err
-	}
-	if f.configPath == "" && !f.showVersion {
-		fs.Usage()
-		return f, errConfigRequired
-	}
-	return f, nil
-}
-
-// mustParseFlags parses os.Args; -version, -help and flag errors end the process.
-func mustParseFlags() cliFlags {
-	f, err := parseFlags(filepath.Base(os.Args[0]), os.Args[1:], os.Stderr)
-	switch {
-	case errors.Is(err, flag.ErrHelp):
-		os.Exit(0)
-	case err != nil:
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	case f.showVersion:
-		printVersion()
-		os.Exit(0)
-	}
-	return f
-}
-
-// printVersion prints the build info.
-func printVersion() {
-	fmt.Printf("Version:    %s\n", Version)
-	fmt.Printf("Git Commit: %s\n", Commit)
-	fmt.Printf("Build Date: %s\n", BuildDate)
-	fmt.Printf("Go Version: %s\n", GoVersion)
-	fmt.Printf("OS/Arch:    %s/%s\n", runtime.GOOS, runtime.GOARCH)
-}
-
-func main() {
-	f := mustParseFlags()
-
-	// 1. Setup logging
-	logger := setupLogger(f.debug)
-
-	// 2. Load configuration
-	cfg := loadConfig(f.configPath, logger)
-
-	// 3. Separate contexts for two-phase shutdown: stop sources first, then outputs
+// Run starts all readers and writers, routes the data and blocks until the two-phase
+// shutdown triggered by SIGINT/SIGTERM has finished.
+func Run(cfg *config.Config, logger *zerolog.Logger) {
+	// Separate contexts for two-phase shutdown: stop sources first, then outputs
 	sourceCtx, sourceCancel := context.WithCancel(context.Background())
 	outputCtx, outputCancel := context.WithCancel(context.Background())
 	defer outputCancel()
 	defer sourceCancel()
 
-	// 4. Setup signal handling for graceful/hard shutdown
 	sigChan := make(chan os.Signal, signalBuffer)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go handleSignals(sigChan, sourceCancel, outputCancel, logger)
 
-	// 5. Start all device readers (with monitoring)
 	deviceChannels, deviceDoneChannels := startDeviceReaders(sourceCtx, cfg, logger)
-
-	// 6. Start all output writers and get their channels (with monitoring)
 	outputWriters, outputChannels, outputDoneChannels := startOutputWriters(outputCtx, cfg, logger)
 
-	// 7. Start component health monitor in background
-	// This monitors done channels and logs if components exit unexpectedly
+	// The monitor ends the process if a component exits outside of a shutdown.
 	go monitorComponents(deviceDoneChannels, outputDoneChannels, sourceCtx, outputCtx, logger)
 
-	// 8. Route data from devices to outputs
 	startRouting(deviceChannels, outputWriters, outputChannels, logger)
-
 	logger.Info().Msg("Datalogger started successfully")
 
-	// 9. Wait for output context to be cancelled (by signal handler)
+	// Wait for the output context to be cancelled (by the signal handler)
 	<-outputCtx.Done()
-
-	// 10. Wait for all output writers to finish cleanup
 	waitForOutputs(outputDoneChannels, logger)
-	logger.Info().Msg("Shutdown complete")
 }
 
 // waitForOutputs blocks until every output writer has finished its cleanup.
@@ -184,15 +98,6 @@ func handleSignals(
 	}
 	outputCancel()
 	logger.Info().Msg("Outputs cancelled, waiting for cleanup...")
-}
-
-// loadConfig loads, completes and validates the configuration file.
-func loadConfig(configPath string, logger *zerolog.Logger) *config.Config {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to load config")
-	}
-	return cfg
 }
 
 // startDeviceReaders starts all device readers and returns their data and done channels.
@@ -279,22 +184,6 @@ func startRouting(
 	for deviceName, deviceCh := range deviceChannels {
 		go routeDeviceToOutputs(deviceName, deviceCh, outputWriters, outputChannels, logger)
 	}
-}
-
-// setupLogger sets up the zerolog logger.
-func setupLogger(debug bool) *zerolog.Logger {
-	level := zerolog.InfoLevel
-	if debug {
-		level = zerolog.DebugLevel
-	}
-
-	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).
-		Level(level).
-		With().
-		Timestamp().
-		Logger()
-
-	return &logger
 }
 
 // createDeviceReaders creates device readers based on the configuration.

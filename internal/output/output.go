@@ -4,7 +4,7 @@ package output
 import (
 	"context"
 
-	"github.com/dombyte/datalogger/datasource"
+	"github.com/dombyte/datalogger/internal/datasource"
 )
 
 // Writer is the interface that all output writers must implement.

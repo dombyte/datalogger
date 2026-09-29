@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dombyte/datalogger/datasource"
+	"github.com/dombyte/datalogger/internal/datasource"
 )
 
 // MockOutputWriter is a mock implementation of Writer for testing

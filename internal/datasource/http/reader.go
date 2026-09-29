@@ -17,8 +17,8 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/tidwall/gjson"
 
-	"github.com/dombyte/datalogger/config"
-	"github.com/dombyte/datalogger/datasource"
+	"github.com/dombyte/datalogger/internal/config"
+	"github.com/dombyte/datalogger/internal/datasource"
 )
 
 // Backoff after failed polls: starts at initialBackoff and doubles up to maxBackoff.
