@@ -6,6 +6,7 @@ import (
 	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/config"
 	"github.com/dombyte/datalogger/internal/datasource"
+	"github.com/dombyte/datalogger/internal/datasource/http"
 	"github.com/dombyte/datalogger/internal/datasource/modbus"
 )
 
@@ -61,4 +62,40 @@ func modbusPoints(points []config.Point) []modbus.Point {
 		}
 	}
 	return out
+}
+
+// createHTTPReader maps a device config onto an HTTP reader with its own client.
+func createHTTPReader(
+	d config.Device,
+	log zerolog.Logger,
+	clk clock.Clock,
+) (datasource.DeviceReader, error) {
+	h := d.DeviceSpecific.HTTP
+	points := make([]http.Point, len(d.Points))
+	for i, p := range d.Points {
+		points[i] = http.Point{
+			Name:     p.Name,
+			JSONPath: p.JSONPath,
+			Type:     p.Type,
+			Scale:    p.Scale,
+			Offset:   p.Offset,
+			Unit:     p.Unit,
+		}
+	}
+
+	return http.New(http.Deps{
+		Settings: http.Settings{
+			Name:         d.Name,
+			PollInterval: d.PollInterval,
+			Address:      h.Address,
+			Method:       h.Method,
+			Headers:      h.Headers,
+			Body:         h.Body,
+			ResponseType: h.ResponseType,
+			Points:       points,
+		},
+		Client: http.NewClient(d.Timeout, h.Insecure),
+		Clock:  clk,
+		Log:    log,
+	})
 }

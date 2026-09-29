@@ -16,7 +16,6 @@ import (
 	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/config"
 	"github.com/dombyte/datalogger/internal/datasource"
-	"github.com/dombyte/datalogger/internal/datasource/http"
 	"github.com/dombyte/datalogger/internal/output"
 	"github.com/dombyte/datalogger/internal/output/csv"
 	"github.com/dombyte/datalogger/internal/output/influxdb"
@@ -212,7 +211,7 @@ func createSingleDeviceReader(
 	case "modbus":
 		reader, err = createModbusReader(*deviceConfig, *logger, clock.Real{})
 	case "http":
-		reader, err = http.New(*deviceConfig, logger)
+		reader, err = createHTTPReader(*deviceConfig, *logger, clock.Real{})
 	default:
 		logger.Error().
 			Str("device", deviceConfig.Name).

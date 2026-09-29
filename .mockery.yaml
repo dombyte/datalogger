@@ -14,3 +14,6 @@ packages:
     interfaces:
       Client:
       Dialer:
+  github.com/dombyte/datalogger/internal/datasource/http:
+    interfaces:
+      Client:
