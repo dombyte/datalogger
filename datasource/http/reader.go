@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,6 +19,13 @@ import (
 
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
+)
+
+// Backoff after failed polls: starts at initialBackoff and doubles up to maxBackoff.
+const (
+	initialBackoff = 100 * time.Millisecond
+	maxBackoff     = 30 * time.Second
+	backoffFactor  = 2
 )
 
 // Reader reads data from an HTTP API endpoint.
@@ -62,30 +71,21 @@ func (r *Reader) Validate() error {
 	return nil
 }
 
-// shouldReconnect determines if an error indicates a connection issue that warrants reconnection.
+// shouldReconnect reports whether err is a transport error that warrants a new client.
+// HTTP status and parse errors do not; every error from the transport (a *url.Error,
+// which is a net.Error) and truncated bodies do.
 func (r *Reader) shouldReconnect(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "connection") ||
-		strings.Contains(errStr, "timeout") ||
-		strings.Contains(errStr, "refused") ||
-		strings.Contains(errStr, "unreachable") ||
-		strings.Contains(errStr, "reset by peer") ||
-		strings.Contains(errStr, "broken pipe") ||
-		strings.Contains(errStr, "EOF") ||
-		strings.Contains(errStr, "dial") ||
-		strings.Contains(errStr, "TLS") ||
-		strings.Contains(errStr, "net.Error")
+	var netErr net.Error
+	return errors.As(err, &netErr) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // applyBackoff applies exponential backoff to the wait duration.
 func (r *Reader) applyBackoff() {
-	const maxBackoff = 30 * time.Second
-	r.backoffWait = r.backoffWait * 2
+	r.backoffWait *= backoffFactor
 	if r.backoffWait == 0 {
-		r.backoffWait = 100 * time.Millisecond
+		r.backoffWait = initialBackoff
 	}
 	if r.backoffWait > maxBackoff {
 		r.backoffWait = maxBackoff
@@ -156,7 +156,9 @@ func (r *Reader) handlePollError(err error) {
 }
 
 // Start starts the polling loop and returns channels for data, done, and errors.
-func (r *Reader) Start(ctx context.Context) (<-chan datasource.DataPoint, <-chan struct{}, <-chan error) {
+func (r *Reader) Start(
+	ctx context.Context,
+) (<-chan datasource.DataPoint, <-chan struct{}, <-chan error) {
 	dataCh := make(chan datasource.DataPoint)
 	doneCh := make(chan struct{})
 	errCh := make(chan error, 1)
@@ -183,36 +185,36 @@ func (r *Reader) pollLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			// Apply backoff wait if we had previous failures
-			if r.backoffWait > 0 {
-				r.logger.Warn().Dur("wait", r.backoffWait).Msg("Waiting before retry due to previous failure")
-				time.Sleep(r.backoffWait)
-			}
-
-			r.logger.Debug().Msg("Starting HTTP poll")
-
-			// Read all points (timestamp captured inside readAllPoints after response)
-			points, err := r.readAllPoints(ctx)
-			if err != nil {
-				// Check if this is a context cancellation error (expected during shutdown)
-				if ctx.Err() != nil {
-					r.logger.Debug().Err(err).Msg("HTTP poll cancelled during shutdown")
-				} else {
-					r.handlePollError(err)
-				}
-				continue
-			}
-
-			// Reset failure tracking on success
-			r.resetBackoff()
-
-			r.logger.Debug().Int("count", len(points)).Msg("HTTP poll completed")
-
-			// Send each point to channel
-			for _, dp := range points {
-				dataCh <- dp
-			}
+			r.pollOnce(ctx, dataCh)
 		}
+	}
+}
+
+// pollOnce runs one poll: wait out the backoff, read all points and send them.
+func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- datasource.DataPoint) {
+	if r.backoffWait > 0 {
+		r.logger.Warn().Dur("wait", r.backoffWait).Msg("Waiting before retry after a failure")
+		time.Sleep(r.backoffWait)
+	}
+
+	r.logger.Debug().Msg("Starting HTTP poll")
+
+	// Timestamp is captured inside readAllPoints when the response arrives.
+	points, err := r.readAllPoints(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			r.logger.Debug().Err(err).Msg("HTTP poll cancelled during shutdown")
+		} else {
+			r.handlePollError(err)
+		}
+		return
+	}
+
+	r.resetBackoff()
+	r.logger.Debug().Int("count", len(points)).Msg("HTTP poll completed")
+
+	for _, dp := range points {
+		dataCh <- dp
 	}
 }
 
@@ -257,13 +259,11 @@ func (r *Reader) readAllPoints(ctx context.Context) ([]datasource.DataPoint, err
 // createRequest creates an HTTP request based on the configuration.
 func (r *Reader) createRequest() (*http.Request, error) {
 	httpConfig := r.config.DeviceSpecific.HTTP
-	method := strings.ToUpper(httpConfig.Method)
-	if method == "" {
-		method = "GET"
-	}
+	method := requestMethod(httpConfig.Method)
 
 	var bodyReader io.Reader
-	if method == "POST" && httpConfig.Body != "" {
+	hasBody := method == http.MethodPost && httpConfig.Body != ""
+	if hasBody {
 		bodyReader = strings.NewReader(httpConfig.Body)
 	}
 
@@ -272,23 +272,30 @@ func (r *Reader) createRequest() (*http.Request, error) {
 		return nil, err
 	}
 
-	// Add headers
 	for k, v := range httpConfig.Headers {
 		req.Header.Set(k, v)
 	}
 
-	// Set content type for POST
-	if method == "POST" && bodyReader != nil {
-		if _, ok := req.Header["Content-Type"]; !ok {
-			req.Header.Set("Content-Type", "application/json")
-		}
+	if hasBody && req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
 	return req, nil
 }
 
+// requestMethod returns the upper-case HTTP method, GET when none is configured.
+func requestMethod(method string) string {
+	if method == "" {
+		return http.MethodGet
+	}
+	return strings.ToUpper(method)
+}
+
 // parsePointsSequential parses points sequentially from the response body.
-func (r *Reader) parsePointsSequential(body []byte, timestamp time.Time) ([]datasource.DataPoint, error) {
+func (r *Reader) parsePointsSequential(
+	body []byte,
+	timestamp time.Time,
+) ([]datasource.DataPoint, error) {
 	var results []datasource.DataPoint
 
 	for _, point := range r.config.Points {
@@ -314,7 +321,10 @@ func (r *Reader) parsePointsSequential(body []byte, timestamp time.Time) ([]data
 }
 
 // parsePointsParallel parses points in parallel from the response body.
-func (r *Reader) parsePointsParallel(body []byte, timestamp time.Time) ([]datasource.DataPoint, error) {
+func (r *Reader) parsePointsParallel(
+	body []byte,
+	timestamp time.Time,
+) ([]datasource.DataPoint, error) {
 	var results []datasource.DataPoint
 	var mu sync.Mutex
 	sem := make(chan struct{}, r.config.Parallelism)
@@ -365,7 +375,7 @@ func (r *Reader) extractValue(body []byte, point config.Point) (interface{}, err
 		// For text, just use the whole body
 		return string(body), nil
 	case "xml":
-		return nil, fmt.Errorf("XML parsing not implemented")
+		return nil, errors.New("XML parsing not implemented")
 	default:
 		return nil, fmt.Errorf("unknown response type: %s", httpConfig.ResponseType)
 	}
@@ -374,7 +384,7 @@ func (r *Reader) extractValue(body []byte, point config.Point) (interface{}, err
 // extractJSONValue extracts a value from JSON using JSONPath.
 func (r *Reader) extractJSONValue(body []byte, point config.Point) (interface{}, error) {
 	if point.JSONPath == "" {
-		return nil, fmt.Errorf("json_path required for JSON response")
+		return nil, errors.New("json_path required for JSON response")
 	}
 
 	result := gjson.GetBytes(body, point.JSONPath)
@@ -386,14 +396,17 @@ func (r *Reader) extractJSONValue(body []byte, point config.Point) (interface{},
 }
 
 // convertJSONResult converts a gjson.Result to the appropriate type.
-func (r *Reader) convertJSONResult(result gjson.Result, targetType string) (interface{}, error) {
+func (r *Reader) convertJSONResult(
+	result gjson.Result,
+	targetType string,
+) (interface{}, error) {
 	switch targetType {
 	case "float32", "float64":
 		return result.Float(), nil
 	case "int16", "int32", "int64":
-		return int64(result.Int()), nil
+		return result.Int(), nil
 	case "uint16", "uint32", "uint64":
-		return uint64(result.Uint()), nil
+		return result.Uint(), nil
 	case "bool":
 		return result.Bool(), nil
 	case "string":

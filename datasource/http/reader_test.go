@@ -3,13 +3,19 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/dombyte/datalogger/config"
 )
@@ -615,5 +621,32 @@ func TestPollLoopShutdown(t *testing.T) {
 		// Success - poll loop exited
 	case <-time.After(2 * time.Second):
 		t.Error("Timeout waiting for poll loop to exit")
+	}
+}
+
+// TestShouldReconnect checks that only transport errors trigger a new client.
+func TestShouldReconnect(t *testing.T) {
+	t.Parallel()
+
+	urlErr := &url.Error{Op: "Get", URL: "http://device", Err: syscall.ECONNREFUSED}
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "transport error", err: urlErr, want: true},
+		{name: "wrapped transport error", err: fmt.Errorf("poll: %w", urlErr), want: true},
+		{name: "truncated body", err: io.ErrUnexpectedEOF, want: true},
+		{name: "status error", err: errors.New("HTTP error: 500"), want: false},
+		{name: "string mentioning connection", err: errors.New("connection"), want: false},
+	}
+
+	r := &Reader{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, r.shouldReconnect(tt.err))
+		})
 	}
 }
