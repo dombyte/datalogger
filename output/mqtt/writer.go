@@ -101,12 +101,6 @@ func (w *Writer) Devices() []string {
 	return w.devices
 }
 
-// Validate validates the MQTT writer configuration.
-func (w *Writer) Validate() error {
-	// Configuration was already validated when creating the writer
-	return nil
-}
-
 // Start connects to the broker and starts the MQTT writer goroutine.
 func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
 	errCh := make(chan error, 1)

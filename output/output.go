@@ -16,9 +16,6 @@ type Writer interface {
 	// Receives DataPoints from its channel
 	Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error
 
-	// Validate checks configuration before startup
-	Validate() error
-
 	// Devices returns list of device names this output accepts
 	Devices() []string
 }

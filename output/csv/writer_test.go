@@ -112,32 +112,6 @@ func TestCSVWriterDevices(t *testing.T) {
 	}
 }
 
-// TestCSVWriterValidate tests the Validate method
-func TestCSVWriterValidate(t *testing.T) {
-	logger := zerolog.Nop()
-	tempDir := t.TempDir()
-
-	outputConfig := config.Output{
-		Name:    "csv_test",
-		Type:    "csv",
-		Devices: []string{"device1"},
-		OutputSpecific: config.OutputSpecific{
-			Csv: config.CsvConfig{
-				FilePath: filepath.Join(tempDir, "test.csv"),
-			},
-		},
-	}
-
-	writer, err := New(outputConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create CSV writer: %v", err)
-	}
-
-	if err := writer.Validate(); err != nil {
-		t.Errorf("Validate() error = %v", err)
-	}
-}
-
 // newTestWriter creates a Writer with the given CSV settings.
 func newTestWriter(t *testing.T, csvConfig config.CsvConfig) *Writer {
 	t.Helper()

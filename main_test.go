@@ -40,10 +40,6 @@ func (w *mockOutputWriterForMap) Start(ctx context.Context, input <-chan datasou
 	return ch
 }
 
-func (w *mockOutputWriterForMap) Validate() error {
-	return nil
-}
-
 // mockOutputWriterForBuffer is a mock that implements the full output.Writer interface
 type mockOutputWriterForBuffer struct {
 	name string
@@ -62,10 +58,6 @@ func (w *mockOutputWriterForBuffer) Start(ctx context.Context, input <-chan data
 		close(ch)
 	}()
 	return ch
-}
-
-func (w *mockOutputWriterForBuffer) Validate() error {
-	return nil
 }
 
 func (w *mockOutputWriterForBuffer) Devices() []string {
@@ -546,7 +538,7 @@ func TestStartRouting(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
-// TestLoadAndValidateConfig tests the loadAndValidateConfig function
+// TestLoadAndValidateConfig tests the loadConfig function
 func TestLoadAndValidateConfig(t *testing.T) {
 	// Create a temporary config file
 	tempDir := t.TempDir()
@@ -562,9 +554,9 @@ func TestLoadAndValidateConfig(t *testing.T) {
 	logger := zerolog.Nop()
 
 	// Test with valid config
-	cfg := loadAndValidateConfig(configPath, &logger)
+	cfg := loadConfig(configPath, &logger)
 	if cfg == nil {
-		t.Fatal("loadAndValidateConfig returned nil")
+		t.Fatal("loadConfig returned nil")
 	}
 
 	if len(cfg.Devices) != 1 {
@@ -576,18 +568,18 @@ func TestLoadAndValidateConfig(t *testing.T) {
 	}
 }
 
-// TestLoadAndValidateConfigInvalidPath tests loadAndValidateConfig with invalid path
+// TestLoadAndValidateConfigInvalidPath tests loadConfig with invalid path
 func TestLoadAndValidateConfigInvalidPath(t *testing.T) {
 	// Test with non-existent config file - should exit
 	// We can't easily test os.Exit in tests, so we'll test the Load function directly
-	// which is what loadAndValidateConfig calls
+	// which is what loadConfig calls
 	_, err := config.Load("/nonexistent/path/to/config.yaml")
 	if err == nil {
 		t.Error("Expected error for non-existent config file")
 	}
 }
 
-// TestLoadAndValidateConfigInvalidYAML tests loadAndValidateConfig with invalid YAML
+// TestLoadAndValidateConfigInvalidYAML tests loadConfig with invalid YAML
 func TestLoadAndValidateConfigInvalidYAML(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := tempDir + "/invalid.yaml"

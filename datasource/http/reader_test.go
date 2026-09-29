@@ -73,33 +73,6 @@ func TestHttpReaderName(t *testing.T) {
 	}
 }
 
-// TestHttpReaderValidate tests the Validate method
-func TestHttpReaderValidate(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name:         "test_http",
-		Type:         "http",
-		PollInterval: time.Second,
-		Parallelism:  1,
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      "http://localhost:8080",
-				Method:       "GET",
-				ResponseType: "json",
-			},
-		},
-	}
-
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	if err := reader.Validate(); err != nil {
-		t.Errorf("Validate() error = %v", err)
-	}
-}
-
 // TestHttpReaderStart tests the Start method
 func TestHttpReaderStart(t *testing.T) {
 	logger := zerolog.Nop()
