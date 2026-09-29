@@ -18,8 +18,8 @@ import (
 	"github.com/dombyte/datalogger/datasource"
 )
 
-// MQTTWriter writes DataPoints to an MQTT broker.
-type MQTTWriter struct {
+// Writer writes DataPoints to an MQTT broker.
+type Writer struct {
 	config     config.Output
 	logger     zerolog.Logger
 	client     *paho.Client
@@ -27,9 +27,9 @@ type MQTTWriter struct {
 	lastPubErr error // Track if previous publish failed
 }
 
-// NewMQTTWriter creates a new MQTTWriter.
-func NewMQTTWriter(outputConfig config.Output, logger *zerolog.Logger) (*MQTTWriter, error) {
-	w := &MQTTWriter{
+// New creates a new Writer.
+func New(outputConfig config.Output, logger *zerolog.Logger) (*Writer, error) {
+	w := &Writer{
 		config:  outputConfig,
 		logger:  logger.With().Str("output", "mqtt").Str("name", outputConfig.Name).Logger(),
 		devices: outputConfig.Devices,
@@ -39,7 +39,7 @@ func NewMQTTWriter(outputConfig config.Output, logger *zerolog.Logger) (*MQTTWri
 }
 
 // createClient creates and configures the MQTT client.
-func (w *MQTTWriter) createClient() error {
+func (w *Writer) createClient() error {
 	mqttConfig := w.config.OutputSpecific.Mqtt
 
 	// Parse the broker URL
@@ -84,23 +84,23 @@ func parseURL(address string) (*url.URL, error) {
 }
 
 // Name returns the output name.
-func (w *MQTTWriter) Name() string {
+func (w *Writer) Name() string {
 	return w.config.Name
 }
 
 // Devices returns the list of device names this output accepts.
-func (w *MQTTWriter) Devices() []string {
+func (w *Writer) Devices() []string {
 	return w.devices
 }
 
 // Validate validates the MQTT writer configuration.
-func (w *MQTTWriter) Validate() error {
+func (w *Writer) Validate() error {
 	// Configuration was already validated when creating the writer
 	return nil
 }
 
 // Start starts the MQTT writer goroutine.
-func (w *MQTTWriter) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
+func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
 	errCh := make(chan error, 1)
 
 	connect := &paho.Connect{
@@ -155,7 +155,7 @@ func (w *MQTTWriter) Start(ctx context.Context, input <-chan datasource.DataPoin
 }
 
 // drainRemainingPoints drains remaining points from the input channel during shutdown.
-func (w *MQTTWriter) drainRemainingPoints(input <-chan datasource.DataPoint) {
+func (w *Writer) drainRemainingPoints(input <-chan datasource.DataPoint) {
 	w.logger.Info().Msg("MQTT writer: shutdown started, draining remaining points")
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer drainCancel()
@@ -175,7 +175,7 @@ func (w *MQTTWriter) drainRemainingPoints(input <-chan datasource.DataPoint) {
 }
 
 // publish publishes a DataPoint to the MQTT broker.
-func (w *MQTTWriter) publish(ctx context.Context, dp datasource.DataPoint) {
+func (w *Writer) publish(ctx context.Context, dp datasource.DataPoint) {
 	mqttConfig := w.config.OutputSpecific.Mqtt
 
 	// Build topic: datalogger/{device}/{point}

@@ -39,8 +39,8 @@ func newModbusLogger(zl *zerolog.Logger) *log.Logger {
 	return log.New(&modbusLoggerAdapter{logger: zl}, "", 0)
 }
 
-// ModbusReader reads data from a Modbus device (TCP or RTU).
-type ModbusReader struct {
+// Reader reads data from a Modbus device (TCP or RTU).
+type Reader struct {
 	config      config.Device
 	logger      zerolog.Logger
 	client      *modbus.ModbusClient
@@ -52,9 +52,9 @@ type ModbusReader struct {
 	backoffWait time.Duration // Current backoff duration
 }
 
-// NewModbusReader creates a new ModbusReader.
-func NewModbusReader(deviceConfig config.Device, logger *zerolog.Logger) (*ModbusReader, error) {
-	r := &ModbusReader{
+// New creates a new Reader.
+func New(deviceConfig config.Device, logger *zerolog.Logger) (*Reader, error) {
+	r := &Reader{
 		config:  deviceConfig,
 		logger:  logger.With().Str("datasource", "modbus").Str("device", deviceConfig.Name).Logger(),
 		points:  deviceConfig.Points,
@@ -96,11 +96,11 @@ func getRegType(points []config.Point) modbus.RegType {
 }
 
 // createClient creates and opens the Modbus client.
-func (r *ModbusReader) createClient() error {
+func (r *Reader) createClient() error {
 	modbusConfig := r.config.DeviceSpecific.Modbus
 
 	// Create a standard logger from zerolog for the modbus library
-	// The r.logger already has datasource=modbus and device=name from NewModbusReader
+	// The r.logger already has datasource=modbus and device=name from New
 	modbusStdLogger := newModbusLogger(&r.logger)
 
 	clientConfig := &modbus.ClientConfiguration{
@@ -133,7 +133,7 @@ func (r *ModbusReader) createClient() error {
 }
 
 // shouldReconnect determines if an error indicates a connection issue that warrants reconnection.
-func (r *ModbusReader) shouldReconnect(err error) bool {
+func (r *Reader) shouldReconnect(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -149,7 +149,7 @@ func (r *ModbusReader) shouldReconnect(err error) bool {
 }
 
 // reconnect closes the current connection and opens a new one.
-func (r *ModbusReader) reconnect() error {
+func (r *Reader) reconnect() error {
 	r.logger.Warn().Msg("Attempting to reconnect Modbus client")
 
 	// Create new client first, so we always have a valid client or error
@@ -207,7 +207,7 @@ func parseParity(parity string) uint {
 
 // validateAddresses checks that all point registers are covered by the configured ranges (for range mode).
 // For direct mode, ranges are not required.
-func (r *ModbusReader) validateAddresses() error {
+func (r *Reader) validateAddresses() error {
 	modbusConfig := r.config.DeviceSpecific.Modbus
 
 	// Only validate if using range mode
@@ -239,18 +239,18 @@ func (r *ModbusReader) validateAddresses() error {
 }
 
 // Name returns the device name.
-func (r *ModbusReader) Name() string {
+func (r *Reader) Name() string {
 	return r.config.Name
 }
 
 // Validate validates the Modbus reader configuration.
-func (r *ModbusReader) Validate() error {
+func (r *Reader) Validate() error {
 	// Configuration was already validated when creating the reader
 	return nil
 }
 
 // Start starts the polling loop and returns channels for data, done, and errors.
-func (r *ModbusReader) Start(ctx context.Context) (<-chan datasource.DataPoint, <-chan struct{}, <-chan error) {
+func (r *Reader) Start(ctx context.Context) (<-chan datasource.DataPoint, <-chan struct{}, <-chan error) {
 	dataCh := make(chan datasource.DataPoint)
 	doneCh := make(chan struct{})
 	errCh := make(chan error, 1)
@@ -261,7 +261,7 @@ func (r *ModbusReader) Start(ctx context.Context) (<-chan datasource.DataPoint, 
 }
 
 // pollLoop runs the main polling loop for the Modbus device.
-func (r *ModbusReader) pollLoop(
+func (r *Reader) pollLoop(
 	ctx context.Context,
 	dataCh chan<- datasource.DataPoint,
 	doneCh chan<- struct{},
@@ -283,7 +283,7 @@ func (r *ModbusReader) pollLoop(
 }
 
 // handlePollTick handles a single poll tick event.
-func (r *ModbusReader) handlePollTick(ctx context.Context, dataCh chan<- datasource.DataPoint) {
+func (r *Reader) handlePollTick(ctx context.Context, dataCh chan<- datasource.DataPoint) {
 	// Apply backoff wait if we had previous failures
 	if r.backoffWait > 0 {
 		r.logger.Warn().Dur("wait", r.backoffWait).Msg("Waiting before retry due to previous failure")
@@ -309,7 +309,7 @@ func (r *ModbusReader) handlePollTick(ctx context.Context, dataCh chan<- datasou
 }
 
 // handlePollError handles an error from a poll attempt.
-func (r *ModbusReader) handlePollError(err error) {
+func (r *Reader) handlePollError(err error) {
 	r.failCount++
 	r.lastError = err
 
@@ -329,7 +329,7 @@ func (r *ModbusReader) handlePollError(err error) {
 }
 
 // handlePollSuccess handles a successful poll attempt.
-func (r *ModbusReader) handlePollSuccess(points []datasource.DataPoint, dataCh chan<- datasource.DataPoint) {
+func (r *Reader) handlePollSuccess(points []datasource.DataPoint, dataCh chan<- datasource.DataPoint) {
 	// Check if this is recovery from a previous error
 	recoveredFromError := r.lastError != nil || r.failCount > 0
 
@@ -352,7 +352,7 @@ func (r *ModbusReader) handlePollSuccess(points []datasource.DataPoint, dataCh c
 }
 
 // applyBackoff applies exponential backoff to the wait duration.
-func (r *ModbusReader) applyBackoff() {
+func (r *Reader) applyBackoff() {
 	const maxBackoff = 30 * time.Second
 	r.backoffWait = r.backoffWait * 2
 	if r.backoffWait == 0 {
@@ -364,7 +364,7 @@ func (r *ModbusReader) applyBackoff() {
 }
 
 // handleReconnect attempts to reconnect the Modbus client.
-func (r *ModbusReader) handleReconnect() {
+func (r *Reader) handleReconnect() {
 	if reconnectErr := r.reconnect(); reconnectErr != nil {
 		r.logger.Error().Err(reconnectErr).Msg("Modbus reconnection failed")
 	} else {
@@ -377,7 +377,7 @@ func (r *ModbusReader) handleReconnect() {
 
 // readAllPoints reads all configured points using the appropriate mode (direct or range).
 // Timestamps are captured at data reception time within each mode.
-func (r *ModbusReader) readAllPoints(ctx context.Context) ([]datasource.DataPoint, error) {
+func (r *Reader) readAllPoints(ctx context.Context) ([]datasource.DataPoint, error) {
 	// Check if client is connected before attempting to read
 	if r.client == nil {
 		return nil, fmt.Errorf("modbus client is not connected")
@@ -393,7 +393,7 @@ func (r *ModbusReader) readAllPoints(ctx context.Context) ([]datasource.DataPoin
 
 // readDirectMode reads each point directly (not using range reads).
 // Each point captures its own timestamp when data is received.
-func (r *ModbusReader) readDirectMode(ctx context.Context) ([]datasource.DataPoint, error) {
+func (r *Reader) readDirectMode(ctx context.Context) ([]datasource.DataPoint, error) {
 	var results []datasource.DataPoint
 	var mu sync.Mutex
 	sem := make(chan struct{}, r.config.Parallelism) // Semaphore for concurrency limit
@@ -433,7 +433,7 @@ func (r *ModbusReader) readDirectMode(ctx context.Context) ([]datasource.DataPoi
 
 // readSinglePoint reads a single point and returns a DataPoint or nil on error.
 // Timestamp is captured when data is received from the device.
-func (r *ModbusReader) readSinglePoint(ctx context.Context, point config.Point, _ time.Time) (*datasource.DataPoint, error) {
+func (r *Reader) readSinglePoint(ctx context.Context, point config.Point, _ time.Time) (*datasource.DataPoint, error) {
 	// Get register values - support both Addresses array and Address+Count
 	values, err := r.readRegistersForPoint(point)
 	if err != nil {
@@ -449,7 +449,7 @@ func (r *ModbusReader) readSinglePoint(ctx context.Context, point config.Point, 
 }
 
 // createDataPointFromValues creates a DataPoint from register values.
-func (r *ModbusReader) createDataPointFromValues(
+func (r *Reader) createDataPointFromValues(
 	point config.Point,
 	values []uint16,
 	timestamp time.Time,
@@ -461,7 +461,7 @@ func (r *ModbusReader) createDataPointFromValues(
 	}
 
 	// Apply scale and offset
-	scaled := r.applyScaleAndOffsetForPoint(value, point)
+	scaled := r.applyScaleAndOffset(value, point)
 
 	return &datasource.DataPoint{
 		DeviceName: r.config.Name,
@@ -472,14 +472,8 @@ func (r *ModbusReader) createDataPointFromValues(
 	}, nil
 }
 
-// applyScaleAndOffsetForPoint applies scale and offset to a decoded value for a specific point.
-// Deprecated: Use applyScaleAndOffset instead. Kept for backwards compatibility.
-func (r *ModbusReader) applyScaleAndOffsetForPoint(value interface{}, point config.Point) float64 {
-	return r.applyScaleAndOffset(value, point)
-}
-
 // readRegistersForPoint reads registers for a point using Register+Count.
-func (r *ModbusReader) readRegistersForPoint(point config.Point) ([]uint16, error) {
+func (r *Reader) readRegistersForPoint(point config.Point) ([]uint16, error) {
 	// Read registers using Register and Count
 	if point.Count == 0 {
 		point.Count = 1 // Default to reading 1 register
@@ -498,7 +492,7 @@ func (r *ModbusReader) readRegistersForPoint(point config.Point) ([]uint16, erro
 
 // extractValuesFromRangeData extracts values and timestamp from range data for a point.
 // Returns the timestamp of the first register in the point's range.
-func (r *ModbusReader) extractValuesFromRangeData(point config.Point, rangeData map[uint16]RangeValue) ([]uint16, time.Time, error) {
+func (r *Reader) extractValuesFromRangeData(point config.Point, rangeData map[uint16]RangeValue) ([]uint16, time.Time, error) {
 	// Extract values using Register and Count
 	if point.Count == 0 {
 		point.Count = 1
@@ -529,7 +523,7 @@ type RangeValue struct {
 
 // readRangeMode reads all ranges first, then decodes points from the range data.
 // Each range captures its timestamp when data is received.
-func (r *ModbusReader) readRangeMode(ctx context.Context) ([]datasource.DataPoint, error) {
+func (r *Reader) readRangeMode(ctx context.Context) ([]datasource.DataPoint, error) {
 	// Read all ranges first (with parallelism)
 	rangeData, err := r.readAllRanges(ctx)
 	if err != nil {
@@ -541,7 +535,7 @@ func (r *ModbusReader) readRangeMode(ctx context.Context) ([]datasource.DataPoin
 }
 
 // readAllRanges reads all configured ranges with parallelism and chunking.
-func (r *ModbusReader) readAllRanges(ctx context.Context) (map[uint16]RangeValue, error) {
+func (r *Reader) readAllRanges(ctx context.Context) (map[uint16]RangeValue, error) {
 	var mu sync.Mutex
 	sem := make(chan struct{}, r.config.Parallelism)
 	// Store both value and timestamp for each address
@@ -575,7 +569,7 @@ func (r *ModbusReader) readAllRanges(ctx context.Context) (map[uint16]RangeValue
 }
 
 // readRangeChunked reads a single range with chunking to respect Modbus protocol limits.
-func (r *ModbusReader) readRangeChunked(
+func (r *Reader) readRangeChunked(
 	rng Range,
 	maxRangeSize uint16,
 	rangeData map[uint16]RangeValue,
@@ -631,7 +625,7 @@ func (r *ModbusReader) readRangeChunked(
 }
 
 // decodePointsFromRangeData decodes all points from the range data.
-func (r *ModbusReader) decodePointsFromRangeData(rangeData map[uint16]RangeValue) ([]datasource.DataPoint, error) {
+func (r *Reader) decodePointsFromRangeData(rangeData map[uint16]RangeValue) ([]datasource.DataPoint, error) {
 	var results []datasource.DataPoint
 
 	for _, point := range r.points {
@@ -655,7 +649,7 @@ func (r *ModbusReader) decodePointsFromRangeData(rangeData map[uint16]RangeValue
 
 // decodeAndScalePoint decodes a single point value and applies scale/offset.
 // Uses the common createDataPointFromValues and applyScaleAndOffset functions.
-func (r *ModbusReader) decodeAndScalePoint(
+func (r *Reader) decodeAndScalePoint(
 	point config.Point,
 	values []uint16,
 	timestamp time.Time,
@@ -673,7 +667,7 @@ func (r *ModbusReader) decodeAndScalePoint(
 }
 
 // applyScaleAndOffset applies scale and offset to a decoded value.
-func (r *ModbusReader) applyScaleAndOffset(value interface{}, point config.Point) float64 {
+func (r *Reader) applyScaleAndOffset(value interface{}, point config.Point) float64 {
 	// Convert value to float64 for scaling
 	var scaled float64
 	switch v := value.(type) {

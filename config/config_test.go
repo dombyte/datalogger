@@ -106,7 +106,7 @@ func TestConfigValidate(t *testing.T) {
 						PollInterval: 1 * time.Second,
 						Parallelism:  1,
 						DeviceSpecific: DeviceSpecific{
-							Http: HttpConfig{
+							HTTP: HTTPConfig{
 								Address:      "http://localhost",
 								Method:       "GET",
 								ResponseType: "json",
@@ -229,7 +229,7 @@ func TestDeviceValidate(t *testing.T) {
 	}{
 		{
 			name:    "valid http device",
-			device:  Device{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1, DeviceSpecific: DeviceSpecific{Http: HttpConfig{Address: "http://localhost"}}},
+			device:  Device{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1, DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{Address: "http://localhost"}}},
 			wantErr: false,
 		},
 		{
@@ -362,16 +362,16 @@ func TestModbusConfigValidate(t *testing.T) {
 	}
 }
 
-// TestHttpConfigValidate tests HttpConfig.Validate
+// TestHttpConfigValidate tests HTTPConfig.Validate
 func TestHttpConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
-		config  HttpConfig
+		config  HTTPConfig
 		wantErr bool
 	}{
 		{
 			name: "valid http config",
-			config: HttpConfig{
+			config: HTTPConfig{
 				Address:      "http://localhost:8080",
 				Method:       "GET",
 				ResponseType: "json",
@@ -380,19 +380,19 @@ func TestHttpConfigValidate(t *testing.T) {
 		},
 		{
 			name: "valid http config with defaults",
-			config: HttpConfig{
+			config: HTTPConfig{
 				Address: "http://localhost:8080",
 			},
 			wantErr: false,
 		},
 		{
 			name:    "empty address",
-			config:  HttpConfig{Method: "GET"},
+			config:  HTTPConfig{Method: "GET"},
 			wantErr: true,
 		},
 		{
 			name:    "invalid method",
-			config:  HttpConfig{Address: "http://localhost:8080", Method: "PUT"},
+			config:  HTTPConfig{Address: "http://localhost:8080", Method: "PUT"},
 			wantErr: true,
 		},
 	}

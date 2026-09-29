@@ -33,7 +33,7 @@ func TestNewInfluxDBWriter(t *testing.T) {
 	}
 
 	// This will fail to connect, but we can test the structure
-	writer, err := NewInfluxDBWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 
 	// We expect an error since we don't have a real InfluxDB server
 	if err == nil {
@@ -81,7 +81,7 @@ func TestInfluxDBWriterName(t *testing.T) {
 
 	// We can't fully create the writer without a real server,
 	// but we can test the struct fields
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -111,7 +111,7 @@ func TestInfluxDBWriterDevices(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: devices,
@@ -147,7 +147,7 @@ func TestInfluxDBWriterValidate(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -177,7 +177,7 @@ func TestCreatePoint(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -247,7 +247,7 @@ func TestCreatePointWithoutUnit(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -300,7 +300,7 @@ func TestCreatePointVariousTypes(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -369,7 +369,7 @@ func TestInfluxDBWriterStart(t *testing.T) {
 
 	// We can't fully test Start without a real InfluxDB server
 	// but we can test that it doesn't panic
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:       outputConfig,
 		logger:       logger,
 		devices:      outputConfig.Devices,
@@ -426,7 +426,7 @@ func TestHandleInputPoint(t *testing.T) {
 		BatchSize: 100,
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:       outputConfig,
 		logger:       logger,
 		devices:      outputConfig.Devices,
@@ -476,7 +476,7 @@ func TestInfluxDBWriterValidateEmptyDevices(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:       outputConfig,
 		logger:       logger,
 		devices:      outputConfig.Devices,
@@ -541,7 +541,7 @@ func TestInfluxDBWriterBatchConfiguration(t *testing.T) {
 			}
 
 			// This will fail to connect, but we can test the configuration
-			writer, err := NewInfluxDBWriter(outputConfig, &logger)
+			writer, err := New(outputConfig, &logger)
 
 			if err == nil {
 				// If no error (unlikely without real server), check batch config
@@ -589,7 +589,7 @@ func TestWaitForRetry(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:     outputConfig,
 		logger:     logger,
 		devices:    outputConfig.Devices,
@@ -623,7 +623,7 @@ func TestHandleShutdown(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -661,7 +661,7 @@ func TestDrainRemainingPoints(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -702,7 +702,7 @@ func TestHandleBatchTimeout(t *testing.T) {
 		},
 	}
 
-	writer := &InfluxDBWriter{
+	writer := &Writer{
 		config:       outputConfig,
 		logger:       logger,
 		devices:      outputConfig.Devices,

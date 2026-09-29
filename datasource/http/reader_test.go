@@ -24,18 +24,18 @@ func TestNewHttpReader(t *testing.T) {
 		Timeout:      5 * time.Second,
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      "http://localhost:8080",
 				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
 		Points: []config.Point{
-			{Name: "temp", JsonPath: "temperature", Type: "float64"},
+			{Name: "temp", JSONPath: "temperature", Type: "float64"},
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestHttpReaderName(t *testing.T) {
 		Type: "http",
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestHttpReaderValidate(t *testing.T) {
 		PollInterval: time.Second,
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      "http://localhost:8080",
 				Method:       "GET",
 				ResponseType: "json",
@@ -84,7 +84,7 @@ func TestHttpReaderValidate(t *testing.T) {
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -104,18 +104,18 @@ func TestHttpReaderStart(t *testing.T) {
 		Timeout:      5 * time.Second,
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      "http://localhost:8080",
 				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
 		Points: []config.Point{
-			{Name: "temp", JsonPath: "temperature", Type: "float64"},
+			{Name: "temp", JSONPath: "temperature", Type: "float64"},
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -153,12 +153,12 @@ func TestCreateRequest(t *testing.T) {
 
 	tests := []struct {
 		name       string
-		httpConfig config.HttpConfig
+		httpConfig config.HTTPConfig
 		wantMethod string
 	}{
 		{
 			name: "GET request",
-			httpConfig: config.HttpConfig{
+			httpConfig: config.HTTPConfig{
 				Address: "http://localhost:8080/api",
 				Method:  "GET",
 			},
@@ -166,7 +166,7 @@ func TestCreateRequest(t *testing.T) {
 		},
 		{
 			name: "POST request",
-			httpConfig: config.HttpConfig{
+			httpConfig: config.HTTPConfig{
 				Address: "http://localhost:8080/api",
 				Method:  "POST",
 				Body:    `{"key": "value"}`,
@@ -175,7 +175,7 @@ func TestCreateRequest(t *testing.T) {
 		},
 		{
 			name: "GET request with default method",
-			httpConfig: config.HttpConfig{
+			httpConfig: config.HTTPConfig{
 				Address: "http://localhost:8080/api",
 			},
 			wantMethod: "GET",
@@ -188,11 +188,11 @@ func TestCreateRequest(t *testing.T) {
 				Name: "test",
 				Type: "http",
 				DeviceSpecific: config.DeviceSpecific{
-					Http: tt.httpConfig,
+					HTTP: tt.httpConfig,
 				},
 			}
 
-			reader, err := NewHttpReader(deviceConfig, &logger)
+			reader, err := New(deviceConfig, &logger)
 			if err != nil {
 				t.Fatalf("Failed to create HTTP reader: %v", err)
 			}
@@ -216,7 +216,7 @@ func TestExtractJSONValue(t *testing.T) {
 		Name: "test",
 		Type: "http",
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      "http://localhost:8080",
 				Method:       "GET",
 				ResponseType: "json",
@@ -224,7 +224,7 @@ func TestExtractJSONValue(t *testing.T) {
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -239,49 +239,49 @@ func TestExtractJSONValue(t *testing.T) {
 		{
 			name:    "simple json float",
 			body:    `{"temperature": 23.5}`,
-			point:   config.Point{Name: "temp", JsonPath: "temperature", Type: "float64"},
+			point:   config.Point{Name: "temp", JSONPath: "temperature", Type: "float64"},
 			want:    float64(23.5),
 			wantErr: false,
 		},
 		{
 			name:    "nested json",
 			body:    `{"sensor": {"temperature": 25.0}}`,
-			point:   config.Point{Name: "temp", JsonPath: "sensor.temperature", Type: "float64"},
+			point:   config.Point{Name: "temp", JSONPath: "sensor.temperature", Type: "float64"},
 			want:    float64(25.0),
 			wantErr: false,
 		},
 		{
 			name:    "json array",
 			body:    `{"values": [1, 2, 3]}`,
-			point:   config.Point{Name: "val", JsonPath: "values.1", Type: "int64"},
+			point:   config.Point{Name: "val", JSONPath: "values.1", Type: "int64"},
 			want:    int64(2),
 			wantErr: false,
 		},
 		{
 			name:    "json bool",
 			body:    `{"enabled": true}`,
-			point:   config.Point{Name: "enabled", JsonPath: "enabled", Type: "bool"},
+			point:   config.Point{Name: "enabled", JSONPath: "enabled", Type: "bool"},
 			want:    true,
 			wantErr: false,
 		},
 		{
 			name:    "json string",
 			body:    `{"name": "test"}`,
-			point:   config.Point{Name: "name", JsonPath: "name", Type: "string"},
+			point:   config.Point{Name: "name", JSONPath: "name", Type: "string"},
 			want:    "test",
 			wantErr: false,
 		},
 		{
 			name:    "missing json path",
 			body:    `{"temperature": 23.5}`,
-			point:   config.Point{Name: "temp", JsonPath: "missing", Type: "float64"},
+			point:   config.Point{Name: "temp", JSONPath: "missing", Type: "float64"},
 			want:    nil,
 			wantErr: true,
 		},
 		{
 			name:    "empty json path",
 			body:    `{"temperature": 23.5}`,
-			point:   config.Point{Name: "temp", JsonPath: "", Type: "float64"},
+			point:   config.Point{Name: "temp", JSONPath: "", Type: "float64"},
 			want:    nil,
 			wantErr: true,
 		},
@@ -329,19 +329,19 @@ func TestReadAllPointsWithServer(t *testing.T) {
 		Timeout:      5 * time.Second,
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      server.URL,
 				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
 		Points: []config.Point{
-			{Name: "temp", JsonPath: "temperature", Type: "float64", Unit: "C"},
-			{Name: "humidity", JsonPath: "humidity", Type: "float64", Unit: "%"},
+			{Name: "temp", JSONPath: "temperature", Type: "float64", Unit: "C"},
+			{Name: "humidity", JSONPath: "humidity", Type: "float64", Unit: "%"},
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -378,18 +378,18 @@ func TestReadAllPointsError(t *testing.T) {
 		Timeout:      5 * time.Second,
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      server.URL,
 				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
 		Points: []config.Point{
-			{Name: "temp", JsonPath: "temperature", Type: "float64"},
+			{Name: "temp", JSONPath: "temperature", Type: "float64"},
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -417,18 +417,18 @@ func TestReadAllPointsTimeout(t *testing.T) {
 		Timeout:      50 * time.Millisecond,
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      server.URL,
 				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
 		Points: []config.Point{
-			{Name: "temp", JsonPath: "temperature", Type: "float64"},
+			{Name: "temp", JSONPath: "temperature", Type: "float64"},
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -447,18 +447,18 @@ func TestTextResponseType(t *testing.T) {
 		Name: "test",
 		Type: "http",
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      "http://localhost:8080",
 				Method:       "GET",
 				ResponseType: "text",
 			},
 		},
 		Points: []config.Point{
-			{Name: "text", JsonPath: "", Type: "string"},
+			{Name: "text", JSONPath: "", Type: "string"},
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -490,20 +490,20 @@ func TestParsePointsParallel(t *testing.T) {
 		Timeout:      5 * time.Second,
 		Parallelism:  2, // Enable parallelism
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      "http://localhost:8080",
 				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
 		Points: []config.Point{
-			{Name: "temp", JsonPath: "temperature", Type: "float64"},
-			{Name: "humidity", JsonPath: "humidity", Type: "float64"},
-			{Name: "pressure", JsonPath: "pressure", Type: "float64"},
+			{Name: "temp", JSONPath: "temperature", Type: "float64"},
+			{Name: "humidity", JSONPath: "humidity", Type: "float64"},
+			{Name: "pressure", JSONPath: "pressure", Type: "float64"},
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -536,7 +536,7 @@ func TestMarshalJSON(t *testing.T) {
 		Type: "http",
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}
@@ -572,18 +572,18 @@ func TestPollLoopShutdown(t *testing.T) {
 		Timeout:      5 * time.Second,
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
-			Http: config.HttpConfig{
+			HTTP: config.HTTPConfig{
 				Address:      "http://localhost:8080",
 				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
 		Points: []config.Point{
-			{Name: "temp", JsonPath: "temperature", Type: "float64"},
+			{Name: "temp", JSONPath: "temperature", Type: "float64"},
 		},
 	}
 
-	reader, err := NewHttpReader(deviceConfig, &logger)
+	reader, err := New(deviceConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create HTTP reader: %v", err)
 	}

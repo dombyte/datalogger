@@ -23,8 +23,8 @@ const (
 	DefaultRetryDelay   = 1 * time.Second
 )
 
-// InfluxDBWriter writes DataPoints to an InfluxDB3 database.
-type InfluxDBWriter struct {
+// Writer writes DataPoints to an InfluxDB3 database.
+type Writer struct {
 	config       config.Output
 	logger       zerolog.Logger
 	client       *influxdb3.Client
@@ -36,8 +36,8 @@ type InfluxDBWriter struct {
 	lastWriteErr error // Track if previous write failed
 }
 
-// NewInfluxDBWriter creates a new InfluxDBWriter.
-func NewInfluxDBWriter(outputConfig config.Output, logger *zerolog.Logger) (*InfluxDBWriter, error) {
+// New creates a new Writer.
+func New(outputConfig config.Output, logger *zerolog.Logger) (*Writer, error) {
 	// Get batch configuration from output config, with defaults
 	batchSize := DefaultBatchSize
 	batchTimeout := DefaultBatchTimeout
@@ -57,7 +57,7 @@ func NewInfluxDBWriter(outputConfig config.Output, logger *zerolog.Logger) (*Inf
 		retryDelay = outputConfig.RetryDelay
 	}
 
-	w := &InfluxDBWriter{
+	w := &Writer{
 		config:       outputConfig,
 		logger:       logger.With().Str("output", "influxdb").Str("name", outputConfig.Name).Logger(),
 		devices:      outputConfig.Devices,
@@ -71,7 +71,7 @@ func NewInfluxDBWriter(outputConfig config.Output, logger *zerolog.Logger) (*Inf
 }
 
 // createClient creates and configures the InfluxDB3 client.
-func (w *InfluxDBWriter) createClient() error {
+func (w *Writer) createClient() error {
 	influxConfig := w.config.OutputSpecific.Influxdb
 
 	// Create HTTP client for insecure connections
@@ -114,23 +114,23 @@ func (w *InfluxDBWriter) createClient() error {
 }
 
 // Name returns the output name.
-func (w *InfluxDBWriter) Name() string {
+func (w *Writer) Name() string {
 	return w.config.Name
 }
 
 // Devices returns the list of device names this output accepts.
-func (w *InfluxDBWriter) Devices() []string {
+func (w *Writer) Devices() []string {
 	return w.devices
 }
 
 // Validate validates the InfluxDB3 writer configuration.
-func (w *InfluxDBWriter) Validate() error {
+func (w *Writer) Validate() error {
 	// Configuration was already validated when creating the writer
 	return nil
 }
 
 // Start starts the InfluxDB3 writer goroutine.
-func (w *InfluxDBWriter) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
+func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -145,7 +145,7 @@ func (w *InfluxDBWriter) Start(ctx context.Context, input <-chan datasource.Data
 }
 
 // runWriterLoop is the main loop for the InfluxDB writer.
-func (w *InfluxDBWriter) runWriterLoop(
+func (w *Writer) runWriterLoop(
 	ctx context.Context,
 	input <-chan datasource.DataPoint,
 	batch []*influxdb3.Point,
@@ -169,7 +169,7 @@ func (w *InfluxDBWriter) runWriterLoop(
 }
 
 // handleShutdown handles shutdown signal by flushing remaining batch and draining input.
-func (w *InfluxDBWriter) handleShutdown(
+func (w *Writer) handleShutdown(
 	ctx context.Context,
 	input <-chan datasource.DataPoint,
 	batch []*influxdb3.Point,
@@ -195,7 +195,7 @@ func (w *InfluxDBWriter) handleShutdown(
 }
 
 // drainRemainingPoints drains any remaining points from the input channel after shutdown.
-func (w *InfluxDBWriter) drainRemainingPoints(
+func (w *Writer) drainRemainingPoints(
 	ctx context.Context,
 	input <-chan datasource.DataPoint,
 	batchTimer *time.Timer,
@@ -224,7 +224,7 @@ func (w *InfluxDBWriter) drainRemainingPoints(
 }
 
 // handleInputPoint handles a single input data point.
-func (w *InfluxDBWriter) handleInputPoint(
+func (w *Writer) handleInputPoint(
 	ctx context.Context,
 	dp datasource.DataPoint,
 	ok bool,
@@ -264,7 +264,7 @@ func (w *InfluxDBWriter) handleInputPoint(
 }
 
 // handleBatchTimeout handles batch timeout by writing the current batch.
-func (w *InfluxDBWriter) handleBatchTimeout(
+func (w *Writer) handleBatchTimeout(
 	ctx context.Context,
 	batch *[]*influxdb3.Point,
 	batchTimer *time.Timer,
@@ -285,7 +285,7 @@ func (w *InfluxDBWriter) handleBatchTimeout(
 // - tags: point (e.g., "a_voltage"), unit (e.g., "V")
 // - field: value (the measured value)
 // This creates a homogeneous schema with consistent columns across all rows.
-func (w *InfluxDBWriter) createPoint(dp datasource.DataPoint) *influxdb3.Point {
+func (w *Writer) createPoint(dp datasource.DataPoint) *influxdb3.Point {
 	// Build tags for metadata
 	tags := map[string]string{
 		"point": dp.PointName,
@@ -308,7 +308,7 @@ func (w *InfluxDBWriter) createPoint(dp datasource.DataPoint) *influxdb3.Point {
 }
 
 // writeBatchWithRetry writes a batch of points with retry logic
-func (w *InfluxDBWriter) writeBatchWithRetry(ctx context.Context, batch []*influxdb3.Point) error {
+func (w *Writer) writeBatchWithRetry(ctx context.Context, batch []*influxdb3.Point) error {
 	var lastErr error
 
 	for attempt := 0; attempt <= w.maxRetries; attempt++ {
@@ -323,7 +323,7 @@ func (w *InfluxDBWriter) writeBatchWithRetry(ctx context.Context, batch []*influ
 }
 
 // attemptWrite attempts to write a batch with context checking and retry delay.
-func (w *InfluxDBWriter) attemptWrite(
+func (w *Writer) attemptWrite(
 	ctx context.Context,
 	batch []*influxdb3.Point,
 	attempt int,
@@ -365,7 +365,7 @@ func (w *InfluxDBWriter) attemptWrite(
 }
 
 // waitForRetry waits for the retry delay or context cancellation.
-func (w *InfluxDBWriter) waitForRetry(
+func (w *Writer) waitForRetry(
 	ctx context.Context,
 	attempt int,
 	lastErr error,

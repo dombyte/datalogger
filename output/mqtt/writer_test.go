@@ -102,7 +102,7 @@ func TestMQTTWriterName(t *testing.T) {
 
 	// We can't fully create the writer without a real MQTT broker,
 	// but we can test the struct fields
-	writer := &MQTTWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -133,7 +133,7 @@ func TestMQTTWriterDevices(t *testing.T) {
 		},
 	}
 
-	writer := &MQTTWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: devices,
@@ -170,7 +170,7 @@ func TestMQTTWriterValidate(t *testing.T) {
 		},
 	}
 
-	writer := &MQTTWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -203,7 +203,7 @@ func TestNewMQTTWriter(t *testing.T) {
 	}
 
 	// This will fail to connect since we don't have a real MQTT broker
-	writer, err := NewMQTTWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 
 	// We expect an error since we don't have a real MQTT broker
 	if err == nil {
@@ -251,7 +251,7 @@ func TestMQTTWriterCreateClient(t *testing.T) {
 		},
 	}
 
-	writer := &MQTTWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -357,7 +357,7 @@ func TestMQTTConfigWithCredentials(t *testing.T) {
 		},
 	}
 
-	writer := &MQTTWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -419,7 +419,7 @@ func TestMQTTWriterWithDataPoint(t *testing.T) {
 		},
 	}
 
-	writer := &MQTTWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -489,7 +489,7 @@ func TestMQTTWriterStart(t *testing.T) {
 	}
 
 	// We can test the writer structure without calling Start
-	writer := &MQTTWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,
@@ -643,9 +643,9 @@ func TestMQTTWriterWithVariousConfigs(t *testing.T) {
 				},
 			}
 
-			// We can't fully test NewMQTTWriter without a real MQTT broker
+			// We can't fully test New without a real MQTT broker
 			// but we can test the struct initialization
-			writer := &MQTTWriter{
+			writer := &Writer{
 				config:  outputConfig,
 				logger:  logger,
 				devices: outputConfig.Devices,
@@ -734,7 +734,7 @@ func TestBuildTopic(t *testing.T) {
 		},
 	}
 
-	writer := &MQTTWriter{
+	writer := &Writer{
 		config:  outputConfig,
 		logger:  logger,
 		devices: outputConfig.Devices,

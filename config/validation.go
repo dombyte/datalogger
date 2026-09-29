@@ -69,7 +69,7 @@ func (d *Device) Validate() error {
 	case "modbus":
 		return d.DeviceSpecific.Modbus.Validate()
 	case "http":
-		return d.DeviceSpecific.Http.Validate()
+		return d.DeviceSpecific.HTTP.Validate()
 	default:
 		return fmt.Errorf("unknown device type: %s", d.Type)
 	}
@@ -127,7 +127,7 @@ func (m *ModbusConfig) validateRanges() error {
 }
 
 // Validate validates HTTP configuration.
-func (h *HttpConfig) Validate() error {
+func (h *HTTPConfig) Validate() error {
 	if h.Address == "" {
 		return fmt.Errorf("address required")
 	}

@@ -136,7 +136,7 @@ func TestDecodeValue(t *testing.T) {
 // TestShouldReconnect tests the shouldReconnect function
 func TestShouldReconnect(t *testing.T) {
 	logger := zerolog.Nop()
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger: logger,
 		config: config.Device{
 			Name: "test",
@@ -204,7 +204,7 @@ func TestShouldReconnect(t *testing.T) {
 // TestApplyBackoff tests the applyBackoff function
 func TestApplyBackoff(t *testing.T) {
 	logger := zerolog.Nop()
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger:      logger,
 		config:      config.Device{Name: "test", Type: "modbus"},
 		backoffWait: 0,
@@ -259,9 +259,9 @@ func TestName(t *testing.T) {
 		Type: "modbus",
 	}
 
-	// Note: We can't fully test NewModbusReader without a real Modbus connection
+	// Note: We can't fully test New without a real Modbus connection
 	// So we'll create a partial reader for testing Name()
-	reader := &ModbusReader{
+	reader := &Reader{
 		config: deviceConfig,
 		logger: logger,
 	}
@@ -288,9 +288,9 @@ func TestValidate(t *testing.T) {
 		},
 	}
 
-	// Note: We can't fully test NewModbusReader without a real Modbus connection
+	// Note: We can't fully test New without a real Modbus connection
 	// So we'll create a partial reader for testing Validate()
-	reader := &ModbusReader{
+	reader := &Reader{
 		config: deviceConfig,
 		logger: logger,
 	}
@@ -358,7 +358,7 @@ func TestValidateAddresses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reader := &ModbusReader{
+			reader := &Reader{
 				logger: logger,
 				config: config.Device{
 					Name:   "test",
@@ -396,7 +396,7 @@ func TestApplyScaleAndOffsetForPoint(t *testing.T) {
 		Type: "modbus",
 	}
 
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger: logger,
 		config: deviceConfig,
 	}
@@ -453,9 +453,9 @@ func TestApplyScaleAndOffsetForPoint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reader.applyScaleAndOffsetForPoint(tt.value, tt.point)
+			got := reader.applyScaleAndOffset(tt.value, tt.point)
 			if got != tt.want {
-				t.Errorf("applyScaleAndOffsetForPoint() = %v, want %v", got, tt.want)
+				t.Errorf("applyScaleAndOffset() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -504,7 +504,7 @@ func TestGetRegType(t *testing.T) {
 // TestExtractValuesFromRangeData tests the extractValuesFromRangeData function
 func TestExtractValuesFromRangeData(t *testing.T) {
 	logger := zerolog.Nop()
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger: logger,
 		config: config.Device{
 			Name: "test",
@@ -585,7 +585,7 @@ func TestExtractValuesFromRangeData(t *testing.T) {
 // TestDecodePointsFromRangeData tests the decodePointsFromRangeData function
 func TestDecodePointsFromRangeData(t *testing.T) {
 	logger := zerolog.Nop()
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger: logger,
 		config: config.Device{
 			Name: "test",
@@ -624,7 +624,7 @@ func TestDecodePointsFromRangeData(t *testing.T) {
 // TestDecodeAndScalePoint tests the decodeAndScalePoint function
 func TestDecodeAndScalePoint(t *testing.T) {
 	logger := zerolog.Nop()
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger: logger,
 		config: config.Device{
 			Name: "test",
@@ -688,7 +688,7 @@ func TestDecodeAndScalePoint(t *testing.T) {
 // TestApplyScaleAndOffset tests the applyScaleAndOffset function
 func TestApplyScaleAndOffset(t *testing.T) {
 	logger := zerolog.Nop()
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger: logger,
 		config: config.Device{
 			Name: "test",
@@ -732,7 +732,7 @@ func TestApplyScaleAndOffset(t *testing.T) {
 	}
 }
 
-// TestNewModbusReader tests creating a new ModbusReader
+// TestNewModbusReader tests creating a new Reader
 func TestNewModbusReader(t *testing.T) {
 	logger := zerolog.Nop()
 
@@ -754,9 +754,9 @@ func TestNewModbusReader(t *testing.T) {
 		},
 	}
 
-	// We can't test the actual NewModbusReader since it requires a real Modbus connection
+	// We can't test the actual New since it requires a real Modbus connection
 	// But we can test the struct initialization logic
-	reader := &ModbusReader{
+	reader := &Reader{
 		config:  deviceConfig,
 		logger:  logger.With().Str("datasource", "modbus").Str("device", deviceConfig.Name).Logger(),
 		points:  deviceConfig.Points,
@@ -784,7 +784,7 @@ func TestCreateDataPointFromValues(t *testing.T) {
 		Type: "modbus",
 	}
 
-	reader := &ModbusReader{
+	reader := &Reader{
 		config: deviceConfig,
 		logger: logger,
 	}
@@ -887,7 +887,7 @@ func TestNewModbusLogger(t *testing.T) {
 // TestHandlePollError tests the handlePollError function
 func TestHandlePollError(t *testing.T) {
 	logger := zerolog.Nop()
-	reader := &ModbusReader{
+	reader := &Reader{
 		config: config.Device{
 			Name: "test",
 			Type: "modbus",
@@ -923,7 +923,7 @@ func TestHandlePollError(t *testing.T) {
 // TestHandlePollSuccess tests the handlePollSuccess function
 func TestHandlePollSuccess(t *testing.T) {
 	logger := zerolog.Nop()
-	reader := &ModbusReader{
+	reader := &Reader{
 		config: config.Device{
 			Name: "test",
 			Type: "modbus",
@@ -973,7 +973,7 @@ func TestHandlePollSuccess(t *testing.T) {
 // TestApplyBackoff tests exponential backoff
 func TestApplyBackoffMultiple(t *testing.T) {
 	logger := zerolog.Nop()
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger:      logger,
 		config:      config.Device{Name: "test", Type: "modbus"},
 		backoffWait: 0,
@@ -1033,7 +1033,7 @@ func TestReadRegistersForPoint(t *testing.T) {
 func TestReadSinglePoint(t *testing.T) {
 	logger := zerolog.Nop()
 
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger: logger,
 		config: config.Device{
 			Name: "test_device",
@@ -1070,7 +1070,7 @@ func TestReadSinglePoint(t *testing.T) {
 	}
 
 	// Test scaling
-	scaled := reader.applyScaleAndOffsetForPoint(decodedValue, point)
+	scaled := reader.applyScaleAndOffset(decodedValue, point)
 	expectedScaled := float64(100)*point.Scale + point.Offset
 	if scaled != expectedScaled {
 		t.Errorf("scaled = %v, want %v", scaled, expectedScaled)
@@ -1112,7 +1112,7 @@ func TestStart(t *testing.T) {
 	logger := zerolog.Nop()
 
 	// Create a reader without a real client (partial initialization)
-	reader := &ModbusReader{
+	reader := &Reader{
 		logger: logger,
 		config: config.Device{
 			Name:         "test_device",
@@ -1163,7 +1163,7 @@ func TestModbusReaderName(t *testing.T) {
 		Type: "modbus",
 	}
 
-	reader := &ModbusReader{
+	reader := &Reader{
 		config: deviceConfig,
 		logger: logger,
 	}
@@ -1191,7 +1191,7 @@ func TestModbusReaderValidate(t *testing.T) {
 		},
 	}
 
-	reader := &ModbusReader{
+	reader := &Reader{
 		config: deviceConfig,
 		logger: logger,
 	}

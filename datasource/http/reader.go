@@ -19,8 +19,8 @@ import (
 	"github.com/dombyte/datalogger/datasource"
 )
 
-// HttpReader reads data from an HTTP API endpoint.
-type HttpReader struct {
+// Reader reads data from an HTTP API endpoint.
+type Reader struct {
 	config      config.Device
 	logger      zerolog.Logger
 	client      *http.Client
@@ -29,9 +29,9 @@ type HttpReader struct {
 	backoffWait time.Duration
 }
 
-// NewHttpReader creates a new HttpReader.
-func NewHttpReader(deviceConfig config.Device, logger *zerolog.Logger) (*HttpReader, error) {
-	httpConfig := deviceConfig.DeviceSpecific.Http
+// New creates a new Reader.
+func New(deviceConfig config.Device, logger *zerolog.Logger) (*Reader, error) {
+	httpConfig := deviceConfig.DeviceSpecific.HTTP
 
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -39,7 +39,7 @@ func NewHttpReader(deviceConfig config.Device, logger *zerolog.Logger) (*HttpRea
 		},
 	}
 
-	r := &HttpReader{
+	r := &Reader{
 		config: deviceConfig,
 		logger: logger.With().Str("datasource", "http").Str("device", deviceConfig.Name).Logger(),
 		client: &http.Client{
@@ -52,18 +52,18 @@ func NewHttpReader(deviceConfig config.Device, logger *zerolog.Logger) (*HttpRea
 }
 
 // Name returns the device name.
-func (r *HttpReader) Name() string {
+func (r *Reader) Name() string {
 	return r.config.Name
 }
 
 // Validate validates the HTTP reader configuration.
-func (r *HttpReader) Validate() error {
+func (r *Reader) Validate() error {
 	// Configuration was already validated when creating the reader
 	return nil
 }
 
 // shouldReconnect determines if an error indicates a connection issue that warrants reconnection.
-func (r *HttpReader) shouldReconnect(err error) bool {
+func (r *Reader) shouldReconnect(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -81,7 +81,7 @@ func (r *HttpReader) shouldReconnect(err error) bool {
 }
 
 // applyBackoff applies exponential backoff to the wait duration.
-func (r *HttpReader) applyBackoff() {
+func (r *Reader) applyBackoff() {
 	const maxBackoff = 30 * time.Second
 	r.backoffWait = r.backoffWait * 2
 	if r.backoffWait == 0 {
@@ -93,17 +93,17 @@ func (r *HttpReader) applyBackoff() {
 }
 
 // resetBackoff resets the backoff state.
-func (r *HttpReader) resetBackoff() {
+func (r *Reader) resetBackoff() {
 	r.failCount = 0
 	r.backoffWait = 0
 	r.lastError = nil
 }
 
 // reconnect recreates the HTTP client for reconnection.
-func (r *HttpReader) reconnect() error {
+func (r *Reader) reconnect() error {
 	r.logger.Warn().Msg("Attempting to reconnect HTTP client")
 
-	httpConfig := r.config.DeviceSpecific.Http
+	httpConfig := r.config.DeviceSpecific.HTTP
 
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -127,7 +127,7 @@ func (r *HttpReader) reconnect() error {
 }
 
 // handleReconnect attempts to reconnect the HTTP client.
-func (r *HttpReader) handleReconnect() {
+func (r *Reader) handleReconnect() {
 	if reconnectErr := r.reconnect(); reconnectErr != nil {
 		r.logger.Error().Err(reconnectErr).Msg("HTTP reconnection failed")
 	} else {
@@ -137,7 +137,7 @@ func (r *HttpReader) handleReconnect() {
 }
 
 // handlePollError handles an error from a poll attempt.
-func (r *HttpReader) handlePollError(err error) {
+func (r *Reader) handlePollError(err error) {
 	r.failCount++
 	r.lastError = err
 
@@ -156,7 +156,7 @@ func (r *HttpReader) handlePollError(err error) {
 }
 
 // Start starts the polling loop and returns channels for data, done, and errors.
-func (r *HttpReader) Start(ctx context.Context) (<-chan datasource.DataPoint, <-chan struct{}, <-chan error) {
+func (r *Reader) Start(ctx context.Context) (<-chan datasource.DataPoint, <-chan struct{}, <-chan error) {
 	dataCh := make(chan datasource.DataPoint)
 	doneCh := make(chan struct{})
 	errCh := make(chan error, 1)
@@ -167,7 +167,7 @@ func (r *HttpReader) Start(ctx context.Context) (<-chan datasource.DataPoint, <-
 }
 
 // pollLoop runs the main polling loop for the HTTP device.
-func (r *HttpReader) pollLoop(
+func (r *Reader) pollLoop(
 	ctx context.Context,
 	dataCh chan<- datasource.DataPoint,
 	doneCh chan<- struct{},
@@ -218,7 +218,7 @@ func (r *HttpReader) pollLoop(
 
 // readAllPoints makes an HTTP request and parses all configured points.
 // Timestamp is captured when the HTTP response is received.
-func (r *HttpReader) readAllPoints(ctx context.Context) ([]datasource.DataPoint, error) {
+func (r *Reader) readAllPoints(ctx context.Context) ([]datasource.DataPoint, error) {
 	// Make the HTTP request
 	req, err := r.createRequest()
 	if err != nil {
@@ -255,8 +255,8 @@ func (r *HttpReader) readAllPoints(ctx context.Context) ([]datasource.DataPoint,
 }
 
 // createRequest creates an HTTP request based on the configuration.
-func (r *HttpReader) createRequest() (*http.Request, error) {
-	httpConfig := r.config.DeviceSpecific.Http
+func (r *Reader) createRequest() (*http.Request, error) {
+	httpConfig := r.config.DeviceSpecific.HTTP
 	method := strings.ToUpper(httpConfig.Method)
 	if method == "" {
 		method = "GET"
@@ -288,7 +288,7 @@ func (r *HttpReader) createRequest() (*http.Request, error) {
 }
 
 // parsePointsSequential parses points sequentially from the response body.
-func (r *HttpReader) parsePointsSequential(body []byte, timestamp time.Time) ([]datasource.DataPoint, error) {
+func (r *Reader) parsePointsSequential(body []byte, timestamp time.Time) ([]datasource.DataPoint, error) {
 	var results []datasource.DataPoint
 
 	for _, point := range r.config.Points {
@@ -314,7 +314,7 @@ func (r *HttpReader) parsePointsSequential(body []byte, timestamp time.Time) ([]
 }
 
 // parsePointsParallel parses points in parallel from the response body.
-func (r *HttpReader) parsePointsParallel(body []byte, timestamp time.Time) ([]datasource.DataPoint, error) {
+func (r *Reader) parsePointsParallel(body []byte, timestamp time.Time) ([]datasource.DataPoint, error) {
 	var results []datasource.DataPoint
 	var mu sync.Mutex
 	sem := make(chan struct{}, r.config.Parallelism)
@@ -355,8 +355,8 @@ func (r *HttpReader) parsePointsParallel(body []byte, timestamp time.Time) ([]da
 }
 
 // extractValue extracts a value from the response body based on the point configuration.
-func (r *HttpReader) extractValue(body []byte, point config.Point) (interface{}, error) {
-	httpConfig := r.config.DeviceSpecific.Http
+func (r *Reader) extractValue(body []byte, point config.Point) (interface{}, error) {
+	httpConfig := r.config.DeviceSpecific.HTTP
 
 	switch httpConfig.ResponseType {
 	case "json":
@@ -372,21 +372,21 @@ func (r *HttpReader) extractValue(body []byte, point config.Point) (interface{},
 }
 
 // extractJSONValue extracts a value from JSON using JSONPath.
-func (r *HttpReader) extractJSONValue(body []byte, point config.Point) (interface{}, error) {
-	if point.JsonPath == "" {
+func (r *Reader) extractJSONValue(body []byte, point config.Point) (interface{}, error) {
+	if point.JSONPath == "" {
 		return nil, fmt.Errorf("json_path required for JSON response")
 	}
 
-	result := gjson.GetBytes(body, point.JsonPath)
+	result := gjson.GetBytes(body, point.JSONPath)
 	if !result.Exists() {
-		return nil, fmt.Errorf("JSONPath %s not found", point.JsonPath)
+		return nil, fmt.Errorf("JSONPath %s not found", point.JSONPath)
 	}
 
 	return r.convertJSONResult(result, point.Type)
 }
 
 // convertJSONResult converts a gjson.Result to the appropriate type.
-func (r *HttpReader) convertJSONResult(result gjson.Result, targetType string) (interface{}, error) {
+func (r *Reader) convertJSONResult(result gjson.Result, targetType string) (interface{}, error) {
 	switch targetType {
 	case "float32", "float64":
 		return result.Float(), nil
@@ -404,7 +404,7 @@ func (r *HttpReader) convertJSONResult(result gjson.Result, targetType string) (
 }
 
 // autoDetectJSONType auto-detects the type from the JSON value.
-func (r *HttpReader) autoDetectJSONType(result gjson.Result) (interface{}, error) {
+func (r *Reader) autoDetectJSONType(result gjson.Result) (interface{}, error) {
 	if result.IsBool() {
 		return result.Bool(), nil
 	}
@@ -414,8 +414,8 @@ func (r *HttpReader) autoDetectJSONType(result gjson.Result) (interface{}, error
 	return result.Value(), nil
 }
 
-// MarshalJSON implements json.Marshaler for HttpReader (optional, not strictly needed).
-func (r *HttpReader) MarshalJSON() ([]byte, error) {
+// MarshalJSON implements json.Marshaler for Reader (optional, not strictly needed).
+func (r *Reader) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Name string `json:"name"`
 	}{Name: r.config.Name})

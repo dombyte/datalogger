@@ -32,7 +32,7 @@ type Point struct {
 	Count        uint16  `mapstructure:"count"`         // Modbus: number of registers to read
 	Type         string  `mapstructure:"type"`          // int16, uint16, int32, uint32, float32, bool, string
 	FunctionCode uint8   `mapstructure:"function_code"` // Modbus: 3 or 4 (optional for HTTP)
-	JsonPath     string  `mapstructure:"json_path"`     // HTTP: "main.temp" or "a_voltage"
+	JSONPath     string  `mapstructure:"json_path"`     // HTTP: "main.temp" or "a_voltage"
 	Scale        float64 `mapstructure:"scale"`
 	Offset       float64 `mapstructure:"offset"`
 	Unit         string  `mapstructure:"unit"`
@@ -41,7 +41,7 @@ type Point struct {
 // DeviceSpecific contains device-type-specific configuration.
 type DeviceSpecific struct {
 	Modbus ModbusConfig `mapstructure:"modbus"`
-	Http   HttpConfig   `mapstructure:"http"`
+	HTTP   HTTPConfig   `mapstructure:"http"`
 }
 
 // ModbusConfig contains Modbus-specific configuration.
@@ -56,8 +56,8 @@ type ModbusConfig struct {
 	Ranges       []string `mapstructure:"ranges"`        // Manual ranges: ["3000-3011", "3011-3060"]
 }
 
-// HttpConfig contains HTTP-specific configuration.
-type HttpConfig struct {
+// HTTPConfig contains HTTP-specific configuration.
+type HTTPConfig struct {
 	Address      string            `mapstructure:"address"`
 	Method       string            `mapstructure:"method"` // GET or POST
 	Headers      map[string]string `mapstructure:"headers"`

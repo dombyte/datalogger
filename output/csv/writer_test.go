@@ -32,7 +32,7 @@ func TestNewCSVWriter(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestCSVWriterName(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestCSVWriterDevices(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestCSVWriterValidate(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestCSVWriterWritePoint(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestCSVWriterMultiplePoints(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestCSVWriterFileCreation(t *testing.T) {
 		},
 	}
 
-	_, err := NewCSVWriter(outputConfig, &logger)
+	_, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestCSVWriterStart(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestCSVWriterStartShutdown(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestCSVWriterOpenFile(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger: logger,
 		config: config.Output{
 			Name:    "csv_test",
@@ -489,7 +489,7 @@ func TestCSVWriterOpenFileExisting(t *testing.T) {
 		t.Fatalf("Failed to create existing file: %v", err)
 	}
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger: logger,
 		config: config.Output{
 			Name:    "csv_test",
@@ -549,7 +549,7 @@ func TestCSVWriterRotation(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -609,7 +609,7 @@ func TestCollectBackupFiles(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:   logger,
 		config:   config.Output{Name: "test", Type: "csv"},
 		filePath: filePath,
@@ -661,7 +661,7 @@ func TestDeleteOldBackups(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:     logger,
 		config:     config.Output{Name: "test", Type: "csv"},
 		filePath:   filePath,
@@ -709,7 +709,7 @@ func TestDeleteAllBackups(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:     logger,
 		config:     config.Output{Name: "test", Type: "csv"},
 		filePath:   filePath,
@@ -751,7 +751,7 @@ func TestDeleteBackupFile(t *testing.T) {
 	filePath := filepath.Join(tempDir, "test.csv")
 	backupPath := filepath.Join(tempDir, "test.csv.backup")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:   logger,
 		config:   config.Output{Name: "test", Type: "csv"},
 		filePath: filePath,
@@ -777,7 +777,7 @@ func TestDeleteOldestBackups(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:     logger,
 		config:     config.Output{Name: "test", Type: "csv"},
 		filePath:   filePath,

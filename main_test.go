@@ -14,7 +14,7 @@ import (
 	"github.com/dombyte/datalogger/output"
 )
 
-// mockOutputWriterForMap is a mock that implements the output.OutputWriter interface for testing
+// mockOutputWriterForMap is a mock that implements the output.Writer interface for testing
 type mockOutputWriterForMap struct {
 	name    string
 	devices []string
@@ -38,7 +38,7 @@ func (w *mockOutputWriterForMap) Validate() error {
 	return nil
 }
 
-// mockOutputWriterForBuffer is a mock that implements the full output.OutputWriter interface
+// mockOutputWriterForBuffer is a mock that implements the full output.Writer interface
 type mockOutputWriterForBuffer struct {
 	name string
 }
@@ -128,7 +128,7 @@ func TestMonitorDevice(t *testing.T) {
 
 // TestBuildDeviceOutputMap tests the buildDeviceOutputMap function
 func TestBuildDeviceOutputMap(t *testing.T) {
-	outputWriters := []output.OutputWriter{
+	outputWriters := []output.Writer{
 		&mockOutputWriterForMap{name: "output1", devices: []string{"device1", "device2"}},
 		&mockOutputWriterForMap{name: "output2", devices: []string{"device2", "device3"}},
 		&mockOutputWriterForMap{name: "output3", devices: []string{"device1"}},
@@ -278,14 +278,14 @@ func TestCreateSingleDeviceReader(t *testing.T) {
 			// For http device, add required config
 			if tt.deviceType == "http" {
 				deviceConfig.DeviceSpecific = config.DeviceSpecific{
-					Http: config.HttpConfig{
+					HTTP: config.HTTPConfig{
 						Address:      "http://localhost:8080",
 						Method:       "GET",
 						ResponseType: "json",
 					},
 				}
 				deviceConfig.Points = []config.Point{
-					{Name: "temp", JsonPath: "temperature", Type: "float64"},
+					{Name: "temp", JSONPath: "temperature", Type: "float64"},
 				}
 			}
 
@@ -487,7 +487,7 @@ func TestRouteDeviceToOutputs(t *testing.T) {
 	close(deviceCh)
 
 	// Create mock output writers and channels
-	outputWriters := []output.OutputWriter{
+	outputWriters := []output.Writer{
 		&mockOutputWriterForMap{name: "output1", devices: []string{"device1"}},
 	}
 
@@ -598,7 +598,7 @@ func TestStartRouting(t *testing.T) {
 	// Create mock channels
 	deviceCh := make(<-chan datasource.DataPoint)
 
-	outputWriters := []output.OutputWriter{
+	outputWriters := []output.Writer{
 		&mockOutputWriterForMap{name: "output1", devices: []string{"device1"}},
 	}
 
@@ -685,14 +685,14 @@ func TestCreateDeviceReaders(t *testing.T) {
 				Timeout:      5 * time.Second,
 				Parallelism:  1,
 				DeviceSpecific: config.DeviceSpecific{
-					Http: config.HttpConfig{
+					HTTP: config.HTTPConfig{
 						Address:      "http://localhost:8080",
 						Method:       "GET",
 						ResponseType: "json",
 					},
 				},
 				Points: []config.Point{
-					{Name: "temp", JsonPath: "temperature", Type: "float64"},
+					{Name: "temp", JSONPath: "temperature", Type: "float64"},
 				},
 			},
 		},
@@ -817,14 +817,14 @@ func TestStartDeviceReadersWithRealHTTP(t *testing.T) {
 				Timeout:      5 * time.Second,
 				Parallelism:  1,
 				DeviceSpecific: config.DeviceSpecific{
-					Http: config.HttpConfig{
+					HTTP: config.HTTPConfig{
 						Address:      "http://localhost:8080",
 						Method:       "GET",
 						ResponseType: "json",
 					},
 				},
 				Points: []config.Point{
-					{Name: "temp", JsonPath: "temperature", Type: "float64"},
+					{Name: "temp", JSONPath: "temperature", Type: "float64"},
 				},
 			},
 		},
@@ -862,7 +862,7 @@ func TestRouteDeviceToOutputsNoOutputs(t *testing.T) {
 	close(deviceCh)
 
 	// Create mock output writers and channels for a different device
-	outputWriters := []output.OutputWriter{
+	outputWriters := []output.Writer{
 		&mockOutputWriterForMap{name: "output1", devices: []string{"device2"}}, // Different device
 	}
 

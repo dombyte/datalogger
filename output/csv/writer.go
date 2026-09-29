@@ -3,7 +3,7 @@ package csv
 
 import (
 	"context"
-	"encoding/csv"
+	stdcsv "encoding/csv"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,12 +17,12 @@ import (
 	"github.com/dombyte/datalogger/datasource"
 )
 
-// CSVWriter writes DataPoints to a CSV file.
-type CSVWriter struct {
+// Writer writes DataPoints to a CSV file.
+type Writer struct {
 	config       config.Output
 	logger       zerolog.Logger
 	file         *os.File
-	writer       *csv.Writer
+	writer       *stdcsv.Writer
 	devices      []string
 	filePath     string
 	maxAge       time.Duration
@@ -32,9 +32,9 @@ type CSVWriter struct {
 	lastWriteErr error     // Track if previous write failed
 }
 
-// NewCSVWriter creates a new CSVWriter.
-func NewCSVWriter(outputConfig config.Output, logger *zerolog.Logger) (*CSVWriter, error) {
-	w := &CSVWriter{
+// New creates a new Writer.
+func New(outputConfig config.Output, logger *zerolog.Logger) (*Writer, error) {
+	w := &Writer{
 		config:     outputConfig,
 		logger:     logger.With().Str("output", "csv").Str("name", outputConfig.Name).Logger(),
 		devices:    outputConfig.Devices,
@@ -47,7 +47,7 @@ func NewCSVWriter(outputConfig config.Output, logger *zerolog.Logger) (*CSVWrite
 }
 
 // openFile opens or creates the CSV file and initializes the writer.
-func (w *CSVWriter) openFile() error {
+func (w *Writer) openFile() error {
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(w.filePath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -60,7 +60,7 @@ func (w *CSVWriter) openFile() error {
 	}
 
 	w.file = file
-	w.writer = csv.NewWriter(file)
+	w.writer = stdcsv.NewWriter(file)
 
 	// Write header if file is empty
 	if info, err := file.Stat(); err == nil && info.Size() == 0 {
@@ -79,23 +79,23 @@ func (w *CSVWriter) openFile() error {
 }
 
 // Name returns the output name.
-func (w *CSVWriter) Name() string {
+func (w *Writer) Name() string {
 	return w.config.Name
 }
 
 // Devices returns the list of device names this output accepts.
-func (w *CSVWriter) Devices() []string {
+func (w *Writer) Devices() []string {
 	return w.devices
 }
 
 // Validate validates the CSV writer configuration.
-func (w *CSVWriter) Validate() error {
+func (w *Writer) Validate() error {
 	// Configuration was already validated when creating the writer
 	return nil
 }
 
 // Start starts the CSV writer goroutine.
-func (w *CSVWriter) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
+func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -133,7 +133,7 @@ func (w *CSVWriter) Start(ctx context.Context, input <-chan datasource.DataPoint
 }
 
 // drainAndClose drains remaining points from the input channel and closes the file.
-func (w *CSVWriter) drainAndClose(input <-chan datasource.DataPoint) {
+func (w *Writer) drainAndClose(input <-chan datasource.DataPoint) {
 	w.logger.Info().Msg("CSV writer: shutdown started, draining remaining points")
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer drainCancel()
@@ -164,7 +164,7 @@ func (w *CSVWriter) drainAndClose(input <-chan datasource.DataPoint) {
 }
 
 // writePoint writes a single DataPoint to the CSV file.
-func (w *CSVWriter) writePoint(dp datasource.DataPoint) error {
+func (w *Writer) writePoint(dp datasource.DataPoint) error {
 	// Format value based on type
 	valueStr := formatValue(dp.Value)
 
@@ -201,7 +201,7 @@ func (w *CSVWriter) writePoint(dp datasource.DataPoint) error {
 // rotateFile closes the current file and opens a new one with a timestamp suffix.
 // The old file is kept with a timestamp in the name.
 // Old backup files are deleted according to maxBackups: 0 = delete all, > 0 = keep that many.
-func (w *CSVWriter) rotateFile() error {
+func (w *Writer) rotateFile() error {
 	// Close current file
 	if w.file != nil {
 		w.writer.Flush()
@@ -234,7 +234,7 @@ func (w *CSVWriter) rotateFile() error {
 
 // cleanupOldBackups removes old backup files to maintain maxBackups limit.
 // Keeps the most recent backups and deletes the oldest ones.
-func (w *CSVWriter) cleanupOldBackups() error {
+func (w *Writer) cleanupOldBackups() error {
 	// Get all backup files matching the pattern: filePath.TIMESTAMP
 	pattern := w.filePath + ".*"
 	files, err := filepath.Glob(pattern)
@@ -257,7 +257,7 @@ func (w *CSVWriter) cleanupOldBackups() error {
 }
 
 // collectBackupFiles collects all backup files and their modification times.
-func (w *CSVWriter) collectBackupFiles(files []string) []struct {
+func (w *Writer) collectBackupFiles(files []string) []struct {
 	path  string
 	mtime time.Time
 } {
@@ -286,7 +286,7 @@ func (w *CSVWriter) collectBackupFiles(files []string) []struct {
 // maxBackups == 0 means delete all backups
 // maxBackups > 0 means keep at most maxBackups backups
 // maxBackups < 0 means keep all backups (no cleanup)
-func (w *CSVWriter) deleteOldBackups(backups []struct {
+func (w *Writer) deleteOldBackups(backups []struct {
 	path  string
 	mtime time.Time
 },
@@ -302,7 +302,7 @@ func (w *CSVWriter) deleteOldBackups(backups []struct {
 }
 
 // deleteAllBackups deletes all backup files.
-func (w *CSVWriter) deleteAllBackups(backups []struct {
+func (w *Writer) deleteAllBackups(backups []struct {
 	path  string
 	mtime time.Time
 },
@@ -313,7 +313,7 @@ func (w *CSVWriter) deleteAllBackups(backups []struct {
 }
 
 // deleteOldestBackups deletes the oldest backups to maintain maxBackups limit.
-func (w *CSVWriter) deleteOldestBackups(backups []struct {
+func (w *Writer) deleteOldestBackups(backups []struct {
 	path  string
 	mtime time.Time
 },
@@ -326,7 +326,7 @@ func (w *CSVWriter) deleteOldestBackups(backups []struct {
 }
 
 // deleteBackupFile deletes a single backup file and logs the result.
-func (w *CSVWriter) deleteBackupFile(path string) {
+func (w *Writer) deleteBackupFile(path string) {
 	if err := os.Remove(path); err != nil {
 		w.logger.Warn().Str("file", path).Err(err).Msg("Failed to delete old backup")
 	} else {

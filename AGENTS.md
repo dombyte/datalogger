@@ -65,7 +65,7 @@ config/                  Config structs (viper/mapstructure), Load(), Validate()
 datasource/              DataPoint type, DeviceReader interface
   modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, backoff, reconnect
   http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text, backoff
-output/                  OutputWriter interface
+output/                  Writer interface
   csv/                   CSV writer: flush per point, rotation by max_age, backup cleanup
   influxdb/              InfluxDB 3 writer: batching, retries, v3 write API
   mqtt/                  MQTT v5 writer (paho.golang): one topic per point, JSON payload
@@ -120,7 +120,7 @@ DeviceReader.Start ──dataCh (unbuffered)──▶ router goroutine (one per 
                                               ▼
                               per-output channel (buffer_size, default 1000)
                                               ▼
-                                     OutputWriter.Start (one goroutine per output)
+                                     Writer.Start       (one goroutine per output)
 ```
 
 - **Readers own** their data channel and are the only senders on it. A poll sends all its

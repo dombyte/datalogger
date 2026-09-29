@@ -204,7 +204,7 @@ func startOutputWriters(
 	cfg *config.Config,
 	ctx context.Context,
 	logger *zerolog.Logger,
-) ([]output.OutputWriter, map[string]chan<- datasource.DataPoint, map[string]<-chan struct{}) {
+) ([]output.Writer, map[string]chan<- datasource.DataPoint, map[string]<-chan struct{}) {
 	outputWriters := createOutputWriters(cfg, logger)
 	outputChannels := make(map[string]chan<- datasource.DataPoint)
 	outputDoneChannels := make(map[string]<-chan struct{})
@@ -227,7 +227,7 @@ func startOutputWriters(
 // startWriterGoroutineWithDone starts a single output writer goroutine with a done channel.
 func startWriterGoroutineWithDone(
 	ctx context.Context,
-	writer output.OutputWriter,
+	writer output.Writer,
 	ch <-chan datasource.DataPoint,
 	doneCh chan<- struct{},
 	logger *zerolog.Logger,
@@ -255,7 +255,7 @@ func startWriterGoroutineWithDone(
 // startRouting sets up routing from device channels to output channels.
 func startRouting(
 	deviceChannels map[string]<-chan datasource.DataPoint,
-	outputWriters []output.OutputWriter,
+	outputWriters []output.Writer,
 	outputChannels map[string]chan<- datasource.DataPoint,
 	logger *zerolog.Logger,
 ) {
@@ -301,9 +301,9 @@ func createSingleDeviceReader(deviceConfig *config.Device, logger *zerolog.Logge
 
 	switch deviceConfig.Type {
 	case "modbus":
-		reader, err = modbus.NewModbusReader(*deviceConfig, logger)
+		reader, err = modbus.New(*deviceConfig, logger)
 	case "http":
-		reader, err = http.NewHttpReader(*deviceConfig, logger)
+		reader, err = http.New(*deviceConfig, logger)
 	default:
 		logger.Error().Str("device", deviceConfig.Name).Str("type", deviceConfig.Type).Msg("Unknown device type")
 		return nil
@@ -323,8 +323,8 @@ func createSingleDeviceReader(deviceConfig *config.Device, logger *zerolog.Logge
 }
 
 // createOutputWriters creates output writers based on the configuration.
-func createOutputWriters(cfg *config.Config, logger *zerolog.Logger) []output.OutputWriter {
-	var writers []output.OutputWriter
+func createOutputWriters(cfg *config.Config, logger *zerolog.Logger) []output.Writer {
+	var writers []output.Writer
 
 	for _, outputConfig := range cfg.Outputs {
 		writer := createSingleOutputWriter(&outputConfig, logger)
@@ -337,7 +337,7 @@ func createOutputWriters(cfg *config.Config, logger *zerolog.Logger) []output.Ou
 }
 
 // createSingleOutputWriter creates a single output writer from a config.
-func createSingleOutputWriter(outputConfig *config.Output, logger *zerolog.Logger) output.OutputWriter {
+func createSingleOutputWriter(outputConfig *config.Output, logger *zerolog.Logger) output.Writer {
 	writer, err := createOutputWriterByType(outputConfig, logger)
 	if err != nil {
 		return nil
@@ -352,14 +352,14 @@ func createSingleOutputWriter(outputConfig *config.Output, logger *zerolog.Logge
 }
 
 // createOutputWriterByType creates an output writer based on its type.
-func createOutputWriterByType(outputConfig *config.Output, logger *zerolog.Logger) (output.OutputWriter, error) {
+func createOutputWriterByType(outputConfig *config.Output, logger *zerolog.Logger) (output.Writer, error) {
 	switch outputConfig.Type {
 	case "influxdb":
-		return influxdb.NewInfluxDBWriter(*outputConfig, logger)
+		return influxdb.New(*outputConfig, logger)
 	case "mqtt":
-		return mqtt.NewMQTTWriter(*outputConfig, logger)
+		return mqtt.New(*outputConfig, logger)
 	case "csv":
-		return csv.NewCSVWriter(*outputConfig, logger)
+		return csv.New(*outputConfig, logger)
 	default:
 		logger.Error().Str("output", outputConfig.Name).Str("type", outputConfig.Type).Msg("Unknown output type")
 		return nil, fmt.Errorf("unknown output type: %s", outputConfig.Type)
@@ -367,7 +367,7 @@ func createOutputWriterByType(outputConfig *config.Output, logger *zerolog.Logge
 }
 
 // writerBufferSize returns the buffer size for an output writer.
-func writerBufferSize(w output.OutputWriter, cfg *config.Config) int {
+func writerBufferSize(w output.Writer, cfg *config.Config) int {
 	// Check if the output has a specific buffer size
 	for _, o := range cfg.Outputs {
 		if o.Name == w.Name() {
@@ -439,7 +439,7 @@ func monitorComponents(
 func routeDeviceToOutputs(
 	deviceName string,
 	deviceCh <-chan datasource.DataPoint,
-	outputWriters []output.OutputWriter,
+	outputWriters []output.Writer,
 	outputChannels map[string]chan<- datasource.DataPoint,
 	logger *zerolog.Logger,
 ) {
@@ -454,7 +454,7 @@ func routeDeviceToOutputs(
 // buildDeviceOutputMap builds a map of output channels that accept data from a specific device.
 func buildDeviceOutputMap(
 	deviceName string,
-	outputWriters []output.OutputWriter,
+	outputWriters []output.Writer,
 	outputChannels map[string]chan<- datasource.DataPoint,
 ) map[string]chan<- datasource.DataPoint {
 	deviceOutputs := make(map[string]chan<- datasource.DataPoint)
