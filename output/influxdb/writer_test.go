@@ -2,12 +2,14 @@ package influxdb
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/InfluxCommunity/influxdb3-go/v2/influxdb3"
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
@@ -192,41 +194,14 @@ func TestCreatePoint(t *testing.T) {
 		Unit:       "C",
 	}
 
-	// Test createPoint method
 	point := writer.createPoint(dp)
+	require.NotNil(t, point)
+	require.NotNil(t, point.Values)
 
-	if point == nil {
-		t.Fatal("createPoint returned nil")
-	}
-
-	// Check that the point has the expected measurement name
-	// The measurement should be the device name
-	if point.GetMeasurement() != "test_device" {
-		t.Errorf("GetMeasurement() = %v, want %v", point.GetMeasurement(), "test_device")
-	}
-
-	// Check tags
-	if point.Values == nil {
-		t.Fatal("point.Values is nil")
-	}
-	tags := point.Values.Tags
-	if tags["point"] != "temperature" {
-		t.Errorf("Tags[point] = %v, want %v", tags["point"], "temperature")
-	}
-	if tags["unit"] != "C" {
-		t.Errorf("Tags[unit] = %v, want %v", tags["unit"], "C")
-	}
-
-	// Check fields
-	fields := point.Values.Fields
-	if fields["value"] != 23.5 {
-		t.Errorf("Fields[value] = %v, want %v", fields["value"], 23.5)
-	}
-
-	// Check timestamp
-	if !point.Values.Timestamp.Equal(timestamp) {
-		t.Errorf("Timestamp = %v, want %v", point.Values.Timestamp, timestamp)
-	}
+	assert.Equal(t, "test_device", point.GetMeasurement(), "measurement is the device name")
+	assert.Equal(t, map[string]string{"point": "temperature", "unit": "C"}, point.Values.Tags)
+	assert.Equal(t, 23.5, point.Values.Fields["value"])
+	assert.True(t, point.Values.Timestamp.Equal(timestamp))
 }
 
 // TestCreatePointWithoutUnit tests createPoint without unit
@@ -599,7 +574,7 @@ func TestWaitForRetry(t *testing.T) {
 	ctx := context.Background()
 
 	// Test successful wait (context not cancelled)
-	err := writer.waitForRetry(ctx, 1, fmt.Errorf("test error"))
+	err := writer.waitForRetry(ctx, 1, errors.New("test error"))
 	if err != nil {
 		t.Errorf("waitForRetry should return nil, got: %v", err)
 	}

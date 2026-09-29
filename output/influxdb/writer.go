@@ -4,6 +4,7 @@ package influxdb
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -21,6 +22,15 @@ const (
 	DefaultBatchTimeout = 1 * time.Second
 	DefaultMaxRetries   = 3
 	DefaultRetryDelay   = 1 * time.Second
+)
+
+const (
+	// shutdownTimeout bounds the final writes after the context is cancelled; it matches
+	// the drain time main gives outputs.
+	shutdownTimeout = 10 * time.Second
+
+	// gzipThreshold enables gzip for write bodies above this size (library default).
+	gzipThreshold = 1000
 )
 
 // Writer writes DataPoints to an InfluxDB3 database.
@@ -58,8 +68,11 @@ func New(outputConfig config.Output, logger *zerolog.Logger) (*Writer, error) {
 	}
 
 	w := &Writer{
-		config:       outputConfig,
-		logger:       logger.With().Str("output", "influxdb").Str("name", outputConfig.Name).Logger(),
+		config: outputConfig,
+		logger: logger.With().
+			Str("output", "influxdb").
+			Str("name", outputConfig.Name).
+			Logger(),
 		devices:      outputConfig.Devices,
 		batchSize:    batchSize,
 		batchTimeout: batchTimeout,
@@ -74,12 +87,12 @@ func New(outputConfig config.Output, logger *zerolog.Logger) (*Writer, error) {
 func (w *Writer) createClient() error {
 	influxConfig := w.config.OutputSpecific.Influxdb
 
-	// Create HTTP client for insecure connections
+	// Custom HTTP client only for the documented insecure option.
 	var httpClient *http.Client
 	if influxConfig.Insecure {
 		transport := &http.Transport{
 			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
+				InsecureSkipVerify: influxConfig.Insecure,
 			},
 		}
 		httpClient = &http.Client{Transport: transport}
@@ -91,8 +104,8 @@ func (w *Writer) createClient() error {
 		Token:    influxConfig.Token,
 		Database: influxConfig.Database,
 		WriteOptions: &influxdb3.WriteOptions{
-			UseV2Api:      false, // Use v3 API endpoint (/api/v3/write_lp)
-			GzipThreshold: 1000,  // Enable gzip compression for writes > 1000 bytes (default in library)
+			UseV2Api:      false, // v3 endpoint /api/v3/write_lp
+			GzipThreshold: gzipThreshold,
 		},
 	}
 
@@ -158,9 +171,11 @@ func (w *Writer) runWriterLoop(
 			return
 
 		case dp, ok := <-input:
-			if !w.handleInputPoint(ctx, dp, ok, input, &batch, batchTimer) {
+			if !ok {
+				w.flushOnClose(batch)
 				return
 			}
+			w.handleInputPoint(ctx, dp, &batch, batchTimer)
 
 		case <-batchTimer.C:
 			w.handleBatchTimeout(ctx, &batch, batchTimer)
@@ -177,10 +192,8 @@ func (w *Writer) handleShutdown(
 ) {
 	w.logger.Info().Msg("InfluxDB writer: shutdown started, flushing final batch")
 
-	// Create a fresh context with timeout for final writes
-	// This ensures writes can complete even after the main context is cancelled
-	// Use 10s to match the main shutdown timeout
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// A fresh context, so the final writes can complete after ctx is cancelled.
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
 	if len(batch) > 0 {
@@ -214,7 +227,8 @@ func (w *Writer) drainRemainingPoints(
 			point := w.createPoint(dp)
 			batch := []*influxdb3.Point{point}
 			if err := w.writeBatchWithRetry(ctx, batch); err != nil {
-				w.logger.Error().Err(err).Int("points", len(batch)).Msg("Failed to write batch during drain")
+				w.logger.Error().Err(err).Int("points", len(batch)).
+					Msg("Failed to write batch during drain")
 			}
 
 		default:
@@ -223,33 +237,32 @@ func (w *Writer) drainRemainingPoints(
 	}
 }
 
-// handleInputPoint handles a single input data point.
+// flushOnClose writes the remaining batch after the input channel was closed.
+func (w *Writer) flushOnClose(batch []*influxdb3.Point) {
+	if len(batch) == 0 {
+		return
+	}
+	// A fresh context: the writer context may already be cancelled.
+	writeCtx, writeCancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer writeCancel()
+	if err := w.writeBatchWithRetry(writeCtx, batch); err != nil {
+		w.logger.Error().Err(err).Int("points", len(batch)).Msg("Failed to write final batch")
+	}
+}
+
+// handleInputPoint adds a point to the batch and writes the batch when it is full.
 func (w *Writer) handleInputPoint(
 	ctx context.Context,
 	dp datasource.DataPoint,
-	ok bool,
-	input <-chan datasource.DataPoint,
 	batch *[]*influxdb3.Point,
 	batchTimer *time.Timer,
-) bool {
-	if !ok {
-		// Input channel closed, flush remaining batch
-		if len(*batch) > 0 {
-			// Use a fresh context with timeout for final write
-			// Use 10s to match the main shutdown timeout
-			writeCtx, writeCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			if err := w.writeBatchWithRetry(writeCtx, *batch); err != nil {
-				w.logger.Error().Err(err).Int("points", len(*batch)).Msg("Failed to write final batch")
-			}
-			writeCancel()
-		}
-		return false
-	}
+) {
+	w.logger.Debug().
+		Str("device", dp.DeviceName).
+		Str("point", dp.PointName).
+		Msg("InfluxDB writer: received point")
 
-	w.logger.Debug().Str("device", dp.DeviceName).Str("point", dp.PointName).Msg("InfluxDB writer: received point")
-
-	point := w.createPoint(dp)
-	*batch = append(*batch, point)
+	*batch = append(*batch, w.createPoint(dp))
 
 	if len(*batch) >= w.batchSize {
 		w.logger.Debug().Int("count", len(*batch)).Msg("Batch full, writing to InfluxDB")
@@ -259,8 +272,6 @@ func (w *Writer) handleInputPoint(
 		*batch = (*batch)[:0]
 		batchTimer.Reset(w.batchTimeout)
 	}
-
-	return true
 }
 
 // handleBatchTimeout handles batch timeout by writing the current batch.
@@ -335,7 +346,7 @@ func (w *Writer) attemptWrite(
 		if lastErr != nil {
 			return fmt.Errorf("context cancelled during write retry: %w", lastErr)
 		}
-		return fmt.Errorf("context cancelled")
+		return errors.New("context cancelled")
 	default:
 	}
 
@@ -351,7 +362,8 @@ func (w *Writer) attemptWrite(
 	if err == nil {
 		// Check if this is recovery from a previous error
 		if w.lastWriteErr != nil {
-			w.logger.Info().Int("points", len(batch)).Msg("Successfully wrote batch to InfluxDB (recovered from previous error)")
+			w.logger.Info().Int("points", len(batch)).
+				Msg("Wrote batch to InfluxDB (recovered from previous error)")
 		} else {
 			w.logger.Debug().Int("points", len(batch)).Msg("Successfully wrote batch to InfluxDB")
 		}
@@ -359,7 +371,10 @@ func (w *Writer) attemptWrite(
 		return nil
 	}
 
-	w.logger.Error().Err(err).Int("attempt", attempt+1).Int("points", len(batch)).Msg("Batch write failed")
+	w.logger.Error().Err(err).
+		Int("attempt", attempt+1).
+		Int("points", len(batch)).
+		Msg("Batch write failed")
 	w.lastWriteErr = err
 	return err
 }
