@@ -112,6 +112,7 @@ func TestConfigValidate(t *testing.T) {
 								ResponseType: "json",
 							},
 						},
+						Points: []Point{{Name: "temp", JSONPath: "temp"}},
 					},
 				},
 				Outputs: []Output{
@@ -228,8 +229,15 @@ func TestDeviceValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "valid http device",
-			device:  Device{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1, DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{Address: "http://localhost"}}},
+			name: "valid http device",
+			device: Device{
+				Name:           "test",
+				Type:           "http",
+				PollInterval:   1 * time.Second,
+				Parallelism:    1,
+				DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{Address: "http://localhost"}},
+				Points:         []Point{{Name: "temp", JSONPath: "temp"}},
+			},
 			wantErr: false,
 		},
 		{
@@ -246,6 +254,7 @@ func TestDeviceValidate(t *testing.T) {
 						RegisterMode: "direct",
 					},
 				},
+				Points: []Point{{Name: "power", Register: 1, Type: "uint16", Scale: 1}},
 			},
 			wantErr: false,
 		},
