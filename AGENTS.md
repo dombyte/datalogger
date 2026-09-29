@@ -78,7 +78,7 @@ Target layout (standard 8.3), reached through the migration backlog:
 ```
 cmd/datalogger/main.go   flags, logger, signal context, exit code only
 internal/app/            composition root: Create* factories, routing, lifecycle
-internal/config/         YAML + env, Validate() without side effects
+internal/config/         YAML, Validate() without side effects
 internal/datasource/     DataPoint, reader contract; modbus/, http/
 internal/output/         writer contract; csv/, influxdb/, mqtt/
 internal/<pkg>/mocks/    mockery output
@@ -238,8 +238,9 @@ deviation scheduled for removal (see Migration backlog).
   every device needs at least one point; `parallelism` 1–100; `poll_interval` > 0.
 - `Validate()` currently also fills defaults (HTTP method/response type, MQTT topic and
   client ID); see Migration backlog.
-- Secrets (InfluxDB token, MQTT password) belong in the local `config.yaml` (gitignored) or
-  env, never in `example/config.yaml` with real values.
+- No environment overrides (see Deviations). Secrets (InfluxDB token, MQTT password)
+  belong in the local `config.yaml` (gitignored, mounted read-only in the container),
+  never in `example/config.yaml` with real values.
 
 ---
 
@@ -265,12 +266,13 @@ deviation scheduled for removal (see Migration backlog).
 
 ## 9. Deviations from the Standard
 
-None. Everything in the code that does not match the standard is a backlog item below,
+Everything else in the code that does not match the standard is a backlog item below,
 not an accepted deviation. Add a row here (rule, deviation, reason) only for a choice that
 is meant to stay:
 
 | Rule | Deviation | Reason |
 |---|---|---|
+| 5, 13: env overrides, secrets from env | Config comes only from the YAML file; no env overrides | The config is mostly lists of devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`, mounted read-only, serves as the secret file |
 
 ---
 
@@ -279,31 +281,24 @@ is meant to stay:
 Known gaps between the current code and standard v3, in suggested order. Each item is its
 own `refactor/…` branch; update this list when an item is done.
 
-1. **viper global instance:** `config.Load` uses the package-level viper; use `viper.New()`
-   (or plain YAML) and pass the env lookup in explicitly. Env overrides must fail on
-   invalid values.
-2. **`Validate()` without side effects:** move defaults (HTTP method/response type, MQTT
+1. **`Validate()` without side effects:** move defaults (HTTP method/response type, MQTT
    topic/client ID) into a `Defaults()` step before validation; readers'/writers'
    `Validate()` methods are no-ops today and should be removed from the interfaces or do
    real work.
-3. **Dependency injection for clients:** Modbus, HTTP, InfluxDB and MQTT clients are created
+2. **Dependency injection for clients:** Modbus, HTTP, InfluxDB and MQTT clients are created
    inside the packages. Declare small client interfaces in each package, create the real
    clients in `Create*` factories, add mockery mocks and testify-based tests.
-4. **Injected `Clock`:** replace `time.Now`, `time.Sleep` (backoff) and `time.After` in loops
+3. **Injected `Clock`:** replace `time.Now`, `time.Sleep` (backoff) and `time.After` in loops
    with an injected clock; backoff waits must also stop on context cancel (today
    `time.Sleep` delays shutdown by up to 30 s).
-5. **Startup failures:** a device/output that cannot be constructed is skipped today. It
+4. **Startup failures:** a device/output that cannot be constructed is skipped today. It
    should either fail startup (exit 1) or start in a recovering state and reconnect; the
    choice goes into "Design Decisions".
-6. **Lifecycle per standard 4.2/4.3:** `signal.NotifyContext`, `run() int` with exit code,
-   one hard shutdown deadline, **remove the second-signal force mode**, replace the
-   sleep-polling `monitorComponents` + `logger.Fatal` with an error channel/`errgroup`
-   that makes `Run` return an error. The unused per-component `errCh` of readers goes away.
-7. **Config pitfalls:** implement `response_type: xml` or reject it in validation; apply or
+5. **Config pitfalls:** implement `response_type: xml` or reject it in validation; apply or
    reject `scale`/`offset` on HTTP points; reject 32-bit Modbus types with `count` < 2 in
    validation (today each read fails with a decode error); default `scale` to 1 when
    omitted.
-8. **Layout:** move to `cmd/datalogger` + `internal/…` (section 3 target), with the
+6. **Layout:** move to `cmd/datalogger` + `internal/…` (section 3 target), with the
    composition root in `internal/app` and per-package `Settings` structs.
 
 ---

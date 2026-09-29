@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestLoadConfig tests loading a valid configuration file
@@ -711,4 +714,13 @@ func TestInfluxdbConfigValidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLoadExampleConfig keeps example/config.yaml loadable and valid.
+func TestLoadExampleConfig(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "example", "config.yaml"))
+	require.NoError(t, err)
+	require.NoError(t, cfg.Validate())
+	assert.NotEmpty(t, cfg.Devices)
+	assert.NotEmpty(t, cfg.Outputs)
 }
