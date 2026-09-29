@@ -3,10 +3,13 @@ package mqtt
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
@@ -182,9 +185,13 @@ func TestMQTTWriterValidate(t *testing.T) {
 	}
 }
 
-// TestNewMQTTWriter tests creating a new MQTT writer
+// TestNewMQTTWriter tests creating a new MQTT writer against a local listener
+// (New only dials; the MQTT handshake happens in Start).
 func TestNewMQTTWriter(t *testing.T) {
 	logger := zerolog.Nop()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { listener.Close() })
 
 	outputConfig := config.Output{
 		Name:    "mqtt_test",
@@ -192,43 +199,19 @@ func TestNewMQTTWriter(t *testing.T) {
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Mqtt: config.MqttConfig{
-				Address:  "tcp://127.0.0.1:1883",
+				Address:  "tcp://" + listener.Addr().String(),
 				ClientID: "test-client",
 				Topic:    "datalogger",
 				QoS:      1,
-				Retain:   false,
-				Insecure: true,
 			},
 		},
 	}
 
-	// This will fail to connect since we don't have a real MQTT broker
 	writer, err := New(outputConfig, &logger)
-
-	// We expect an error since we don't have a real MQTT broker
-	if err == nil {
-		// If no error, check the writer structure
-		if writer == nil {
-			t.Fatal("Writer is nil but error is nil")
-		}
-
-		if writer.Name() != "mqtt_test" {
-			t.Errorf("Name() = %v, want %v", writer.Name(), "mqtt_test")
-		}
-
-		devices := writer.Devices()
-		if len(devices) != 1 || devices[0] != "device1" {
-			t.Errorf("Devices() = %v, want %v", devices, []string{"device1"})
-		}
-
-		// Test Validate
-		if err := writer.Validate(); err != nil {
-			t.Errorf("Validate() error = %v", err)
-		}
-	} else {
-		// Expected error for connection failure
-		t.Logf("Expected connection error: %v", err)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "mqtt_test", writer.Name())
+	assert.Equal(t, []string{"device1"}, writer.Devices())
+	assert.NoError(t, writer.Validate())
 }
 
 // TestMQTTWriterCreateClient tests the createClient function

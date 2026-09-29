@@ -65,7 +65,7 @@ func TestOutputWriterInterface(t *testing.T) {
 	}
 
 	// Test Start method (can't fully test without context)
-	ch := mock.Start(nil, nil)
+	ch := mock.Start(context.Background(), nil)
 	if ch == nil {
 		t.Error("Start() returned nil channel")
 	}
