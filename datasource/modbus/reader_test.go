@@ -2,12 +2,19 @@ package modbus
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"math"
+	"net"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/simonvetter/modbus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
@@ -102,101 +109,67 @@ func TestDecodeValue(t *testing.T) {
 			want:      nil,
 			wantErr:   true,
 		},
+		{
+			name:      "float32 from two registers",
+			registers: []uint16{0x4049, 0x0fdb},
+			dataType:  "float32",
+			want:      float32(3.1415927),
+		},
+		{
+			name:      "int32 with one register",
+			registers: []uint16{0x1234},
+			dataType:  "int32",
+			wantErr:   true,
+		},
+		{
+			name:      "no registers",
+			registers: nil,
+			dataType:  "uint16",
+			wantErr:   true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := decodeValue(tt.registers, tt.dataType)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("decodeValue() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err)
 				return
 			}
-
-			if !tt.wantErr && tt.want != nil {
-				// For float comparison, use approximate equality
-				if tt.dataType == "float32" {
-					if gotFloat, ok := got.(float32); ok {
-						if wantFloat, ok2 := tt.want.(float32); ok2 {
-							if math.Abs(float64(gotFloat-wantFloat)) > 0.001 {
-								t.Errorf("decodeValue() got %v, want %v", gotFloat, wantFloat)
-							}
-							return
-						}
-					}
-				}
-
-				if got != tt.want {
-					t.Errorf("decodeValue() = %v (%T), want %v (%T)", got, got, tt.want, tt.want)
-				}
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-// TestShouldReconnect tests the shouldReconnect function
+// TestShouldReconnect checks that broken connections reconnect and protocol errors do not.
 func TestShouldReconnect(t *testing.T) {
-	logger := zerolog.Nop()
-	reader := &Reader{
-		logger: logger,
-		config: config.Device{
-			Name: "test",
-			Type: "modbus",
-		},
-	}
+	t.Parallel()
 
+	opErr := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
 	tests := []struct {
 		name string
 		err  error
 		want bool
 	}{
-		{
-			name: "nil error",
-			err:  nil,
-			want: false,
-		},
-		{
-			name: "connection refused error",
-			err:  &netError{msg: "connection refused"},
-			want: true,
-		},
-		{
-			name: "timeout error",
-			err:  &netError{msg: "timeout"},
-			want: true,
-		},
-		{
-			name: "broken pipe error",
-			err:  &netError{msg: "broken pipe"},
-			want: true,
-		},
-		{
-			name: "reset by peer error",
-			err:  &netError{msg: "reset by peer"},
-			want: true,
-		},
-		{
-			name: "EOF error",
-			err:  &netError{msg: "EOF"},
-			want: true,
-		},
-		{
-			name: "unreachable error",
-			err:  &netError{msg: "unreachable"},
-			want: true,
-		},
-		{
-			name: "some other error",
-			err:  &netError{msg: "some other error"},
-			want: false,
-		},
+		{name: "nil error", err: nil, want: false},
+		{name: "net op error", err: opErr, want: true},
+		{name: "wrapped net op error", err: fmt.Errorf("register 1: %w", opErr), want: true},
+		{name: "EOF", err: io.EOF, want: true},
+		{name: "unexpected EOF", err: io.ErrUnexpectedEOF, want: true},
+		{name: "closed connection", err: net.ErrClosed, want: true},
+		{name: "connection reset", err: syscall.ECONNRESET, want: true},
+		{name: "broken pipe", err: syscall.EPIPE, want: true},
+		{name: "request timed out", err: modbus.ErrRequestTimedOut, want: false},
+		{name: "modbus exception", err: modbus.ErrIllegalDataAddress, want: false},
+		{name: "string mentioning connection", err: errors.New("connection"), want: false},
 	}
 
+	r := &Reader{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reader.shouldReconnect(tt.err)
-			if got != tt.want {
-				t.Errorf("shouldReconnect(%v) = %v, want %v", tt.err, got, tt.want)
-			}
+			t.Parallel()
+			assert.Equal(t, tt.want, r.shouldReconnect(tt.err))
 		})
 	}
 }
@@ -243,14 +216,6 @@ func TestApplyBackoff(t *testing.T) {
 }
 
 // netError is a simple error wrapper for testing
-type netError struct {
-	msg string
-}
-
-func (e *netError) Error() string {
-	return e.msg
-}
-
 // TestName tests the Name method
 func TestName(t *testing.T) {
 	logger := zerolog.Nop()
@@ -778,80 +743,60 @@ func TestNewModbusReader(t *testing.T) {
 
 // TestCreateDataPointFromValues tests creating a DataPoint from register values
 func TestCreateDataPointFromValues(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name: "test",
-		Type: "modbus",
-	}
-
 	reader := &Reader{
-		config: deviceConfig,
-		logger: logger,
+		config: config.Device{Name: "test", Type: "modbus"},
+		logger: zerolog.Nop(),
 	}
+	timestamp := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 
 	tests := []struct {
 		name      string
 		point     config.Point
 		values    []uint16
-		timestamp time.Time
 		wantValue float64
 		wantErr   bool
 	}{
 		{
 			name:      "int16 with scale",
-			point:     config.Point{Name: "temp", Register: 100, Type: "int16", Scale: 0.1, Offset: 0},
+			point:     config.Point{Name: "temp", Type: "int16", Scale: 0.1, Unit: "C"},
 			values:    []uint16{100},
-			timestamp: time.Now().UTC(),
 			wantValue: 10.0,
-			wantErr:   false,
 		},
 		{
 			name:      "uint16 with scale and offset",
-			point:     config.Point{Name: "count", Register: 100, Type: "uint16", Scale: 1, Offset: 5},
+			point:     config.Point{Name: "count", Type: "uint16", Scale: 1, Offset: 5},
 			values:    []uint16{100},
-			timestamp: time.Now().UTC(),
 			wantValue: 105.0,
-			wantErr:   false,
 		},
 		{
 			name:      "float32",
-			point:     config.Point{Name: "float_val", Register: 100, Type: "float32", Scale: 1, Offset: 0},
-			values:    []uint16{0x4049, 0x0fdb}, // float32 representation of 3.14159
-			timestamp: time.Now().UTC(),
-			wantErr:   false,
+			point:     config.Point{Name: "float_val", Type: "float32", Scale: 1},
+			values:    []uint16{0x4049, 0x0fdb}, // 3.14159
+			wantValue: float64(float32(3.1415927)),
+		},
+		{
+			name:    "unknown type",
+			point:   config.Point{Name: "bad", Type: "unknown", Scale: 1},
+			values:  []uint16{1},
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dp, err := reader.createDataPointFromValues(tt.point, tt.values, tt.timestamp)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("createDataPointFromValues() error = %v, wantErr %v", err, tt.wantErr)
+			dp, err := reader.createDataPointFromValues(tt.point, tt.values, timestamp)
+			if tt.wantErr {
+				assert.Error(t, err)
 				return
 			}
-
-			if !tt.wantErr {
-				if dp == nil {
-					t.Fatal("createDataPointFromValues() returned nil")
-				}
-
-				if dp.DeviceName != "test" {
-					t.Errorf("DeviceName = %v, want %v", dp.DeviceName, "test")
-				}
-
-				if dp.PointName != tt.point.Name {
-					t.Errorf("PointName = %v, want %v", dp.PointName, tt.point.Name)
-				}
-
-				if tt.wantValue != 0 && dp.Value != tt.wantValue {
-					t.Errorf("Value = %v, want %v", dp.Value, tt.wantValue)
-				}
-
-				if !dp.Timestamp.Equal(tt.timestamp) {
-					t.Errorf("Timestamp = %v, want %v", dp.Timestamp, tt.timestamp)
-				}
-			}
+			require.NoError(t, err)
+			assert.Equal(t, &datasource.DataPoint{
+				DeviceName: "test",
+				PointName:  tt.point.Name,
+				Value:      tt.wantValue,
+				Timestamp:  timestamp,
+				Unit:       tt.point.Unit,
+			}, dp)
 		})
 	}
 }
@@ -900,8 +845,8 @@ func TestHandlePollError(t *testing.T) {
 		t.Errorf("Initial failCount = %v, want 0", reader.failCount)
 	}
 
-	// Simulate a connection error
-	connErr := &netError{msg: "connection refused"}
+	// Simulate a timeout (no reconnect, so no network access)
+	connErr := modbus.ErrRequestTimedOut
 	reader.handlePollError(connErr)
 
 	// After error, failCount should be 1
@@ -931,7 +876,7 @@ func TestHandlePollSuccess(t *testing.T) {
 		logger:      logger,
 		failCount:   5,
 		backoffWait: 10 * time.Second,
-		lastError:   &netError{msg: "previous error"},
+		lastError:   errors.New("previous error"),
 	}
 
 	// Create a test channel
@@ -1026,84 +971,6 @@ func TestReadRegistersForPoint(t *testing.T) {
 
 	if point.Count != 2 {
 		t.Errorf("Count = %v, want %v", point.Count, 2)
-	}
-}
-
-// TestReadSinglePoint tests the readSinglePoint function logic
-func TestReadSinglePoint(t *testing.T) {
-	logger := zerolog.Nop()
-
-	reader := &Reader{
-		logger: logger,
-		config: config.Device{
-			Name: "test_device",
-			Type: "modbus",
-		},
-	}
-
-	// Test with a point
-	point := config.Point{
-		Name:     "temperature",
-		Register: 100,
-		Count:    1,
-		Type:     "int16",
-		Scale:    0.1,
-		Offset:   0,
-		Unit:     "C",
-	}
-
-	// We can't test the actual readSinglePoint without a real Modbus connection
-	// But we can test the timestamp capture and data point creation
-	timestamp := time.Now().UTC()
-
-	// Test that values are extracted correctly
-	values := []uint16{100}
-
-	// Manually test the decode and scaling logic
-	decodedValue, err := decodeValue(values, point.Type)
-	if err != nil {
-		t.Fatalf("decodeValue failed: %v", err)
-	}
-
-	if decodedValue != int16(100) {
-		t.Errorf("decodedValue = %v, want %v", decodedValue, int16(100))
-	}
-
-	// Test scaling
-	scaled := reader.applyScaleAndOffset(decodedValue, point)
-	expectedScaled := float64(100)*point.Scale + point.Offset
-	if scaled != expectedScaled {
-		t.Errorf("scaled = %v, want %v", scaled, expectedScaled)
-	}
-
-	// Test createDataPointFromValues
-	dp, err := reader.createDataPointFromValues(point, values, timestamp)
-	if err != nil {
-		t.Fatalf("createDataPointFromValues failed: %v", err)
-	}
-
-	if dp == nil {
-		t.Fatal("createDataPointFromValues returned nil")
-	}
-
-	if dp.DeviceName != "test_device" {
-		t.Errorf("DeviceName = %v, want %v", dp.DeviceName, "test_device")
-	}
-
-	if dp.PointName != "temperature" {
-		t.Errorf("PointName = %v, want %v", dp.PointName, "temperature")
-	}
-
-	if dp.Value != 10.0 {
-		t.Errorf("Value = %v, want %v", dp.Value, 10.0)
-	}
-
-	if dp.Unit != "C" {
-		t.Errorf("Unit = %v, want %v", dp.Unit, "C")
-	}
-
-	if !dp.Timestamp.Equal(timestamp) {
-		t.Errorf("Timestamp = %v, want %v", dp.Timestamp, timestamp)
 	}
 }
 
