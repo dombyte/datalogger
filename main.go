@@ -5,8 +5,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -27,121 +29,109 @@ import (
 	"github.com/dombyte/datalogger/output/mqtt"
 )
 
-// Build-time variables set via -ldflags
+// Build info, set via -ldflags.
+//
+//nolint:gochecknoglobals // written by the linker at build time
 var (
 	Version   = "dev"
 	Commit    = "unknown"
 	BuildDate = "unknown"
 	GoVersion = "unknown"
-
-	configPath  string
-	debugFlag   bool
-	versionFlag bool
 )
 
-func parseFlags() {
-	// Custom usage to show just the binary name
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", filepath.Base(os.Args[0]))
-		flag.PrintDefaults()
+const (
+	// drainTimeout is how long outputs may drain after the sources stopped.
+	drainTimeout = 10 * time.Second
+
+	// defaultBufferSize is the output channel size when buffer_size is not set.
+	defaultBufferSize = 1000
+
+	// monitorInterval is how often the component monitor checks for exited components.
+	monitorInterval = 1 * time.Second
+
+	// signalBuffer holds a second signal that arrives during the drain phase.
+	signalBuffer = 2
+)
+
+// errConfigRequired is returned when -config is missing.
+var errConfigRequired = errors.New("-config flag is required")
+
+// cliFlags holds the parsed command line flags.
+type cliFlags struct {
+	configPath  string
+	debug       bool
+	showVersion bool
+}
+
+// parseFlags parses args (without the program name); usage and errors go to output.
+func parseFlags(name string, args []string, output io.Writer) (cliFlags, error) {
+	var f cliFlags
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(output)
+	fs.StringVar(&f.configPath, "config", "", "Path to configuration file (required)")
+	fs.BoolVar(&f.debug, "debug", false, "Enable debug logging")
+	fs.BoolVar(&f.showVersion, "version", false, "Show version and exit")
+
+	if err := fs.Parse(args); err != nil {
+		return f, err
 	}
+	if f.configPath == "" && !f.showVersion {
+		fs.Usage()
+		return f, errConfigRequired
+	}
+	return f, nil
+}
 
-	flag.StringVar(&configPath, "config", "", "Path to configuration file (required)")
-	flag.BoolVar(&debugFlag, "debug", false, "Enable debug logging")
-	flag.BoolVar(&versionFlag, "version", false, "Show version and exit")
-	flag.Parse()
-
-	if versionFlag {
-		fmt.Printf("Version:    %s\n", Version)
-		fmt.Printf("Git Commit: %s\n", Commit)
-		fmt.Printf("Build Date: %s\n", BuildDate)
-		fmt.Printf("Go Version: %s\n", GoVersion)
-		fmt.Printf("OS/Arch:    %s/%s\n", runtime.GOOS, runtime.GOARCH)
+// mustParseFlags parses os.Args; -version, -help and flag errors end the process.
+func mustParseFlags() cliFlags {
+	f, err := parseFlags(filepath.Base(os.Args[0]), os.Args[1:], os.Stderr)
+	switch {
+	case errors.Is(err, flag.ErrHelp):
+		os.Exit(0)
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	case f.showVersion:
+		printVersion()
 		os.Exit(0)
 	}
+	return f
+}
 
-	if configPath == "" {
-		fmt.Fprintf(os.Stderr, "Error: -config flag is required\n\n")
-		flag.Usage()
-		fmt.Fprintf(os.Stderr, "\nRun with -config <path> to specify a configuration file\n")
-		os.Exit(1)
-	}
+// printVersion prints the build info.
+func printVersion() {
+	fmt.Printf("Version:    %s\n", Version)
+	fmt.Printf("Git Commit: %s\n", Commit)
+	fmt.Printf("Build Date: %s\n", BuildDate)
+	fmt.Printf("Go Version: %s\n", GoVersion)
+	fmt.Printf("OS/Arch:    %s/%s\n", runtime.GOOS, runtime.GOARCH)
 }
 
 func main() {
-	// Parse command line flags
-	parseFlags()
+	f := mustParseFlags()
 
 	// 1. Setup logging
-	logger := setupLogger(debugFlag)
+	logger := setupLogger(f.debug)
 
 	// 2. Load configuration
-	cfg := loadAndValidateConfig(configPath, logger)
+	cfg := loadAndValidateConfig(f.configPath, logger)
 
-	// 3. Create separate contexts for data sources and outputs
-	// This allows two-phase shutdown: stop sources first, then outputs
+	// 3. Separate contexts for two-phase shutdown: stop sources first, then outputs
 	sourceCtx, sourceCancel := context.WithCancel(context.Background())
 	outputCtx, outputCancel := context.WithCancel(context.Background())
 	defer outputCancel()
 	defer sourceCancel()
 
 	// 4. Setup signal handling for graceful/hard shutdown
-	sigChan := make(chan os.Signal, 2) // Buffer of 2 to catch second signal
+	sigChan := make(chan os.Signal, signalBuffer)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Track if we're already in shutdown
-	shutdownInProgress := false
-	var gracefulShutdownDone chan struct{}
-
-	go func() {
-		for range sigChan {
-			if !shutdownInProgress {
-				// First signal: start graceful shutdown
-				shutdownInProgress = true
-				logger.Info().Msg("Shutdown signal received")
-
-				// Phase 1: Stop data sources (no new data will be polled)
-				logger.Info().Msg("Stopping data sources...")
-				sourceCancel()
-				logger.Info().Msg("Data sources stopped")
-
-				// Phase 2: Give outputs up to 10 seconds to drain their buffers
-				logger.Info().Msg("Waiting for outputs to drain (10s timeout)...")
-				gracefulShutdownDone = make(chan struct{})
-				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer shutdownCancel()
-
-				// Wait for shutdown timeout or second signal
-				select {
-				case <-shutdownCtx.Done():
-					logger.Info().Msg("Shutdown timeout reached, cancelling outputs")
-					outputCancel()
-					logger.Info().Msg("Outputs cancelled, waiting for cleanup...")
-				case <-sigChan:
-					// Second signal received - hard shutdown
-					logger.Info().Msg("Second shutdown signal received, forcing immediate exit")
-					outputCancel()
-					logger.Info().Msg("Outputs cancelled, waiting for cleanup...")
-				}
-				close(gracefulShutdownDone)
-			} else {
-				// Already in shutdown, second signal: hard shutdown
-				logger.Info().Msg("Second shutdown signal received, forcing immediate exit")
-				outputCancel()
-				if gracefulShutdownDone != nil {
-					// Wait for graceful shutdown goroutine to finish
-					<-gracefulShutdownDone
-				}
-				return
-			}
-		}
-	}()
+	go handleSignals(sigChan, sourceCancel, outputCancel, logger)
 
 	// 5. Start all device readers (with monitoring)
-	deviceChannels, deviceDoneChannels := startDeviceReaders(cfg, sourceCtx, logger)
+	deviceChannels, deviceDoneChannels := startDeviceReaders(sourceCtx, cfg, logger)
 
 	// 6. Start all output writers and get their channels (with monitoring)
-	outputWriters, outputChannels, outputDoneChannels := startOutputWriters(cfg, outputCtx, logger)
+	outputWriters, outputChannels, outputDoneChannels := startOutputWriters(outputCtx, cfg, logger)
 
 	// 7. Start component health monitor in background
 	// This monitors done channels and logs if components exit unexpectedly
@@ -150,19 +140,50 @@ func main() {
 	// 8. Route data from devices to outputs
 	startRouting(deviceChannels, outputWriters, outputChannels, logger)
 
-	// System is running
 	logger.Info().Msg("Datalogger started successfully")
 
 	// 9. Wait for output context to be cancelled (by signal handler)
 	<-outputCtx.Done()
 
 	// 10. Wait for all output writers to finish cleanup
+	waitForOutputs(outputDoneChannels, logger)
+	logger.Info().Msg("Shutdown complete")
+}
+
+// waitForOutputs blocks until every output writer has finished its cleanup.
+func waitForOutputs(outputDoneChannels map[string]<-chan struct{}, logger *zerolog.Logger) {
 	logger.Info().Msg("Waiting for output writers to finish cleanup...")
 	for name, doneCh := range outputDoneChannels {
 		<-doneCh
 		logger.Info().Str("output", name).Msg("Output writer cleanup complete")
 	}
-	logger.Info().Msg("Shutdown complete")
+}
+
+// handleSignals runs the two-phase shutdown: the first signal stops the sources, then
+// the outputs are cancelled after drainTimeout or on a second signal.
+func handleSignals(
+	sigChan <-chan os.Signal,
+	sourceCancel, outputCancel context.CancelFunc,
+	logger *zerolog.Logger,
+) {
+	<-sigChan
+	logger.Info().Msg("Shutdown signal received")
+
+	// Phase 1: Stop data sources (no new data will be polled)
+	logger.Info().Msg("Stopping data sources...")
+	sourceCancel()
+	logger.Info().Msg("Data sources stopped")
+
+	// Phase 2: Give outputs up to drainTimeout to drain their buffers
+	logger.Info().Dur("timeout", drainTimeout).Msg("Waiting for outputs to drain...")
+	select {
+	case <-time.After(drainTimeout):
+		logger.Info().Msg("Shutdown timeout reached, cancelling outputs")
+	case <-sigChan:
+		logger.Info().Msg("Second shutdown signal received, forcing immediate exit")
+	}
+	outputCancel()
+	logger.Info().Msg("Outputs cancelled, waiting for cleanup...")
 }
 
 // loadAndValidateConfig loads and validates the configuration file.
@@ -179,10 +200,10 @@ func loadAndValidateConfig(configPath string, logger *zerolog.Logger) *config.Co
 	return cfg
 }
 
-// startDeviceReaders starts all device readers and returns a map of device channels and done channels.
+// startDeviceReaders starts all device readers and returns their data and done channels.
 func startDeviceReaders(
-	cfg *config.Config,
 	ctx context.Context,
+	cfg *config.Config,
 	logger *zerolog.Logger,
 ) (map[string]<-chan datasource.DataPoint, map[string]<-chan struct{}) {
 	deviceReaders := createDeviceReaders(cfg, logger)
@@ -199,10 +220,11 @@ func startDeviceReaders(
 	return deviceChannels, deviceDoneChannels
 }
 
-// startOutputWriters starts all output writers and returns the writers, their channels, and done channels.
+// startOutputWriters starts all output writers and returns the writers, their input
+// channels and their done channels.
 func startOutputWriters(
-	cfg *config.Config,
 	ctx context.Context,
+	cfg *config.Config,
 	logger *zerolog.Logger,
 ) ([]output.Writer, map[string]chan<- datasource.DataPoint, map[string]<-chan struct{}) {
 	outputWriters := createOutputWriters(cfg, logger)
@@ -295,7 +317,10 @@ func createDeviceReaders(cfg *config.Config, logger *zerolog.Logger) []datasourc
 }
 
 // createSingleDeviceReader creates a single device reader from a config.
-func createSingleDeviceReader(deviceConfig *config.Device, logger *zerolog.Logger) datasource.DeviceReader {
+func createSingleDeviceReader(
+	deviceConfig *config.Device,
+	logger *zerolog.Logger,
+) datasource.DeviceReader {
 	var reader datasource.DeviceReader
 	var err error
 
@@ -305,12 +330,17 @@ func createSingleDeviceReader(deviceConfig *config.Device, logger *zerolog.Logge
 	case "http":
 		reader, err = http.New(*deviceConfig, logger)
 	default:
-		logger.Error().Str("device", deviceConfig.Name).Str("type", deviceConfig.Type).Msg("Unknown device type")
+		logger.Error().
+			Str("device", deviceConfig.Name).
+			Str("type", deviceConfig.Type).
+			Msg("Unknown device type")
 		return nil
 	}
 
 	if err != nil {
-		logger.Error().Err(err).Str("device", deviceConfig.Name).Msg("Failed to create device reader")
+		logger.Error().Err(err).
+			Str("device", deviceConfig.Name).
+			Msg("Failed to create device reader")
 		return nil
 	}
 
@@ -337,7 +367,10 @@ func createOutputWriters(cfg *config.Config, logger *zerolog.Logger) []output.Wr
 }
 
 // createSingleOutputWriter creates a single output writer from a config.
-func createSingleOutputWriter(outputConfig *config.Output, logger *zerolog.Logger) output.Writer {
+func createSingleOutputWriter(
+	outputConfig *config.Output,
+	logger *zerolog.Logger,
+) output.Writer {
 	writer, err := createOutputWriterByType(outputConfig, logger)
 	if err != nil {
 		return nil
@@ -352,7 +385,10 @@ func createSingleOutputWriter(outputConfig *config.Output, logger *zerolog.Logge
 }
 
 // createOutputWriterByType creates an output writer based on its type.
-func createOutputWriterByType(outputConfig *config.Output, logger *zerolog.Logger) (output.Writer, error) {
+func createOutputWriterByType(
+	outputConfig *config.Output,
+	logger *zerolog.Logger,
+) (output.Writer, error) {
 	switch outputConfig.Type {
 	case "influxdb":
 		return influxdb.New(*outputConfig, logger)
@@ -361,7 +397,10 @@ func createOutputWriterByType(outputConfig *config.Output, logger *zerolog.Logge
 	case "csv":
 		return csv.New(*outputConfig, logger)
 	default:
-		logger.Error().Str("output", outputConfig.Name).Str("type", outputConfig.Type).Msg("Unknown output type")
+		logger.Error().
+			Str("output", outputConfig.Name).
+			Str("type", outputConfig.Type).
+			Msg("Unknown output type")
 		return nil, fmt.Errorf("unknown output type: %s", outputConfig.Type)
 	}
 }
@@ -376,12 +415,16 @@ func writerBufferSize(w output.Writer, cfg *config.Config) int {
 			}
 		}
 	}
-	// Default buffer size
-	return 1000
+	return defaultBufferSize
 }
 
 // monitorDevice monitors a device reader for completion or errors.
-func monitorDevice(deviceName string, doneCh <-chan struct{}, errCh <-chan error, logger *zerolog.Logger) {
+func monitorDevice(
+	deviceName string,
+	doneCh <-chan struct{},
+	errCh <-chan error,
+	logger *zerolog.Logger,
+) {
 	select {
 	case <-doneCh:
 		logger.Debug().Str("device", deviceName).Msg("Device reader completed")
@@ -402,7 +445,6 @@ func monitorComponents(
 	outputCtx context.Context,
 	logger *zerolog.Logger,
 ) {
-	// Merge all done channels into a single select
 	for {
 		select {
 		case <-sourceCtx.Done():
@@ -412,23 +454,24 @@ func monitorComponents(
 			// Shutdown in progress, output exits are expected
 			return
 		default:
-			// Check all channels non-blockingly
-			for name, doneCh := range deviceDoneChannels {
-				select {
-				case <-doneCh:
-					logger.Fatal().Str("device", name).Msg("Device reader exited unexpectedly")
-				default:
-				}
-			}
-			for name, doneCh := range outputDoneChannels {
-				select {
-				case <-doneCh:
-					logger.Fatal().Str("output", name).Msg("Output writer exited unexpectedly")
-				default:
-				}
-			}
-			// Sleep briefly to avoid busy waiting
-			time.Sleep(1 * time.Second)
+			exitIfAnyDone(deviceDoneChannels, "device", "Device reader exited unexpectedly", logger)
+			exitIfAnyDone(outputDoneChannels, "output", "Output writer exited unexpectedly", logger)
+			time.Sleep(monitorInterval)
+		}
+	}
+}
+
+// exitIfAnyDone ends the process if one of the done channels is closed.
+func exitIfAnyDone(
+	doneChannels map[string]<-chan struct{},
+	kind, msg string,
+	logger *zerolog.Logger,
+) {
+	for name, doneCh := range doneChannels {
+		select {
+		case <-doneCh:
+			logger.Fatal().Str(kind, name).Msg(msg)
+		default:
 		}
 	}
 }
