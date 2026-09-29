@@ -188,7 +188,8 @@ deviation scheduled for removal (see Migration backlog).
   chunk that holds its first register).
 - Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool`; value = raw × `scale` +
   `offset`, always delivered as float64. **`scale` must be set** (use 1 for raw values):
-  an omitted scale is 0 and yields only the offset.
+  an omitted scale is 0 and yields only the offset. 32-bit types need `count: 2` (high word
+  first); with `count: 1` the decoder indexes past the read registers and panics.
 - Most Modbus devices handle only one request at a time: use `parallelism: 1` unless the
   device is known to support more.
 
@@ -199,6 +200,7 @@ deviation scheduled for removal (see Migration backlog).
   bool/string converts, otherwise numbers become float64 and bools stay bool) or `text`
   (the whole body as one string). `xml` is accepted by config but **not implemented**: every
   point fails with an error.
+- `scale` and `offset` are **ignored** for HTTP points; values are delivered as parsed.
 - Non-200 responses are errors. All points of one response share its receive timestamp.
 - `parallelism > 1` parses points concurrently (the request itself is one call).
 
@@ -304,7 +306,9 @@ own `refactor/…` branch; update this list when an item is done.
    that makes `Run` return an error. The unused per-component `errCh` of readers goes away.
 10. **Connection error detection:** `shouldReconnect` matches error strings; use
     `errors.Is`/`errors.As` (`net.Error`, `io.EOF`, `syscall.ECONNRESET`, …).
-11. **XML responses:** implement `response_type: xml` or reject it in config validation.
+11. **Config pitfalls:** implement `response_type: xml` or reject it in validation; apply or
+    reject `scale`/`offset` on HTTP points; reject 32-bit Modbus types with `count` < 2
+    instead of panicking; default `scale` to 1 when omitted.
 12. **Naming:** `output.OutputWriter` → `output.Writer`, `HttpReader`/`HttpConfig`/`JsonPath`
     → `HTTPReader`/`HTTPConfig`/`JSONPath`, drop the deprecated
     `applyScaleAndOffsetForPoint`. Config keys (`json_path`, …) stay unchanged.

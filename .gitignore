@@ -5,8 +5,6 @@ coverage.html
 /config.yaml
 *.csv
 
-# Local files from the old examples/ layout
-examples/
 
 # OS
 .DS_Store
@@ -17,3 +15,4 @@ Thumbs.db
 
 # goreleaser output
 /dist/
+test-dump/
