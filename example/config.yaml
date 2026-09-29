@@ -1,64 +1,89 @@
-# Datalogger Example Configuration
-# Complete reference showing all available configuration options.
+# Datalogger example configuration
 #
-# Run with: datalogger -config config.yaml [-debug]
-
-# Devices: Define data sources
-# Each device can be of type "modbus" or "http"
-# For HTTP devices with JSON responses, json_path uses gjson syntax: https://github.com/tidwall/gjson/blob/master/SYNTAX.md
+# Copy this file to ./config.yaml (gitignored) and adapt it:
+#   cp example/config.yaml config.yaml
+#   datalogger -config config.yaml [-debug]
 #
-# Modbus point types: int16, uint16, int32, uint32, float32, bool
-# Register mode: direct (individual reads) or range (batch reads)
-#   - direct: Each point is read individually (slower but more flexible)
-#   - range: Multiple registers read in batches (faster, requires ranges config)
-# Function code: 3 (Holding Registers) or 4 (Input Registers)
-# Parallelism: 1-100 concurrent reads within device poll
-#   - For Modbus devices: Use 1 (most devices don't support concurrent requests)
-#   - For HTTP devices: Higher values (e.g., 5-10) can improve performance
-# Poll interval: How often to poll the device (e.g., 100ms, 1s, 5s, 1m)
-# Timeout: Maximum time to wait for a response (e.g., 2s, 10s)
+# Never commit real addresses, tokens or passwords. Keep them in your local config.yaml.
+#
+# Durations use Go syntax: 250ms, 1s, 30s, 5m, 1h.
 
+# =====================================================================================
+# Devices: where data is read from. Every device needs a unique name and at least one
+# point. type is "modbus" or "http".
+#
+# Common device options:
+#   poll_interval  how often the device is polled (required, > 0)
+#   timeout        maximum time to wait for one response
+#   parallelism    1-100 concurrent reads (Modbus) or parses (HTTP) within one poll.
+#                  Most Modbus devices handle only one request at a time: use 1.
+# =====================================================================================
 devices:
-  # ===== Modbus TCP Example =====
-  # register_mode: range - reads registers in batches for efficiency
-  # ranges: Define contiguous register blocks to read together
-  # function_code: 4 = Input Registers (read-only)
-  # type: uint32 - uses 2 registers (count: 2)
-  - name: solis_tcp
+  # ----- Modbus TCP, range mode --------------------------------------------------------
+  # range mode reads the listed register ranges (inclusive, split into requests of at most
+  # 125 registers) and decodes all points from them. Every point must lie inside a range.
+  # If any range read fails, the whole poll is skipped (no partial data).
+  - name: inverter
     type: modbus
-    poll_interval: 1s
+    poll_interval: 5s
     timeout: 2s
     parallelism: 1
     device_specific:
       modbus:
-        address: "tcp://modbus.example.com:502"
+        address: "tcp://192.0.2.10:502"
         slave_id: 1
         register_mode: range
-        ranges: ["33057-33065"]
-        # For RTU mode (serial):
-        # address: "rtu:///dev/ttyUSB0"
-        # speed: 9600
-        # data_bits: 8
-        # parity: "N"  # N=none, E=even, O=odd
-        # stop_bits: 1
+        ranges: ["33049-33058", "33135-33150"]
+    # Point options (Modbus):
+    #   register       start register address
+    #   count          number of registers: 1 for 16-bit types and bool,
+    #                  2 for int32/uint32/float32 (high word first)
+    #   type           int16, uint16, int32, uint32, float32, bool
+    #   function_code  3 = holding registers, 4 = input registers. One register type per
+    #                  device: configure a second device if you need both.
+    #   scale, offset  value = raw * scale + offset. Always set scale (1 for raw values):
+    #                  an omitted scale is 0 and only the offset is returned.
+    #   unit           free text, passed to the outputs
     points:
-      - name: pv_power_total
+      - name: pv_voltage_1
+        register: 33049
+        count: 1
+        type: uint16
+        function_code: 4
+        scale: 0.1
+        offset: 0
+        unit: "V"
+      - name: total_pv_power
         register: 33057
         count: 2
         type: uint32
         function_code: 4
-        scale: 0.1
+        scale: 1
+        offset: 0
+        unit: "W"
+      - name: battery_soc
+        register: 33139
+        count: 1
+        type: uint16
+        function_code: 4
+        scale: 1
+        offset: 0
+        unit: "%"
+      - name: battery_power
+        register: 33149
+        count: 2
+        type: uint32
+        function_code: 4
+        scale: 1
         offset: 0
         unit: "W"
 
-  # ===== Modbus RTU Example =====
-  # register_mode: direct - each point read individually
-  # function_code: 4 = Input Registers (read-only)
-  # type: int16 - uses 1 register (count: 1)
-  # Serial settings for RTU: speed, data_bits, parity, stop_bits
-  - name: modbus_rtu_device
+  # ----- Modbus RTU (serial), direct mode ----------------------------------------------
+  # direct mode reads every point on its own. A failing point is skipped; the other points
+  # of the poll are still delivered.
+  - name: sensor_rtu
     type: modbus
-    poll_interval: 5s
+    poll_interval: 10s
     timeout: 3s
     parallelism: 1
     device_specific:
@@ -67,7 +92,7 @@ devices:
         slave_id: 1
         speed: 9600
         data_bits: 8
-        parity: "N"
+        parity: "N" # N = none, E = even, O = odd
         stop_bits: 1
         register_mode: direct
     points:
@@ -75,127 +100,140 @@ devices:
         register: 100
         count: 1
         type: int16
-        function_code: 4
+        function_code: 3
         scale: 0.1
-        offset: -40
+        offset: 0
         unit: "C"
+      - name: alarm_active
+        register: 110
+        count: 1
+        type: bool
+        function_code: 3
+        scale: 1
+        offset: 0
+        unit: ""
 
-  # ===== HTTP GET JSON Example =====
-  - name: sm
+  # ----- HTTP GET, JSON response -------------------------------------------------------
+  # Values are read with gjson paths: https://github.com/tidwall/gjson/blob/master/SYNTAX.md
+  # HTTP points do not apply scale or offset: values are delivered as they are in the
+  # response. Without type, numbers become float64 and booleans stay booleans; set type
+  # (float64, int64, uint64, bool, string) to convert explicitly.
+  - name: energy_meter
     type: http
     poll_interval: 1s
-    timeout: 10s
+    timeout: 2s
     parallelism: 1
     device_specific:
       http:
-        address: "https://api.example.com/health"
+        address: "http://192.0.2.20/rpc/EM.GetStatus"
         method: GET
         headers:
           Accept: "application/json"
-          Authorization: "Bearer token"
         response_type: json
-        insecure: true
+        insecure: false # true skips TLS certificate verification (self-signed devices)
     points:
-      - name: last_poll
-        json_path: "last_poll"
+      - name: a_voltage
+        json_path: "a_voltage"
+        unit: "V"
+      - name: total_act_power
+        json_path: "total_act_power"
+        unit: "W"
+      - name: freq
+        json_path: "freq"
+        unit: "Hz"
 
-  # ===== HTTP POST JSON Example =====
-  - name: spine
+  # ----- HTTP POST with body and auth header -------------------------------------------
+  # response_type: json (default) or text (the whole body as one string value).
+  # xml is accepted by the config but not implemented yet: every point would fail.
+  - name: cloud_api
     type: http
-    poll_interval: 1s
+    poll_interval: 1m
     timeout: 10s
-    parallelism: 1
+    parallelism: 2
     device_specific:
       http:
-        address: "http://data.example.com/rpc/EM.GetStatus"
+        address: "https://api.example.com/v1/status"
         method: POST
         headers:
           Accept: "application/json"
           Content-Type: "application/json"
+          Authorization: "Bearer <your-api-token>"
         body: '{"action": "GetStatus"}'
         response_type: json
-        insecure: true
     points:
-      - name: a_voltage
-        json_path: "a_voltage"
-        scale: 1
-        unit: "V"
-      - name: b_voltage
-        json_path: "b_voltage"
-        scale: 1
-        unit: "V"
-      - name: c_voltage
-        json_path: "c_voltage"
-        scale: 1
-        unit: "V"
-      - name: nested_value
+      - name: online
+        json_path: "status.online"
+        type: bool
+      - name: first_measurement
         json_path: "data.measurements.0.value"
-        scale: 0.01
+        type: float64
         unit: "kW"
 
-# Outputs: Define where to write the collected data
-# Each output can be of type "influxdb", "mqtt", or "csv"
+# =====================================================================================
+# Outputs: where data is written to. type is "influxdb", "mqtt" or "csv".
+#
+# Common output options:
+#   devices      the devices whose readings this output receives (must exist above)
+#   buffer_size  queued points for this output (default 1000). When the queue is full,
+#                new points are dropped for this output only and a warning is logged.
+# =====================================================================================
 outputs:
-  # ===== InfluxDB 3.x Example =====
-  - name: influxdb_main
+  # ----- InfluxDB 3 --------------------------------------------------------------------
+  # Schema: measurement = device name, tags "point" and "unit", field "value".
+  # batch_size, batch_timeout, max_retries and retry_delay apply to InfluxDB only.
+  - name: influxdb
     type: influxdb
-    buffer_size: 1000
-    batch_size: 100
-    batch_timeout: 5s
-    max_retries: 3
-    retry_delay: 1s
+    buffer_size: 10000
+    batch_size: 10000 # write when this many points are queued (default 10000)
+    batch_timeout: 1s # ... or after this time (default 1s)
+    max_retries: 3 # retries per batch before it is dropped (default 3)
+    retry_delay: 1s # wait between retries (default 1s)
     output_specific:
       influxdb:
         address: "http://influxdb.example.com:8181"
-        token: "your-api-token"
-        database: "logger"
-        insecure: true
+        token: "<your-influxdb-token>"
+        database: "datalogger"
+        insecure: false
     devices:
-      - spine
-      - solis_tcp
+      - inverter
+      - energy_meter
 
-  # ===== MQTT Example with Authentication =====
-  - name: mqtt_broker
+  # ----- MQTT with authentication ------------------------------------------------------
+  # Topic per point: <topic>/<device>/<point>
+  # Payload: {"value": ..., "unit": "...", "timestamp": "<RFC3339 with nanoseconds>"}
+  # address schemes: tcp:// (default when omitted), tls:// or ssl://
+  - name: mqtt
     type: mqtt
-    buffer_size: 500
+    buffer_size: 1000
     output_specific:
       mqtt:
         address: "tcp://mqtt.example.com:1883"
-        client_id: "datalogger-01"
-        topic: "datalogger"
-        qos: 1
+        client_id: "datalogger-01" # default: logger-<8 random characters>
+        topic: "datalogger" # default: datalogger
+        qos: 1 # 0, 1 or 2
         retain: false
-        username: "user"
-        password: "pass"
+        username: "<user>"
+        password: "<password>"
         insecure: false
     devices:
-      - sm
+      - inverter
+      - sensor_rtu
 
-  # ===== MQTT Example without Authentication =====
-  - name: mqtt_simple
-    type: mqtt
-    buffer_size: 500
-    output_specific:
-      mqtt:
-        address: "mqtt.example.com:1883"
-        topic: "sensors"
-        qos: 0
-        retain: false
-    devices:
-      - modbus_rtu_device
-
-  # ===== CSV Example with Rotation =====
-  - name: csv_logger
+  # ----- CSV file with rotation --------------------------------------------------------
+  # Columns: timestamp, device, point, value, unit. Every point is flushed immediately.
+  # When the file is older than max_age it is renamed to <file>.<YYYYMMDD-HHMMSS> and a new
+  # file is started. max_backups: 0 = keep no rotated files, > 0 = keep that many,
+  # < 0 = keep all. In the container, write below /app/data (mounted from ./data).
+  - name: csv
     type: csv
     buffer_size: 10000
-    batch_size: 1000
-    batch_timeout: 30s
     output_specific:
       csv:
         file_path: "./data/data.csv"
-        max_age: 10s
-        max_backups: 5
+        max_age: 24h
+        max_backups: 7
     devices:
-      - sm
-      - spine
-      - solis_tcp
+      - inverter
+      - sensor_rtu
+      - energy_meter
+      - cloud_api
