@@ -19,11 +19,11 @@ import (
 
 // MQTTWriter writes DataPoints to an MQTT broker.
 type MQTTWriter struct {
-	config      config.Output
-	logger      zerolog.Logger
-	client      *paho.Client
-	devices     []string
-	lastPubErr  error // Track if previous publish failed
+	config     config.Output
+	logger     zerolog.Logger
+	client     *paho.Client
+	devices    []string
+	lastPubErr error // Track if previous publish failed
 }
 
 // NewMQTTWriter creates a new MQTTWriter.
@@ -103,8 +103,8 @@ func (w *MQTTWriter) Start(ctx context.Context, input <-chan datasource.DataPoin
 	errCh := make(chan error, 1)
 
 	connect := &paho.Connect{
-		ClientID: w.config.OutputSpecific.Mqtt.ClientID,
-		KeepAlive: 30,
+		ClientID:   w.config.OutputSpecific.Mqtt.ClientID,
+		KeepAlive:  30,
 		CleanStart: true,
 	}
 

@@ -18,17 +18,17 @@ import (
 
 // CSVWriter writes DataPoints to a CSV file.
 type CSVWriter struct {
-	config      config.Output
-	logger      zerolog.Logger
-	file        *os.File
-	writer      *csv.Writer
-	devices     []string
-	filePath    string
-	maxAge      time.Duration
-	maxBackups  int
-	lastWrite   time.Time
-	fileCreated time.Time // When the current file was created (for rotation)
-	lastWriteErr error    // Track if previous write failed
+	config       config.Output
+	logger       zerolog.Logger
+	file         *os.File
+	writer       *csv.Writer
+	devices      []string
+	filePath     string
+	maxAge       time.Duration
+	maxBackups   int
+	lastWrite    time.Time
+	fileCreated  time.Time // When the current file was created (for rotation)
+	lastWriteErr error     // Track if previous write failed
 }
 
 // NewCSVWriter creates a new CSVWriter.

@@ -24,8 +24,8 @@ func TestNewHttpReader(t *testing.T) {
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     "http://localhost:8080",
-				Method:      "GET",
+				Address:      "http://localhost:8080",
+				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
@@ -76,8 +76,8 @@ func TestHttpReaderValidate(t *testing.T) {
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     "http://localhost:8080",
-				Method:      "GET",
+				Address:      "http://localhost:8080",
+				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
@@ -104,8 +104,8 @@ func TestHttpReaderStart(t *testing.T) {
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     "http://localhost:8080",
-				Method:      "GET",
+				Address:      "http://localhost:8080",
+				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
@@ -216,8 +216,8 @@ func TestExtractJSONValue(t *testing.T) {
 		Type: "http",
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     "http://localhost:8080",
-				Method:      "GET",
+				Address:      "http://localhost:8080",
+				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
@@ -329,8 +329,8 @@ func TestReadAllPointsWithServer(t *testing.T) {
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     server.URL,
-				Method:      "GET",
+				Address:      server.URL,
+				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
@@ -378,8 +378,8 @@ func TestReadAllPointsError(t *testing.T) {
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     server.URL,
-				Method:      "GET",
+				Address:      server.URL,
+				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
@@ -417,8 +417,8 @@ func TestReadAllPointsTimeout(t *testing.T) {
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     server.URL,
-				Method:      "GET",
+				Address:      server.URL,
+				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
@@ -447,8 +447,8 @@ func TestTextResponseType(t *testing.T) {
 		Type: "http",
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     "http://localhost:8080",
-				Method:      "GET",
+				Address:      "http://localhost:8080",
+				Method:       "GET",
 				ResponseType: "text",
 			},
 		},
@@ -490,8 +490,8 @@ func TestParsePointsParallel(t *testing.T) {
 		Parallelism:  2, // Enable parallelism
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     "http://localhost:8080",
-				Method:      "GET",
+				Address:      "http://localhost:8080",
+				Method:       "GET",
 				ResponseType: "json",
 			},
 		},
@@ -572,8 +572,8 @@ func TestPollLoopShutdown(t *testing.T) {
 		Parallelism:  1,
 		DeviceSpecific: config.DeviceSpecific{
 			Http: config.HttpConfig{
-				Address:     "http://localhost:8080",
-				Method:      "GET",
+				Address:      "http://localhost:8080",
+				Method:       "GET",
 				ResponseType: "json",
 			},
 		},

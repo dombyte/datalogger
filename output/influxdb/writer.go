@@ -90,8 +90,8 @@ func (w *InfluxDBWriter) createClient() error {
 		Token:    influxConfig.Token,
 		Database: influxConfig.Database,
 		WriteOptions: &influxdb3.WriteOptions{
-			UseV2Api:       false, // Use v3 API endpoint (/api/v3/write_lp)
-			GzipThreshold:  1000,  // Enable gzip compression for writes > 1000 bytes (default in library)
+			UseV2Api:      false, // Use v3 API endpoint (/api/v3/write_lp)
+			GzipThreshold: 1000,  // Enable gzip compression for writes > 1000 bytes (default in library)
 		},
 	}
 

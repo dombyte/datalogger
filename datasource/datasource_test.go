@@ -10,52 +10,52 @@ func TestDataPointCreation(t *testing.T) {
 	now := time.Now().UTC()
 
 	tests := []struct {
-		name     string
-		device   string
-		point    string
-		value    interface{}
+		name      string
+		device    string
+		point     string
+		value     interface{}
 		timestamp time.Time
-		unit     string
+		unit      string
 	}{
 		{
-			name:     "float64 value",
-			device:   "test_device",
-			point:    "temperature",
-			value:    23.5,
+			name:      "float64 value",
+			device:    "test_device",
+			point:     "temperature",
+			value:     23.5,
 			timestamp: now,
-			unit:     "C",
+			unit:      "C",
 		},
 		{
-			name:     "int value",
-			device:   "test_device",
-			point:    "count",
-			value:    42,
+			name:      "int value",
+			device:    "test_device",
+			point:     "count",
+			value:     42,
 			timestamp: now,
-			unit:     "",
+			unit:      "",
 		},
 		{
-			name:     "bool value",
-			device:   "test_device",
-			point:    "status",
-			value:    true,
+			name:      "bool value",
+			device:    "test_device",
+			point:     "status",
+			value:     true,
 			timestamp: now,
-			unit:     "",
+			unit:      "",
 		},
 		{
-			name:     "string value",
-			device:   "test_device",
-			point:    "message",
-			value:    "hello",
+			name:      "string value",
+			device:    "test_device",
+			point:     "message",
+			value:     "hello",
 			timestamp: now,
-			unit:     "",
+			unit:      "",
 		},
 		{
-			name:     "nil value",
-			device:   "test_device",
-			point:    "empty",
-			value:    nil,
+			name:      "nil value",
+			device:    "test_device",
+			point:     "empty",
+			value:     nil,
 			timestamp: now,
-			unit:     "",
+			unit:      "",
 		},
 	}
 
@@ -121,7 +121,7 @@ func TestDataPointJSONTags(t *testing.T) {
 func TestDataPointTimestampUTC(t *testing.T) {
 	// Create a DataPoint with a UTC timestamp
 	utcTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
-	
+
 	dp := DataPoint{
 		DeviceName: "test",
 		PointName:  "test",

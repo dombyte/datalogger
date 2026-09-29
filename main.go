@@ -33,8 +33,8 @@ var (
 	BuildDate = "unknown"
 	GoVersion = "unknown"
 
-	configPath string
-	debugFlag  bool
+	configPath  string
+	debugFlag   bool
 	versionFlag bool
 )
 
@@ -85,31 +85,31 @@ func main() {
 	defer sourceCancel()
 
 	// 4. Setup signal handling for graceful/hard shutdown
-	sigChan := make(chan os.Signal, 2)  // Buffer of 2 to catch second signal
+	sigChan := make(chan os.Signal, 2) // Buffer of 2 to catch second signal
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	
+
 	// Track if we're already in shutdown
 	shutdownInProgress := false
 	var gracefulShutdownDone chan struct{}
-	
+
 	go func() {
 		for range sigChan {
 			if !shutdownInProgress {
 				// First signal: start graceful shutdown
 				shutdownInProgress = true
 				logger.Info().Msg("Shutdown signal received")
-				
+
 				// Phase 1: Stop data sources (no new data will be polled)
 				logger.Info().Msg("Stopping data sources...")
 				sourceCancel()
 				logger.Info().Msg("Data sources stopped")
-				
+
 				// Phase 2: Give outputs up to 10 seconds to drain their buffers
 				logger.Info().Msg("Waiting for outputs to drain (10s timeout)...")
 				gracefulShutdownDone = make(chan struct{})
 				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer shutdownCancel()
-				
+
 				// Wait for shutdown timeout or second signal
 				select {
 				case <-shutdownCtx.Done():
@@ -141,7 +141,7 @@ func main() {
 
 	// 6. Start all output writers and get their channels (with monitoring)
 	outputWriters, outputChannels, outputDoneChannels := startOutputWriters(cfg, outputCtx, logger)
-	
+
 	// 7. Start component health monitor in background
 	// This monitors done channels and logs if components exit unexpectedly
 	go monitorComponents(deviceDoneChannels, outputDoneChannels, sourceCtx, outputCtx, logger)
@@ -154,7 +154,7 @@ func main() {
 
 	// 9. Wait for output context to be cancelled (by signal handler)
 	<-outputCtx.Done()
-	
+
 	// 10. Wait for all output writers to finish cleanup
 	logger.Info().Msg("Waiting for output writers to finish cleanup...")
 	for name, doneCh := range outputDoneChannels {
@@ -198,8 +198,6 @@ func startDeviceReaders(
 	return deviceChannels, deviceDoneChannels
 }
 
-
-
 // startOutputWriters starts all output writers and returns the writers, their channels, and done channels.
 func startOutputWriters(
 	cfg *config.Config,
@@ -225,8 +223,6 @@ func startOutputWriters(
 	return outputWriters, outputChannels, outputDoneChannels
 }
 
-
-
 // startWriterGoroutineWithDone starts a single output writer goroutine with a done channel.
 func startWriterGoroutineWithDone(
 	ctx context.Context,
@@ -239,7 +235,7 @@ func startWriterGoroutineWithDone(
 	closeDone := func() {
 		once.Do(func() { close(doneCh) })
 	}
-	
+
 	// Start the writer in a goroutine
 	go func() {
 		if err := <-writer.Start(ctx, ch); err != nil {
@@ -247,7 +243,7 @@ func startWriterGoroutineWithDone(
 		}
 		closeDone()
 	}()
-	
+
 	// Also close doneCh if context is cancelled (in case writer.Start doesn't return)
 	go func() {
 		<-ctx.Done()
