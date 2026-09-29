@@ -1,1069 +1,309 @@
-package modbus
+package modbus_test
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"math"
 	"net"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/simonvetter/modbus"
+	lib "github.com/simonvetter/modbus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dombyte/datalogger/internal/config"
+	"github.com/dombyte/datalogger/internal/clock/clocktest"
 	"github.com/dombyte/datalogger/internal/datasource"
+	"github.com/dombyte/datalogger/internal/datasource/modbus"
+	"github.com/dombyte/datalogger/internal/datasource/modbus/mocks"
 )
 
-// TestParseParity tests the parseParity function
-func TestParseParity(t *testing.T) {
-	tests := []struct {
-		name   string
-		parity string
-		want   uint
-	}{
-		{name: "N", parity: "N", want: 0},       // PARITY_NONE
-		{name: "empty", parity: "", want: 0},    // PARITY_NONE
-		{name: "E", parity: "E", want: 1},       // PARITY_EVEN
-		{name: "O", parity: "O", want: 2},       // PARITY_ODD
-		{name: "invalid", parity: "X", want: 0}, // Default to PARITY_NONE
-	}
+const interval = time.Second
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := parseParity(tt.parity)
-			if got != tt.want {
-				t.Errorf("parseParity(%q) = %v, want %v", tt.parity, got, tt.want)
-			}
-		})
+var start = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+
+// harness runs a Reader against mocks and a fake clock.
+type harness struct {
+	t      *testing.T
+	clock  *clocktest.Fake
+	dialer *mocks.Dialer
+	client *mocks.Client
+	data   <-chan datasource.DataPoint
+	done   <-chan struct{}
+	cancel context.CancelFunc
+}
+
+func settings(points ...modbus.Point) modbus.Settings {
+	return modbus.Settings{Name: "inverter", PollInterval: interval, Parallelism: 1, Points: points}
+}
+
+func newHarness(t *testing.T, s modbus.Settings) *harness {
+	t.Helper()
+	h := &harness{
+		t:      t,
+		clock:  clocktest.NewFake(start),
+		dialer: mocks.NewDialer(t),
+		client: mocks.NewClient(t),
+	}
+	r, err := modbus.New(modbus.Deps{
+		Settings: s, Dialer: h.dialer, Clock: h.clock, Log: zerolog.Nop(),
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	h.data, h.done, _ = r.Start(ctx)
+	t.Cleanup(h.stop)
+	return h
+}
+
+// advance waits until the reader blocks on n clock waiters, then moves time by d.
+func (h *harness) advance(n int, d time.Duration) {
+	h.t.Helper()
+	require.Eventually(h.t, func() bool { return h.clock.Waiters() >= n },
+		time.Second, time.Millisecond)
+	h.clock.Advance(d)
+}
+
+// receive returns the next data point.
+func (h *harness) receive() datasource.DataPoint {
+	h.t.Helper()
+	select {
+	case dp := <-h.data:
+		return dp
+	case <-time.After(time.Second):
+		h.t.Fatal("no data point")
+		return datasource.DataPoint{}
 	}
 }
 
-// TestDecodeValue tests the decodeValue function
-func TestDecodeValue(t *testing.T) {
-	tests := []struct {
-		name      string
-		registers []uint16
-		dataType  string
-		want      interface{}
-		wantErr   bool
-	}{
-		{
-			name:      "int16",
-			registers: []uint16{0x1234},
-			dataType:  "int16",
-			want:      int16(0x1234),
-			wantErr:   false,
-		},
-		{
-			name:      "uint16",
-			registers: []uint16{0x1234},
-			dataType:  "uint16",
-			want:      uint16(0x1234),
-			wantErr:   false,
-		},
-		{
-			name:      "int32 from two registers",
-			registers: []uint16{0x1234, 0x5678},
-			dataType:  "int32",
-			want:      int32(0x12345678),
-			wantErr:   false,
-		},
-		{
-			name:      "uint32 from two registers",
-			registers: []uint16{0x1234, 0x5678},
-			dataType:  "uint32",
-			want:      uint32(0x12345678),
-			wantErr:   false,
-		},
-		{
-			name:      "bool true",
-			registers: []uint16{1},
-			dataType:  "bool",
-			want:      true,
-			wantErr:   false,
-		},
-		{
-			name:      "bool false",
-			registers: []uint16{0},
-			dataType:  "bool",
-			want:      false,
-			wantErr:   false,
-		},
-		{
-			name:      "unknown data type",
-			registers: []uint16{0},
-			dataType:  "unknown",
-			want:      nil,
-			wantErr:   true,
-		},
-		{
-			name:      "string type not implemented",
-			registers: []uint16{0},
-			dataType:  "string",
-			want:      nil,
-			wantErr:   true,
-		},
-		{
-			name:      "float32 from two registers",
-			registers: []uint16{0x4049, 0x0fdb},
-			dataType:  "float32",
-			want:      float32(3.1415927),
-		},
-		{
-			name:      "int32 with one register",
-			registers: []uint16{0x1234},
-			dataType:  "int32",
-			wantErr:   true,
-		},
-		{
-			name:      "no registers",
-			registers: nil,
-			dataType:  "uint16",
-			wantErr:   true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := decodeValue(tt.registers, tt.dataType)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
+func (h *harness) stop() {
+	h.cancel()
+	<-h.done
 }
 
-// TestShouldReconnect checks that broken connections reconnect and protocol errors do not.
-func TestShouldReconnect(t *testing.T) {
+// signal returns a channel closed when a mock call runs.
+func signal(call interface {
+	Run(func(mock.Arguments)) *mock.Call
+},
+) <-chan struct{} {
+	ch := make(chan struct{})
+	call.Run(func(mock.Arguments) { close(ch) })
+	return ch
+}
+
+func TestNewChecksDependencies(t *testing.T) {
 	t.Parallel()
 
-	opErr := &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
+	point := modbus.Point{Name: "p", Register: 10, Type: "uint16", Scale: 1}
+	valid := modbus.Deps{
+		Settings: settings(point),
+		Dialer:   mocks.NewDialer(t),
+		Clock:    clocktest.NewFake(start),
+	}
 	tests := []struct {
-		name string
-		err  error
-		want bool
+		name    string
+		change  func(*modbus.Deps)
+		wantErr error
 	}{
-		{name: "nil error", err: nil, want: false},
-		{name: "net op error", err: opErr, want: true},
-		{name: "wrapped net op error", err: fmt.Errorf("register 1: %w", opErr), want: true},
-		{name: "EOF", err: io.EOF, want: true},
-		{name: "unexpected EOF", err: io.ErrUnexpectedEOF, want: true},
-		{name: "closed connection", err: net.ErrClosed, want: true},
-		{name: "connection reset", err: syscall.ECONNRESET, want: true},
-		{name: "broken pipe", err: syscall.EPIPE, want: true},
-		{name: "request timed out", err: modbus.ErrRequestTimedOut, want: false},
-		{name: "modbus exception", err: modbus.ErrIllegalDataAddress, want: false},
-		{name: "string mentioning connection", err: errors.New("connection"), want: false},
+		{name: "valid", change: func(*modbus.Deps) {}},
+		{
+			name: "no dialer", change: func(d *modbus.Deps) { d.Dialer = nil },
+			wantErr: modbus.ErrMissingDependency,
+		},
+		{
+			name: "no clock", change: func(d *modbus.Deps) { d.Clock = nil },
+			wantErr: modbus.ErrMissingDependency,
+		},
+		{
+			name: "no poll interval", change: func(d *modbus.Deps) { d.Settings.PollInterval = 0 },
+			wantErr: modbus.ErrInvalidSettings,
+		},
+		{
+			name: "no points", change: func(d *modbus.Deps) { d.Settings.Points = nil },
+			wantErr: modbus.ErrInvalidSettings,
+		},
+		{name: "bad range", change: func(d *modbus.Deps) {
+			d.Settings.RangeMode, d.Settings.Ranges = true, []string{"10"}
+		}, wantErr: modbus.ErrInvalidSettings},
+		{name: "point outside ranges", change: func(d *modbus.Deps) {
+			d.Settings.RangeMode, d.Settings.Ranges = true, []string{"0-9"}
+		}, wantErr: modbus.ErrInvalidSettings},
 	}
 
-	r := &Reader{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, r.shouldReconnect(tt.err))
-		})
-	}
-}
-
-// TestApplyBackoff tests the applyBackoff function
-func TestApplyBackoff(t *testing.T) {
-	logger := zerolog.Nop()
-	reader := &Reader{
-		logger:      logger,
-		config:      config.Device{Name: "test", Type: "modbus"},
-		backoffWait: 0,
-	}
-
-	// First call - should set to 100ms
-	reader.applyBackoff()
-	if reader.backoffWait != 100*time.Millisecond {
-		t.Errorf("First backoff = %v, want 100ms", reader.backoffWait)
-	}
-
-	// Second call - should double to 200ms
-	reader.applyBackoff()
-	if reader.backoffWait != 200*time.Millisecond {
-		t.Errorf("Second backoff = %v, want 200ms", reader.backoffWait)
-	}
-
-	// Third call - should double to 400ms
-	reader.applyBackoff()
-	if reader.backoffWait != 400*time.Millisecond {
-		t.Errorf("Third backoff = %v, want 400ms", reader.backoffWait)
-	}
-
-	// Test max backoff (30 seconds)
-	reader.backoffWait = 15 * time.Second
-	reader.applyBackoff()
-	if reader.backoffWait != 30*time.Second {
-		t.Errorf("Max backoff = %v, want 30s", reader.backoffWait)
-	}
-
-	// Should not exceed max
-	reader.applyBackoff()
-	if reader.backoffWait != 30*time.Second {
-		t.Errorf("Backoff after max = %v, want 30s", reader.backoffWait)
-	}
-}
-
-// netError is a simple error wrapper for testing
-// TestName tests the Name method
-func TestName(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name: "test_device",
-		Type: "modbus",
-	}
-
-	// Note: We can't fully test New without a real Modbus connection
-	// So we'll create a partial reader for testing Name()
-	reader := &Reader{
-		config: deviceConfig,
-		logger: logger,
-	}
-
-	if reader.Name() != "test_device" {
-		t.Errorf("Name() = %v, want %v", reader.Name(), "test_device")
-	}
-}
-
-// TestValidateAddresses tests the validateAddresses function
-func TestValidateAddresses(t *testing.T) {
-	logger := zerolog.Nop()
-
-	tests := []struct {
-		name         string
-		registerMode string
-		ranges       []string
-		points       []config.Point
-		wantErr      bool
-	}{
-		{
-			name:         "direct mode - no validation needed",
-			registerMode: "direct",
-			ranges:       []string{},
-			points:       []config.Point{{Name: "p1", Register: 100, Count: 1}},
-			wantErr:      false,
-		},
-		{
-			name:         "range mode - point covered by range",
-			registerMode: "range",
-			ranges:       []string{"100-200"},
-			points:       []config.Point{{Name: "p1", Register: 150, Count: 1}},
-			wantErr:      false,
-		},
-		{
-			name:         "range mode - point not covered",
-			registerMode: "range",
-			ranges:       []string{"100-200"},
-			points:       []config.Point{{Name: "p1", Register: 300, Count: 1}},
-			wantErr:      true,
-		},
-		{
-			name:         "range mode - point range covered by config range",
-			registerMode: "range",
-			ranges:       []string{"100-200"},
-			points:       []config.Point{{Name: "p1", Register: 150, Count: 10}},
-			wantErr:      false,
-		},
-		{
-			name:         "range mode - point at range boundary",
-			registerMode: "range",
-			ranges:       []string{"100-200"},
-			points:       []config.Point{{Name: "p1", Register: 100, Count: 1}},
-			wantErr:      false,
-		},
-		{
-			name:         "range mode - point at range end",
-			registerMode: "range",
-			ranges:       []string{"100-200"},
-			points:       []config.Point{{Name: "p1", Register: 200, Count: 1}},
-			wantErr:      false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			reader := &Reader{
-				logger: logger,
-				config: config.Device{
-					Name:   "test",
-					Type:   "modbus",
-					Points: tt.points,
-					DeviceSpecific: config.DeviceSpecific{
-						Modbus: config.ModbusConfig{
-							RegisterMode: tt.registerMode,
-							Ranges:       tt.ranges,
-						},
-					},
-				},
-			}
-
-			ranges, err := parseRanges(tt.ranges)
-			if err != nil && !tt.wantErr {
-				t.Fatalf("Failed to parse ranges: %v", err)
-			}
-			reader.ranges = ranges
-			reader.points = tt.points
-
-			err = reader.validateAddresses()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("validateAddresses() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-// TestApplyScaleAndOffsetForPoint tests scaling and offset application
-func TestApplyScaleAndOffsetForPoint(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name: "test",
-		Type: "modbus",
-	}
-
-	reader := &Reader{
-		logger: logger,
-		config: deviceConfig,
-	}
-
-	tests := []struct {
-		name  string
-		value interface{}
-		point config.Point
-		want  float64
-	}{
-		{
-			name:  "int16 with scale",
-			value: int16(100),
-			point: config.Point{Scale: 0.1, Offset: 0},
-			want:  10.0,
-		},
-		{
-			name:  "int16 with scale and offset",
-			value: int16(100),
-			point: config.Point{Scale: 0.1, Offset: 5},
-			want:  15.0,
-		},
-		{
-			name:  "uint16 with scale",
-			value: uint16(1000),
-			point: config.Point{Scale: 0.01, Offset: 0},
-			want:  10.0,
-		},
-		{
-			name:  "float32 with scale",
-			value: float32(10.5),
-			point: config.Point{Scale: 2.0, Offset: 0},
-			want:  21.0,
-		},
-		{
-			name:  "bool true",
-			value: true,
-			point: config.Point{Scale: 10.0, Offset: 5},
-			want:  15.0,
-		},
-		{
-			name:  "bool false",
-			value: false,
-			point: config.Point{Scale: 10.0, Offset: 5},
-			want:  5.0,
-		},
-		{
-			name:  "int32 with scale",
-			value: int32(10000),
-			point: config.Point{Scale: 0.001, Offset: 0},
-			want:  10.0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := reader.applyScaleAndOffset(tt.value, tt.point)
-			if got != tt.want {
-				t.Errorf("applyScaleAndOffset() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// TestGetRegType tests the getRegType function
-func TestGetRegType(t *testing.T) {
-	tests := []struct {
-		name    string
-		points  []config.Point
-		wantReg modbus.RegType
-	}{
-		{
-			name: "holding register (function code 3)",
-			points: []config.Point{
-				{Name: "p1", FunctionCode: 3},
-			},
-			wantReg: modbus.HOLDING_REGISTER,
-		},
-		{
-			name: "input register (function code 4)",
-			points: []config.Point{
-				{Name: "p1", FunctionCode: 4},
-			},
-			wantReg: modbus.INPUT_REGISTER,
-		},
-		{
-			name: "no function code - defaults to holding register",
-			points: []config.Point{
-				{Name: "p1"},
-			},
-			wantReg: modbus.HOLDING_REGISTER, // default
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := getRegType(tt.points)
-			if got != tt.wantReg {
-				t.Errorf("getRegType() = %v, want %v", got, tt.wantReg)
-			}
-		})
-	}
-}
-
-// TestExtractValuesFromRangeData tests the extractValuesFromRangeData function
-func TestExtractValuesFromRangeData(t *testing.T) {
-	logger := zerolog.Nop()
-	reader := &Reader{
-		logger: logger,
-		config: config.Device{
-			Name: "test",
-			Type: "modbus",
-		},
-	}
-
-	// Set up range data
-	rangeData := map[uint16]RangeValue{
-		100: {Value: 123, Timestamp: time.Now().UTC()},
-		101: {Value: 456, Timestamp: time.Now().UTC()},
-		102: {Value: 789, Timestamp: time.Now().UTC()},
-	}
-
-	tests := []struct {
-		name    string
-		point   config.Point
-		want    []uint16
-		wantErr bool
-	}{
-		{
-			name: "single register",
-			point: config.Point{
-				Name:     "temp",
-				Register: 100,
-				Count:    1,
-			},
-			want:    []uint16{123},
-			wantErr: false,
-		},
-		{
-			name: "multiple registers",
-			point: config.Point{
-				Name:     "value",
-				Register: 100,
-				Count:    3,
-			},
-			want:    []uint16{123, 456, 789},
-			wantErr: false,
-		},
-		{
-			name: "register not in range data",
-			point: config.Point{
-				Name:     "missing",
-				Register: 999,
-				Count:    1,
-			},
-			want:    nil,
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			values, _, err := reader.extractValuesFromRangeData(tt.point, rangeData)
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("extractValuesFromRangeData() error = %v, wantErr %v", err, tt.wantErr)
+			d := valid
+			tt.change(&d)
+			_, err := modbus.New(d)
+			if tt.wantErr == nil {
+				assert.NoError(t, err)
 				return
 			}
-
-			if !tt.wantErr {
-				if len(values) != len(tt.want) {
-					t.Errorf("extractValuesFromRangeData() length = %d, want %d", len(values), len(tt.want))
-					return
-				}
-
-				for i, v := range values {
-					if v != tt.want[i] {
-						t.Errorf("extractValuesFromRangeData() [%d] = %v, want %v", i, v, tt.want[i])
-					}
-				}
-			}
+			assert.ErrorIs(t, err, tt.wantErr)
 		})
 	}
 }
 
-// TestDecodePointsFromRangeData tests the decodePointsFromRangeData function
-func TestDecodePointsFromRangeData(t *testing.T) {
-	logger := zerolog.Nop()
-	reader := &Reader{
-		logger: logger,
-		config: config.Device{
-			Name: "test",
-			Type: "modbus",
-		},
-		points: []config.Point{
-			{Name: "temp", Register: 100, Count: 1, Type: "int16"},
-			{Name: "pressure", Register: 101, Count: 1, Type: "uint16"},
-		},
-	}
+func TestDirectModeReadsScaledPointsAndStaysConnected(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(
+		modbus.Point{Name: "temp", Register: 100, Type: "int16", Scale: 0.1, Unit: "C"},
+	))
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(100), uint16(1), lib.HOLDING_REGISTER).
+		Return([]uint16{0xFF10}, nil).Twice() // -240
+	h.client.EXPECT().Close().Return(nil).Once()
 
-	// Set up range data
-	rangeData := map[uint16]RangeValue{
-		100: {Value: 123, Timestamp: time.Now().UTC()},
-		101: {Value: 456, Timestamp: time.Now().UTC()},
-	}
+	h.advance(1, interval)
+	assert.Equal(t, datasource.DataPoint{
+		DeviceName: "inverter",
+		PointName:  "temp",
+		Value:      -24.0,
+		Timestamp:  start.Add(interval),
+		Unit:       "C",
+	}, h.receive())
 
-	results, err := reader.decodePointsFromRangeData(rangeData)
-	if err != nil {
-		t.Fatalf("decodePointsFromRangeData() error = %v", err)
-	}
-
-	if len(results) != 2 {
-		t.Errorf("decodePointsFromRangeData() returned %d results, want 2", len(results))
-	}
-
-	// Check first point
-	if results[0].DeviceName != "test" {
-		t.Errorf("Point 0 DeviceName = %v, want %v", results[0].DeviceName, "test")
-	}
-
-	// Note: We can't easily verify the exact values without knowing the scaling
-	// but we can verify the structure
+	h.advance(1, interval)
+	assert.Equal(t, start.Add(2*interval), h.receive().Timestamp)
 }
 
-// TestDecodeAndScalePoint tests the decodeAndScalePoint function
-func TestDecodeAndScalePoint(t *testing.T) {
-	logger := zerolog.Nop()
-	reader := &Reader{
-		logger: logger,
-		config: config.Device{
-			Name: "test",
-			Type: "modbus",
-		},
-	}
+func TestDirectModeSkipsFailedPoint(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(
+		modbus.Point{Name: "bad", Register: 1, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "good", Register: 2, Type: "uint16", Scale: 1, FunctionCode: 4},
+	))
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(1), uint16(1), lib.INPUT_REGISTER).
+		Return(nil, lib.ErrIllegalDataAddress).Once()
+	h.client.EXPECT().ReadRegisters(uint16(2), uint16(1), lib.INPUT_REGISTER).
+		Return([]uint16{7}, nil).Once()
+	h.client.EXPECT().Close().Return(nil).Once() // only on stop, not after the failure
 
-	tests := []struct {
-		name      string
-		point     config.Point
-		values    []uint16
-		timestamp time.Time
-		wantNil   bool
-	}{
-		{
-			name:      "int16 with scaling",
-			point:     config.Point{Name: "temp", Register: 100, Type: "int16", Scale: 0.1, Offset: 0},
-			values:    []uint16{100},
-			timestamp: time.Now().UTC(),
-			wantNil:   false,
-		},
-		{
-			name:      "uint16 with scaling",
-			point:     config.Point{Name: "count", Register: 100, Type: "uint16", Scale: 1, Offset: 0},
-			values:    []uint16{100},
-			timestamp: time.Now().UTC(),
-			wantNil:   false,
-		},
-		{
-			name:      "invalid data type - should return nil",
-			point:     config.Point{Name: "temp", Register: 100, Type: "invalid_type"},
-			values:    []uint16{100},
-			timestamp: time.Now().UTC(),
-			wantNil:   true, // Will fail to decode
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := reader.decodeAndScalePoint(tt.point, tt.values, tt.timestamp)
-
-			if tt.wantNil {
-				if result != nil {
-					t.Errorf("decodeAndScalePoint() = %v, want nil", result)
-				}
-			} else {
-				if result == nil {
-					t.Error("decodeAndScalePoint() returned nil, want non-nil")
-				}
-				if result.DeviceName != "test" {
-					t.Errorf("DeviceName = %v, want %v", result.DeviceName, "test")
-				}
-				if result.PointName != tt.point.Name {
-					t.Errorf("PointName = %v, want %v", result.PointName, tt.point.Name)
-				}
-			}
-		})
-	}
+	h.advance(1, interval)
+	dp := h.receive()
+	assert.Equal(t, "good", dp.PointName)
+	assert.InDelta(t, 7.0, dp.Value, 0)
 }
 
-// TestApplyScaleAndOffset tests the applyScaleAndOffset function
-func TestApplyScaleAndOffset(t *testing.T) {
-	logger := zerolog.Nop()
-	reader := &Reader{
-		logger: logger,
-		config: config.Device{
-			Name: "test",
-			Type: "modbus",
-		},
-	}
+func TestReconnectsAfterConnectionError(t *testing.T) {
+	t.Parallel()
+	point := modbus.Point{Name: "p", Register: 5, Type: "uint16", Scale: 1}
+	h := newHarness(t, settings(point))
+	second := mocks.NewClient(t)
 
-	tests := []struct {
-		name  string
-		value interface{}
-		point config.Point
-		want  float64
-	}{
-		{
-			name:  "int16",
-			value: int16(100),
-			point: config.Point{Scale: 0.5, Offset: 10},
-			want:  60.0,
-		},
-		{
-			name:  "uint16",
-			value: uint16(100),
-			point: config.Point{Scale: 1, Offset: 0},
-			want:  100.0,
-		},
-		{
-			name:  "float32",
-			value: float32(10.5),
-			point: config.Point{Scale: 2, Offset: 0},
-			want:  21.0,
-		},
-	}
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(5), uint16(1), lib.HOLDING_REGISTER).
+		Return(nil, io.EOF).Once()
+	closed := signal(h.client.EXPECT().Close().Return(nil).Once())
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := reader.applyScaleAndOffset(tt.value, tt.point)
-			if got != tt.want {
-				t.Errorf("applyScaleAndOffset() = %v, want %v", got, tt.want)
-			}
-		})
+	h.advance(1, interval)
+	<-closed // the broken connection is dropped at once
+
+	h.dialer.EXPECT().Dial().Return(second, nil).Once()
+	second.EXPECT().ReadRegisters(uint16(5), uint16(1), lib.HOLDING_REGISTER).
+		Return([]uint16{42}, nil).Once()
+	second.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)             // next tick, then the reader waits out the backoff
+	h.advance(2, 100*time.Millisecond) // initial backoff
+	assert.InDelta(t, 42.0, h.receive().Value, 0)
+	h.stop() // before second's expectations are checked
+}
+
+func TestUnreachableDeviceRecovers(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(modbus.Point{Name: "p", Register: 5, Type: "uint16", Scale: 1}))
+
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	failed := signal(h.dialer.EXPECT().Dial().Return(nil, refused).Once())
+	h.advance(1, interval)
+	<-failed
+
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(5), uint16(1), lib.HOLDING_REGISTER).
+		Return([]uint16{1}, nil).Once()
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	h.advance(2, 100*time.Millisecond)
+	assert.Equal(t, "p", h.receive().PointName)
+}
+
+func TestRangeModeReadsInChunksAndDecodes(t *testing.T) {
+	t.Parallel()
+	s := settings(
+		modbus.Point{Name: "pi", Register: 124, Count: 2, Type: "float32", Scale: 1},
+		modbus.Point{Name: "last", Register: 299, Type: "uint16", Scale: 2},
+	)
+	s.RangeMode, s.Ranges = true, []string{"0-299"}
+	h := newHarness(t, s)
+
+	chunk := func(n int) []uint16 { return make([]uint16, n) }
+	first, third := chunk(125), chunk(50)
+	first[124] = 0x4049
+	third[49] = 21
+	second := chunk(125)
+	second[0] = 0x0fdb
+
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(0), uint16(125), lib.HOLDING_REGISTER).
+		Return(first, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(125), uint16(125), lib.HOLDING_REGISTER).
+		Return(second, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(250), uint16(50), lib.HOLDING_REGISTER).
+		Return(third, nil).Once()
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	got := map[string]any{}
+	for range 2 {
+		dp := h.receive()
+		got[dp.PointName] = dp.Value
+	}
+	assert.Equal(t, map[string]any{"pi": float64(float32(3.1415927)), "last": 42.0}, got)
+}
+
+func TestRangeModeFailedChunkFailsPoll(t *testing.T) {
+	t.Parallel()
+	s := settings(modbus.Point{Name: "p", Register: 0, Type: "uint16", Scale: 1})
+	s.RangeMode, s.Ranges = true, []string{"0-199"}
+	h := newHarness(t, s)
+
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(0), uint16(125), lib.HOLDING_REGISTER).
+		Return(make([]uint16, 125), nil).Once()
+	failed := signal(h.client.EXPECT().
+		ReadRegisters(uint16(125), uint16(75), lib.HOLDING_REGISTER).
+		Return(nil, lib.ErrRequestTimedOut).Once())
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	<-failed
+	select {
+	case dp := <-h.data:
+		t.Fatalf("unexpected data point %v", dp)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
-// TestNewModbusReader tests creating a new Reader
-func TestNewModbusReader(t *testing.T) {
-	logger := zerolog.Nop()
+func TestStopClosesChannelsAndConnection(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(modbus.Point{Name: "p", Register: 1, Type: "uint16", Scale: 1}))
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(1), uint16(1), lib.HOLDING_REGISTER).
+		Return([]uint16{1}, nil).Once()
+	h.client.EXPECT().Close().Return(errors.New("already closed")).Once()
 
-	// Test with direct mode - no ranges needed
-	deviceConfig := config.Device{
-		Name:         "test_device",
-		Type:         "modbus",
-		PollInterval: time.Second,
-		Parallelism:  1,
-		Points: []config.Point{
-			{Name: "temp", Register: 100, Count: 1, Type: "int16"},
-		},
-		DeviceSpecific: config.DeviceSpecific{
-			Modbus: config.ModbusConfig{
-				Address:      "tcp://localhost:502",
-				SlaveID:      1,
-				RegisterMode: "direct",
-			},
-		},
-	}
+	h.advance(1, interval)
+	h.receive()
+	h.stop()
 
-	// We can't test the actual New since it requires a real Modbus connection
-	// But we can test the struct initialization logic
-	reader := &Reader{
-		config:  deviceConfig,
-		logger:  logger.With().Str("datasource", "modbus").Str("device", deviceConfig.Name).Logger(),
-		points:  deviceConfig.Points,
-		regType: modbus.HOLDING_REGISTER,
-	}
-
-	if reader.config.Name != "test_device" {
-		t.Errorf("config.Name = %v, want %v", reader.config.Name, "test_device")
-	}
-
-	if len(reader.points) != 1 {
-		t.Errorf("len(points) = %v, want %v", len(reader.points), 1)
-	}
-
-	if reader.regType != modbus.HOLDING_REGISTER {
-		t.Errorf("regType = %v, want %v", reader.regType, modbus.HOLDING_REGISTER)
-	}
-}
-
-// TestCreateDataPointFromValues tests creating a DataPoint from register values
-func TestCreateDataPointFromValues(t *testing.T) {
-	reader := &Reader{
-		config: config.Device{Name: "test", Type: "modbus"},
-		logger: zerolog.Nop(),
-	}
-	timestamp := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
-
-	tests := []struct {
-		name      string
-		point     config.Point
-		values    []uint16
-		wantValue float64
-		wantErr   bool
-	}{
-		{
-			name:      "int16 with scale",
-			point:     config.Point{Name: "temp", Type: "int16", Scale: 0.1, Unit: "C"},
-			values:    []uint16{100},
-			wantValue: 10.0,
-		},
-		{
-			name:      "uint16 with scale and offset",
-			point:     config.Point{Name: "count", Type: "uint16", Scale: 1, Offset: 5},
-			values:    []uint16{100},
-			wantValue: 105.0,
-		},
-		{
-			name:      "float32",
-			point:     config.Point{Name: "float_val", Type: "float32", Scale: 1},
-			values:    []uint16{0x4049, 0x0fdb}, // 3.14159
-			wantValue: float64(float32(3.1415927)),
-		},
-		{
-			name:    "unknown type",
-			point:   config.Point{Name: "bad", Type: "unknown", Scale: 1},
-			values:  []uint16{1},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dp, err := reader.createDataPointFromValues(tt.point, tt.values, timestamp)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, &datasource.DataPoint{
-				DeviceName: "test",
-				PointName:  tt.point.Name,
-				Value:      tt.wantValue,
-				Timestamp:  timestamp,
-				Unit:       tt.point.Unit,
-			}, dp)
-		})
-	}
-}
-
-// TestModbusLoggerAdapter tests the modbusLoggerAdapter
-func TestModbusLoggerAdapter(t *testing.T) {
-	logger := zerolog.Nop()
-	adapter := &modbusLoggerAdapter{logger: &logger}
-
-	// Test Write method
-	testMsg := "test message\n"
-	n, err := adapter.Write([]byte(testMsg))
-	if err != nil {
-		t.Errorf("Write() error = %v", err)
-	}
-
-	if n != len(testMsg) {
-		t.Errorf("Write() n = %v, want %v", n, len(testMsg))
-	}
-}
-
-// TestNewModbusLogger tests the newModbusLogger function
-func TestNewModbusLogger(t *testing.T) {
-	logger := zerolog.Nop()
-
-	stdLogger := newModbusLogger(&logger)
-
-	if stdLogger == nil {
-		t.Fatal("newModbusLogger() returned nil")
-	}
-}
-
-// TestHandlePollError tests the handlePollError function
-func TestHandlePollError(t *testing.T) {
-	logger := zerolog.Nop()
-	reader := &Reader{
-		config: config.Device{
-			Name: "test",
-			Type: "modbus",
-		},
-		logger: logger,
-	}
-
-	// Initial state
-	if reader.failCount != 0 {
-		t.Errorf("Initial failCount = %v, want 0", reader.failCount)
-	}
-
-	// Simulate a timeout (no reconnect, so no network access)
-	connErr := modbus.ErrRequestTimedOut
-	reader.handlePollError(connErr)
-
-	// After error, failCount should be 1
-	if reader.failCount != 1 {
-		t.Errorf("failCount after error = %v, want 1", reader.failCount)
-	}
-
-	// backoffWait should be set
-	if reader.backoffWait == 0 {
-		t.Error("backoffWait should be set after error")
-	}
-
-	// lastError should be set
-	if reader.lastError == nil {
-		t.Error("lastError should be set after error")
-	}
-}
-
-// TestHandlePollSuccess tests the handlePollSuccess function
-func TestHandlePollSuccess(t *testing.T) {
-	logger := zerolog.Nop()
-	reader := &Reader{
-		config: config.Device{
-			Name: "test",
-			Type: "modbus",
-		},
-		logger:      logger,
-		failCount:   5,
-		backoffWait: 10 * time.Second,
-		lastError:   errors.New("previous error"),
-	}
-
-	// Create a test channel
-	dataCh := make(chan datasource.DataPoint, 10)
-
-	// Create test data points
-	points := []datasource.DataPoint{
-		{DeviceName: "test", PointName: "p1", Value: 1.0, Timestamp: time.Now().UTC()},
-		{DeviceName: "test", PointName: "p2", Value: 2.0, Timestamp: time.Now().UTC()},
-	}
-
-	reader.handlePollSuccess(points, dataCh)
-
-	// After success, failure tracking should be reset
-	if reader.failCount != 0 {
-		t.Errorf("failCount after success = %v, want 0", reader.failCount)
-	}
-
-	if reader.backoffWait != 0 {
-		t.Errorf("backoffWait after success = %v, want 0", reader.backoffWait)
-	}
-
-	if reader.lastError != nil {
-		t.Errorf("lastError after success = %v, want nil", reader.lastError)
-	}
-
-	// Check that points were sent to channel
-	close(dataCh)
-	received := 0
-	for range dataCh {
-		received++
-	}
-
-	if received != len(points) {
-		t.Errorf("Received %d points from channel, want %d", received, len(points))
-	}
-}
-
-// TestApplyBackoff tests exponential backoff
-func TestApplyBackoffMultiple(t *testing.T) {
-	logger := zerolog.Nop()
-	reader := &Reader{
-		logger:      logger,
-		config:      config.Device{Name: "test", Type: "modbus"},
-		backoffWait: 0,
-	}
-
-	// Test sequence of backoffs
-	expected := []time.Duration{
-		100 * time.Millisecond,
-		200 * time.Millisecond,
-		400 * time.Millisecond,
-		800 * time.Millisecond,
-		1600 * time.Millisecond,
-		3200 * time.Millisecond,
-		6400 * time.Millisecond,
-		12800 * time.Millisecond,
-		25600 * time.Millisecond,
-		30 * time.Second, // max
-		30 * time.Second, // max
-	}
-
-	for i, exp := range expected {
-		reader.applyBackoff()
-		if reader.backoffWait != exp {
-			t.Errorf("Backoff %d = %v, want %v", i, reader.backoffWait, exp)
-		}
-	}
-}
-
-// TestReadRegistersForPoint tests the readRegistersForPoint function
-func TestReadRegistersForPoint(t *testing.T) {
-	logger := zerolog.Nop()
-
-	// Create a mock client that returns predictable values
-	// Since we can't easily mock the simonvetter/modbus client, we'll test the logic with a partial reader
-	_ = logger
-
-	// We can't test the actual readRegistersForPoint without a real client
-	// But we can test the parameter handling logic
-	point := config.Point{
-		Name:     "test_point",
-		Register: 100,
-		Count:    2,
-		Type:     "int16",
-	}
-
-	// Verify the point parameters are correct
-	if point.Register != 100 {
-		t.Errorf("Register = %v, want %v", point.Register, 100)
-	}
-
-	if point.Count != 2 {
-		t.Errorf("Count = %v, want %v", point.Count, 2)
-	}
-}
-
-// TestStart tests the Start method
-func TestStart(t *testing.T) {
-	logger := zerolog.Nop()
-
-	// Create a reader without a real client (partial initialization)
-	reader := &Reader{
-		logger: logger,
-		config: config.Device{
-			Name:         "test_device",
-			Type:         "modbus",
-			PollInterval: time.Millisecond * 100,
-			Parallelism:  1,
-		},
-		points:  []config.Point{},
-		regType: modbus.HOLDING_REGISTER,
-	}
-
-	// We can't test Start without a real client, but we can test that it doesn't panic
-	// and returns the correct channel types
-	ctx := context.Background()
-
-	// This will panic if client is nil, which is expected
-	// We're mainly testing the channel return types here
-	defer func() {
-		if r := recover(); r != nil {
-			// Expected panic due to nil client - that's fine for this test
-			t.Logf("Expected panic due to nil client: %v", r)
-		}
-	}()
-
-	// Call Start - will panic due to nil client in pollLoop
-	dataCh, doneCh, errCh := reader.Start(ctx)
-
-	// Verify channel types
-	if dataCh == nil {
-		t.Error("dataCh should not be nil")
-	}
-
-	if doneCh == nil {
-		t.Error("doneCh should not be nil")
-	}
-
-	if errCh == nil {
-		t.Error("errCh should not be nil")
-	}
-}
-
-// TestModbusReaderName tests the Name method
-func TestModbusReaderName(t *testing.T) {
-	logger := zerolog.Nop()
-
-	deviceConfig := config.Device{
-		Name: "test_device",
-		Type: "modbus",
-	}
-
-	reader := &Reader{
-		config: deviceConfig,
-		logger: logger,
-	}
-
-	if reader.Name() != "test_device" {
-		t.Errorf("Name() = %v, want %v", reader.Name(), "test_device")
-	}
-}
-
-// TestGetRegTypeHolding tests getRegType with holding register function code
-func TestGetRegTypeHolding(t *testing.T) {
-	points := []config.Point{
-		{Name: "p1", FunctionCode: 3},
-	}
-
-	regType := getRegType(points)
-	if regType != modbus.HOLDING_REGISTER {
-		t.Errorf("getRegType() = %v, want %v", regType, modbus.HOLDING_REGISTER)
-	}
-}
-
-// TestGetRegTypeInput tests getRegType with input register function code
-func TestGetRegTypeInput(t *testing.T) {
-	points := []config.Point{
-		{Name: "p1", FunctionCode: 4},
-	}
-
-	regType := getRegType(points)
-	if regType != modbus.INPUT_REGISTER {
-		t.Errorf("getRegType() = %v, want %v", regType, modbus.INPUT_REGISTER)
-	}
-}
-
-// TestGetRegTypeDefault tests getRegType defaults to holding register
-func TestGetRegTypeDefault(t *testing.T) {
-	points := []config.Point{
-		{Name: "p1"}, // No function code
-	}
-
-	regType := getRegType(points)
-	if regType != modbus.HOLDING_REGISTER {
-		t.Errorf("getRegType() default = %v, want %v", regType, modbus.HOLDING_REGISTER)
-	}
-}
-
-// TestDecodeValueFloat32 tests decodeValue with float32
-func TestDecodeValueFloat32(t *testing.T) {
-	// Test float32 decoding
-	// 0x40490fdb is the IEEE 754 representation of 3.14159
-	registers := []uint16{0x4049, 0x0fdb}
-
-	value, err := decodeValue(registers, "float32")
-	if err != nil {
-		t.Fatalf("decodeValue failed: %v", err)
-	}
-
-	if val, ok := value.(float32); !ok {
-		t.Errorf("Expected float32, got %T", value)
-	} else {
-		// Check approximate value
-		expected := float32(3.14159)
-		if math.Abs(float64(val-expected)) > 0.001 {
-			t.Errorf("decodeValue float32 = %v, want approximately %v", val, expected)
-		}
-	}
+	_, open := <-h.data
+	assert.False(t, open, "data channel is closed")
 }

@@ -13,10 +13,10 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/config"
 	"github.com/dombyte/datalogger/internal/datasource"
 	"github.com/dombyte/datalogger/internal/datasource/http"
-	"github.com/dombyte/datalogger/internal/datasource/modbus"
 	"github.com/dombyte/datalogger/internal/output"
 	"github.com/dombyte/datalogger/internal/output/csv"
 	"github.com/dombyte/datalogger/internal/output/influxdb"
@@ -210,7 +210,7 @@ func createSingleDeviceReader(
 
 	switch deviceConfig.Type {
 	case "modbus":
-		reader, err = modbus.New(*deviceConfig, logger)
+		reader, err = createModbusReader(*deviceConfig, *logger, clock.Real{})
 	case "http":
 		reader, err = http.New(*deviceConfig, logger)
 	default:
