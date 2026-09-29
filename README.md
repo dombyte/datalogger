@@ -4,7 +4,7 @@ A flexible data logging tool for collecting metrics from various sources (Modbus
 
 ## Configuration
 
-Configuration is done via YAML file (passed with `-config` flag). See [examples/example_config](examples/example_config.yaml) for a complete reference.
+Configuration is done via YAML file (passed with `-config` flag). See [example/config.yaml](example/config.yaml) for a complete reference.
 
 **Input types:**
 - **Modbus:** TCP/RTU with range or direct register access
@@ -40,9 +40,9 @@ WHERE point = 'a_voltage'
 
 **With Grafana time range filter (FlightSQL):**
 ```sql
-SELECT time AS "Time", value AS "C Phase Voltage"
+SELECT time AS "Time", value AS "A Phase Voltage"
 FROM spine
-WHERE point = 'c_voltage' AND time >= $__timeFrom() AND time <= $__timeTo()
+WHERE point = 'a_voltage' AND time >= $__timeFrom() AND time <= $__timeTo()
 ```
 
 **Multiple points in one query:**
@@ -83,3 +83,70 @@ WHERE time >= $__timeFrom() AND time <= $__timeTo()
 GROUP BY point
 ORDER BY time DESC
 LIMIT 10
+```
+
+**With Grafana time range filter and interval:**
+```sql
+SELECT
+  date_bin(INTERVAL ${__interval_ms} milliseconds, time) AS "Time",
+  avg(value) AS "A Phase Voltage"
+FROM spine
+WHERE
+  point = 'a_voltage'
+  AND time >= $__timeFrom()
+  AND time <= $__timeTo()
+GROUP BY date_bin(INTERVAL ${__interval_ms} milliseconds, time)
+```
+
+**With Grafana time range filter and custom variable:**
+```sql
+SELECT
+  time_bucket AS "Time",
+  avg(value) AS "A Phase Voltage"
+FROM (
+  SELECT
+    CASE
+      WHEN '${group_interval:raw}' = 'raw' THEN time
+      ELSE date_bin(INTERVAL '${group_interval:raw}', time)
+    END AS time_bucket,
+    value
+  FROM spine
+  WHERE
+    point = 'a_voltage'
+    AND time >= $__timeFrom()
+    AND time <= $__timeTo()
+)
+GROUP BY time_bucket
+```
+
+**With Grafana time range filter and custom raw-variable:**
+```sql
+SELECT
+  time_bucket AS "Time",
+  avg(value) AS "A Phase Voltage"
+FROM (
+  SELECT
+    CASE
+      WHEN '${group_interval:raw}' = 'raw' THEN time
+      WHEN '${group_interval:raw}' = '100ms' THEN date_bin(INTERVAL 100 milliseconds, time)
+      WHEN '${group_interval:raw}' = '250ms' THEN date_bin(INTERVAL 250 milliseconds, time)
+      WHEN '${group_interval:raw}' = '500ms' THEN date_bin(INTERVAL 500 milliseconds, time)
+      WHEN '${group_interval:raw}' = '1s' THEN date_bin(INTERVAL 1000 milliseconds, time)
+      WHEN '${group_interval:raw}' = '5s' THEN date_bin(INTERVAL 5000 milliseconds, time)
+      WHEN '${group_interval:raw}' = '10s' THEN date_bin(INTERVAL 10000 milliseconds, time)
+      WHEN '${group_interval:raw}' = '30s' THEN date_bin(INTERVAL 30000 milliseconds, time)
+      WHEN '${group_interval:raw}' = '1m' THEN date_bin(INTERVAL 60000 milliseconds, time)
+      WHEN '${group_interval:raw}' = '5m' THEN date_bin(INTERVAL 300000 milliseconds, time)
+      WHEN '${group_interval:raw}' = '10m' THEN date_bin(INTERVAL 600000 milliseconds, time)
+      WHEN '${group_interval:raw}' = '30m' THEN date_bin(INTERVAL 1800000 milliseconds, time)
+      WHEN '${group_interval:raw}' = '1h' THEN date_bin(INTERVAL 3600000 milliseconds, time)
+    END AS time_bucket,
+    value
+  FROM spine
+  WHERE
+    point = 'a_voltage'
+    AND time >= $__timeFrom()
+    AND time <= $__timeTo()
+)
+GROUP BY time_bucket
+```

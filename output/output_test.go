@@ -9,10 +9,10 @@ import (
 
 // MockOutputWriter is a mock implementation of OutputWriter for testing
 type MockOutputWriter struct {
-	name     string
-	devices  []string
+	name        string
+	devices     []string
 	validateErr error
-	startErr   error
+	startErr    error
 }
 
 func (m *MockOutputWriter) Name() string {
@@ -101,19 +101,19 @@ func TestDataPointStruct(t *testing.T) {
 // TestOutputWriterWithErrors tests error handling in OutputWriter
 func TestOutputWriterWithErrors(t *testing.T) {
 	tests := []struct {
-		name       string
+		name        string
 		validateErr error
-		wantErr    bool
+		wantErr     bool
 	}{
 		{
-			name:       "no error",
+			name:        "no error",
 			validateErr: nil,
-			wantErr:    false,
+			wantErr:     false,
 		},
 		{
-			name:       "validation error",
+			name:        "validation error",
 			validateErr: &testError{msg: "validation failed"},
-			wantErr:    true,
+			wantErr:     true,
 		},
 	}
 

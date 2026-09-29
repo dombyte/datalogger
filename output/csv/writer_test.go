@@ -16,13 +16,13 @@ import (
 // TestNewCSVWriter tests creating a new CSV writer
 func TestNewCSVWriter(t *testing.T) {
 	logger := zerolog.Nop()
-	
+
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
-	
+
 	outputConfig := config.Output{
-		Name:   "csv_test",
-		Type:   "csv",
+		Name:    "csv_test",
+		Type:    "csv",
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -53,10 +53,10 @@ func TestNewCSVWriter(t *testing.T) {
 func TestCSVWriterName(t *testing.T) {
 	logger := zerolog.Nop()
 	tempDir := t.TempDir()
-	
+
 	outputConfig := config.Output{
-		Name:   "my_csv_writer",
-		Type:   "csv",
+		Name:    "my_csv_writer",
+		Type:    "csv",
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -79,11 +79,11 @@ func TestCSVWriterName(t *testing.T) {
 func TestCSVWriterDevices(t *testing.T) {
 	logger := zerolog.Nop()
 	tempDir := t.TempDir()
-	
+
 	devices := []string{"device1", "device2", "device3"}
 	outputConfig := config.Output{
-		Name:   "csv_test",
-		Type:   "csv",
+		Name:    "csv_test",
+		Type:    "csv",
 		Devices: devices,
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -113,10 +113,10 @@ func TestCSVWriterDevices(t *testing.T) {
 func TestCSVWriterValidate(t *testing.T) {
 	logger := zerolog.Nop()
 	tempDir := t.TempDir()
-	
+
 	outputConfig := config.Output{
-		Name:   "csv_test",
-		Type:   "csv",
+		Name:    "csv_test",
+		Type:    "csv",
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -140,10 +140,10 @@ func TestCSVWriterWritePoint(t *testing.T) {
 	logger := zerolog.Nop()
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
-	
+
 	outputConfig := config.Output{
-		Name:   "csv_test",
-		Type:   "csv",
+		Name:    "csv_test",
+		Type:    "csv",
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -184,7 +184,7 @@ func TestCSVWriterWritePoint(t *testing.T) {
 		t.Errorf("Header line missing expected columns: %s", lines[0])
 	}
 
-	if !strings.Contains(lines[1], "device1") || !strings.Contains(lines[1], "temperature") || 
+	if !strings.Contains(lines[1], "device1") || !strings.Contains(lines[1], "temperature") ||
 		!strings.Contains(lines[1], "23.5") || !strings.Contains(lines[1], "C") {
 		t.Errorf("Data line missing expected values: %s", lines[1])
 	}
@@ -195,10 +195,10 @@ func TestCSVWriterMultiplePoints(t *testing.T) {
 	logger := zerolog.Nop()
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
-	
+
 	outputConfig := config.Output{
-		Name:   "csv_test",
-		Type:   "csv",
+		Name:    "csv_test",
+		Type:    "csv",
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -273,14 +273,14 @@ func TestCSVWriterFormatValue(t *testing.T) {
 // TestCSVWriterFileCreation tests that the CSV file and directory are created
 func TestCSVWriterFileCreation(t *testing.T) {
 	logger := zerolog.Nop()
-	
+
 	tempDir := t.TempDir()
 	subDir := filepath.Join(tempDir, "subdir", "nested")
 	filePath := filepath.Join(subDir, "test.csv")
-	
+
 	outputConfig := config.Output{
-		Name:   "csv_test",
-		Type:   "csv",
+		Name:    "csv_test",
+		Type:    "csv",
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -317,10 +317,10 @@ func TestCSVWriterStart(t *testing.T) {
 	logger := zerolog.Nop()
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
-	
+
 	outputConfig := config.Output{
-		Name:   "csv_test",
-		Type:   "csv",
+		Name:    "csv_test",
+		Type:    "csv",
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -336,9 +336,9 @@ func TestCSVWriterStart(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
-	
+
 	inputCh := make(chan datasource.DataPoint, 10)
-	
+
 	errCh := writer.Start(ctx, inputCh)
 
 	if errCh == nil {
@@ -378,10 +378,10 @@ func TestCSVWriterStartShutdown(t *testing.T) {
 	logger := zerolog.Nop()
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
-	
+
 	outputConfig := config.Output{
-		Name:   "csv_test",
-		Type:   "csv",
+		Name:    "csv_test",
+		Type:    "csv",
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -396,9 +396,9 @@ func TestCSVWriterStartShutdown(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	inputCh := make(chan datasource.DataPoint, 10)
-	
+
 	_ = writer.Start(ctx, inputCh)
 
 	for i := 0; i < 5; i++ {
@@ -413,12 +413,12 @@ func TestCSVWriterStartShutdown(t *testing.T) {
 
 	// Close the input channel to signal no more data
 	close(inputCh)
-	
+
 	// Wait for the goroutine to process all points
 	time.Sleep(200 * time.Millisecond)
-	
+
 	cancel()
-	
+
 	// Give more time for shutdown to complete
 	time.Sleep(200 * time.Millisecond)
 
@@ -437,12 +437,12 @@ func TestCSVWriterOpenFile(t *testing.T) {
 	logger := zerolog.Nop()
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
-	
+
 	writer := &CSVWriter{
-		logger:   logger,
-		config:   config.Output{
-			Name:   "csv_test",
-			Type:   "csv",
+		logger: logger,
+		config: config.Output{
+			Name:    "csv_test",
+			Type:    "csv",
 			Devices: []string{"device1"},
 			OutputSpecific: config.OutputSpecific{
 				Csv: config.CsvConfig{
@@ -480,19 +480,19 @@ func TestCSVWriterOpenFileExisting(t *testing.T) {
 	logger := zerolog.Nop()
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
-	
+
 	existingContent := "timestamp,device,point,value,unit\n"
 	existingContent += "2024-01-01T12:00:00Z,device1,temp,23.5,C\n"
-	
+
 	if err := os.WriteFile(filePath, []byte(existingContent), 0644); err != nil {
 		t.Fatalf("Failed to create existing file: %v", err)
 	}
 
 	writer := &CSVWriter{
-		logger:   logger,
-		config:   config.Output{
-			Name:   "csv_test",
-			Type:   "csv",
+		logger: logger,
+		config: config.Output{
+			Name:    "csv_test",
+			Type:    "csv",
 			Devices: []string{"device1"},
 			OutputSpecific: config.OutputSpecific{
 				Csv: config.CsvConfig{
@@ -536,8 +536,8 @@ func TestCSVWriterRotation(t *testing.T) {
 	filePath := filepath.Join(tempDir, "test.csv")
 
 	outputConfig := config.Output{
-		Name:   "csv_rotation_test",
-		Type:   "csv",
+		Name:    "csv_rotation_test",
+		Type:    "csv",
 		Devices: []string{"device1"},
 		OutputSpecific: config.OutputSpecific{
 			Csv: config.CsvConfig{
@@ -661,10 +661,10 @@ func TestDeleteOldBackups(t *testing.T) {
 	filePath := filepath.Join(tempDir, "test.csv")
 
 	writer := &CSVWriter{
-		logger:      logger,
-		config:      config.Output{Name: "test", Type: "csv"},
-		filePath:    filePath,
-		maxBackups:  0, // Delete all backups
+		logger:     logger,
+		config:     config.Output{Name: "test", Type: "csv"},
+		filePath:   filePath,
+		maxBackups: 0, // Delete all backups
 	}
 
 	// Create backup files
@@ -709,10 +709,10 @@ func TestDeleteAllBackups(t *testing.T) {
 	filePath := filepath.Join(tempDir, "test.csv")
 
 	writer := &CSVWriter{
-		logger:      logger,
-		config:      config.Output{Name: "test", Type: "csv"},
-		filePath:    filePath,
-		maxBackups:  0, // Delete all backups
+		logger:     logger,
+		config:     config.Output{Name: "test", Type: "csv"},
+		filePath:   filePath,
+		maxBackups: 0, // Delete all backups
 	}
 
 	// Create backup files
@@ -777,10 +777,10 @@ func TestDeleteOldestBackups(t *testing.T) {
 	filePath := filepath.Join(tempDir, "test.csv")
 
 	writer := &CSVWriter{
-		logger:      logger,
-		config:      config.Output{Name: "test", Type: "csv"},
-		filePath:    filePath,
-		maxBackups:  1, // Keep only 1 backup
+		logger:     logger,
+		config:     config.Output{Name: "test", Type: "csv"},
+		filePath:   filePath,
+		maxBackups: 1, // Keep only 1 backup
 	}
 
 	// Create 3 backup files

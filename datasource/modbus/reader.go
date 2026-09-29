@@ -368,9 +368,9 @@ func (r *ModbusReader) handleReconnect() {
 	if reconnectErr := r.reconnect(); reconnectErr != nil {
 		r.logger.Error().Err(reconnectErr).Msg("Modbus reconnection failed")
 	} else {
-		r.failCount = 0      // Reset on successful reconnect
+		r.failCount = 0 // Reset on successful reconnect
 		r.backoffWait = 0
-		r.lastError = nil   // Reset last error on successful reconnect
+		r.lastError = nil // Reset last error on successful reconnect
 		r.logger.Info().Msg("Modbus reconnected successfully")
 	}
 }

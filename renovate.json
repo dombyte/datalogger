@@ -4,8 +4,7 @@
     "gomod",
     "dockerfile",
     "docker-compose",
-    "github-actions",
-    "npm"
+    "github-actions"
   ],
   "extends": [
     "config:recommended",
@@ -13,40 +12,55 @@
     ":enableVulnerabilityAlertsWithLabel('security')",
     ":preserveSemverRanges",
     ":rebaseStalePrs",
-    "group:recommended"
+    "group:recommended",
+    ":semanticCommits"
   ],
-  "labels": ["renovate"],
+  "labels": [
+    "renovate"
+  ],
   "ignoreUnstable": true,
   "packageRules": [
     {
-      "matchManagers": ["gomod"],
+      "matchManagers": [
+        "gomod"
+      ],
       "groupName": "Go dependencies"
     },
     {
-      "matchManagers": ["gomod"],
-      "matchDepTypes": ["golang"],
-      "postUpdateOptions": ["gomodTidy"]
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchDepTypes": [
+        "golang"
+      ],
+      "postUpdateOptions": [
+        "gomodTidy"
+      ]
     },
     {
-      "matchManagers": ["dockerfile"],
+      "matchManagers": [
+        "dockerfile"
+      ],
       "groupName": "Docker images"
     },
     {
-      "matchManagers": ["docker-compose"],
+      "matchManagers": [
+        "docker-compose"
+      ],
       "groupName": "Docker Compose"
     },
     {
-      "matchManagers": ["github-actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
       "groupName": "GitHub Actions"
-    },
-    {
-      "matchManagers": ["npm"],
-      "groupName": "npm dependencies"
     }
   ],
   "vulnerabilityAlerts": {
     "enabled": true,
-    "labels": ["security"]
+    "labels": [
+      "security"
+    ]
   },
   "separateMinorPatch": true,
   "stopUpdatingLabel": "renovate/stop_updating"

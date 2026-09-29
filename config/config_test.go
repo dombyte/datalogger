@@ -12,7 +12,7 @@ func TestLoadConfig(t *testing.T) {
 	// Create a temporary config file
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "test_config.yaml")
-	
+
 	configContent := `
 devices:
   - name: test_device
@@ -77,7 +77,7 @@ func TestLoadConfigFileNotFound(t *testing.T) {
 func TestLoadConfigInvalidYAML(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "invalid.yaml")
-	
+
 	// Write invalid YAML
 	if err := os.WriteFile(configPath, []byte("invalid: yaml: content:"), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
@@ -97,7 +97,7 @@ func TestConfigValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "valid config",
+			name: "valid config",
 			config: &Config{
 				Devices: []Device{
 					{
@@ -107,8 +107,8 @@ func TestConfigValidate(t *testing.T) {
 						Parallelism:  1,
 						DeviceSpecific: DeviceSpecific{
 							Http: HttpConfig{
-								Address:     "http://localhost",
-								Method:      "GET",
+								Address:      "http://localhost",
+								Method:       "GET",
 								ResponseType: "json",
 							},
 						},
@@ -233,7 +233,7 @@ func TestDeviceValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "valid modbus device",
+			name: "valid modbus device",
 			device: Device{
 				Name:         "test",
 				Type:         "modbus",
@@ -372,8 +372,8 @@ func TestHttpConfigValidate(t *testing.T) {
 		{
 			name: "valid http config",
 			config: HttpConfig{
-				Address:     "http://localhost:8080",
-				Method:      "GET",
+				Address:      "http://localhost:8080",
+				Method:       "GET",
 				ResponseType: "json",
 			},
 			wantErr: false,

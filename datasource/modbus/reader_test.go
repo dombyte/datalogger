@@ -19,10 +19,10 @@ func TestParseParity(t *testing.T) {
 		parity string
 		want   uint
 	}{
-		{name: "N", parity: "N", want: 0},    // PARITY_NONE
-		{name: "empty", parity: "", want: 0}, // PARITY_NONE
-		{name: "E", parity: "E", want: 1},   // PARITY_EVEN
-		{name: "O", parity: "O", want: 2},   // PARITY_ODD
+		{name: "N", parity: "N", want: 0},       // PARITY_NONE
+		{name: "empty", parity: "", want: 0},    // PARITY_NONE
+		{name: "E", parity: "E", want: 1},       // PARITY_EVEN
+		{name: "O", parity: "O", want: 2},       // PARITY_ODD
 		{name: "invalid", parity: "X", want: 0}, // Default to PARITY_NONE
 	}
 
@@ -204,8 +204,8 @@ func TestShouldReconnect(t *testing.T) {
 func TestApplyBackoff(t *testing.T) {
 	logger := zerolog.Nop()
 	reader := &ModbusReader{
-		logger:    logger,
-		config:    config.Device{Name: "test", Type: "modbus"},
+		logger:      logger,
+		config:      config.Device{Name: "test", Type: "modbus"},
 		backoffWait: 0,
 	}
 
@@ -360,8 +360,8 @@ func TestValidateAddresses(t *testing.T) {
 			reader := &ModbusReader{
 				logger: logger,
 				config: config.Device{
-					Name: "test",
-					Type: "modbus",
+					Name:   "test",
+					Type:   "modbus",
 					Points: tt.points,
 					DeviceSpecific: config.DeviceSpecific{
 						Modbus: config.ModbusConfig{
@@ -401,10 +401,10 @@ func TestApplyScaleAndOffsetForPoint(t *testing.T) {
 	}
 
 	tests := []struct {
-		name   string
-		value  interface{}
-		point  config.Point
-		want   float64
+		name  string
+		value interface{}
+		point config.Point
+		want  float64
 	}{
 		{
 			name:  "int16 with scale",
@@ -519,10 +519,10 @@ func TestExtractValuesFromRangeData(t *testing.T) {
 	}
 
 	tests := []struct {
-		name      string
-		point     config.Point
-		want      []uint16
-		wantErr   bool
+		name    string
+		point   config.Point
+		want    []uint16
+		wantErr bool
 	}{
 		{
 			name: "single register",
@@ -696,10 +696,10 @@ func TestApplyScaleAndOffset(t *testing.T) {
 	}
 
 	tests := []struct {
-		name   string
-		value  interface{}
-		point  config.Point
-		want   float64
+		name  string
+		value interface{}
+		point config.Point
+		want  float64
 	}{
 		{
 			name:  "int16",
@@ -734,7 +734,7 @@ func TestApplyScaleAndOffset(t *testing.T) {
 // TestNewModbusReader tests creating a new ModbusReader
 func TestNewModbusReader(t *testing.T) {
 	logger := zerolog.Nop()
-	
+
 	// Test with direct mode - no ranges needed
 	deviceConfig := config.Device{
 		Name:         "test_device",
@@ -752,24 +752,24 @@ func TestNewModbusReader(t *testing.T) {
 			},
 		},
 	}
-	
+
 	// We can't test the actual NewModbusReader since it requires a real Modbus connection
 	// But we can test the struct initialization logic
 	reader := &ModbusReader{
 		config:  deviceConfig,
-		logger: logger.With().Str("datasource", "modbus").Str("device", deviceConfig.Name).Logger(),
+		logger:  logger.With().Str("datasource", "modbus").Str("device", deviceConfig.Name).Logger(),
 		points:  deviceConfig.Points,
 		regType: modbus.HOLDING_REGISTER,
 	}
-	
+
 	if reader.config.Name != "test_device" {
 		t.Errorf("config.Name = %v, want %v", reader.config.Name, "test_device")
 	}
-	
+
 	if len(reader.points) != 1 {
 		t.Errorf("len(points) = %v, want %v", len(reader.points), 1)
 	}
-	
+
 	if reader.regType != modbus.HOLDING_REGISTER {
 		t.Errorf("regType = %v, want %v", reader.regType, modbus.HOLDING_REGISTER)
 	}
@@ -782,12 +782,12 @@ func TestCreateDataPointFromValues(t *testing.T) {
 		Name: "test",
 		Type: "modbus",
 	}
-	
+
 	reader := &ModbusReader{
 		config: deviceConfig,
 		logger: logger,
 	}
-	
+
 	tests := []struct {
 		name      string
 		point     config.Point
@@ -820,33 +820,33 @@ func TestCreateDataPointFromValues(t *testing.T) {
 			wantErr:   false,
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dp, err := reader.createDataPointFromValues(tt.point, tt.values, tt.timestamp)
-			
+
 			if (err != nil) != tt.wantErr {
 				t.Errorf("createDataPointFromValues() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			
+
 			if !tt.wantErr {
 				if dp == nil {
 					t.Fatal("createDataPointFromValues() returned nil")
 				}
-				
+
 				if dp.DeviceName != "test" {
 					t.Errorf("DeviceName = %v, want %v", dp.DeviceName, "test")
 				}
-				
+
 				if dp.PointName != tt.point.Name {
 					t.Errorf("PointName = %v, want %v", dp.PointName, tt.point.Name)
 				}
-				
+
 				if tt.wantValue != 0 && dp.Value != tt.wantValue {
 					t.Errorf("Value = %v, want %v", dp.Value, tt.wantValue)
 				}
-				
+
 				if !dp.Timestamp.Equal(tt.timestamp) {
 					t.Errorf("Timestamp = %v, want %v", dp.Timestamp, tt.timestamp)
 				}
@@ -859,15 +859,15 @@ func TestCreateDataPointFromValues(t *testing.T) {
 func TestModbusLoggerAdapter(t *testing.T) {
 	logger := zerolog.Nop()
 	adapter := &modbusLoggerAdapter{logger: &logger}
-	
+
 	// Test Write method
 	testMsg := "test message\n"
 	n, err := adapter.Write([]byte(testMsg))
-	
+
 	if err != nil {
 		t.Errorf("Write() error = %v", err)
 	}
-	
+
 	if n != len(testMsg) {
 		t.Errorf("Write() n = %v, want %v", n, len(testMsg))
 	}
@@ -876,9 +876,9 @@ func TestModbusLoggerAdapter(t *testing.T) {
 // TestNewModbusLogger tests the newModbusLogger function
 func TestNewModbusLogger(t *testing.T) {
 	logger := zerolog.Nop()
-	
+
 	stdLogger := newModbusLogger(&logger)
-	
+
 	if stdLogger == nil {
 		t.Fatal("newModbusLogger() returned nil")
 	}
@@ -894,26 +894,26 @@ func TestHandlePollError(t *testing.T) {
 		},
 		logger: logger,
 	}
-	
+
 	// Initial state
 	if reader.failCount != 0 {
 		t.Errorf("Initial failCount = %v, want 0", reader.failCount)
 	}
-	
+
 	// Simulate a connection error
 	connErr := &netError{msg: "connection refused"}
 	reader.handlePollError(connErr)
-	
+
 	// After error, failCount should be 1
 	if reader.failCount != 1 {
 		t.Errorf("failCount after error = %v, want 1", reader.failCount)
 	}
-	
+
 	// backoffWait should be set
 	if reader.backoffWait == 0 {
 		t.Error("backoffWait should be set after error")
 	}
-	
+
 	// lastError should be set
 	if reader.lastError == nil {
 		t.Error("lastError should be set after error")
@@ -928,43 +928,43 @@ func TestHandlePollSuccess(t *testing.T) {
 			Name: "test",
 			Type: "modbus",
 		},
-		logger: logger,
+		logger:      logger,
 		failCount:   5,
 		backoffWait: 10 * time.Second,
 		lastError:   &netError{msg: "previous error"},
 	}
-	
+
 	// Create a test channel
 	dataCh := make(chan datasource.DataPoint, 10)
-	
+
 	// Create test data points
 	points := []datasource.DataPoint{
 		{DeviceName: "test", PointName: "p1", Value: 1.0, Timestamp: time.Now().UTC()},
 		{DeviceName: "test", PointName: "p2", Value: 2.0, Timestamp: time.Now().UTC()},
 	}
-	
+
 	reader.handlePollSuccess(points, dataCh)
-	
+
 	// After success, failure tracking should be reset
 	if reader.failCount != 0 {
 		t.Errorf("failCount after success = %v, want 0", reader.failCount)
 	}
-	
+
 	if reader.backoffWait != 0 {
 		t.Errorf("backoffWait after success = %v, want 0", reader.backoffWait)
 	}
-	
+
 	if reader.lastError != nil {
 		t.Errorf("lastError after success = %v, want nil", reader.lastError)
 	}
-	
+
 	// Check that points were sent to channel
 	close(dataCh)
 	received := 0
 	for range dataCh {
 		received++
 	}
-	
+
 	if received != len(points) {
 		t.Errorf("Received %d points from channel, want %d", received, len(points))
 	}
@@ -974,11 +974,11 @@ func TestHandlePollSuccess(t *testing.T) {
 func TestApplyBackoffMultiple(t *testing.T) {
 	logger := zerolog.Nop()
 	reader := &ModbusReader{
-		logger:    logger,
-		config:    config.Device{Name: "test", Type: "modbus"},
+		logger:      logger,
+		config:      config.Device{Name: "test", Type: "modbus"},
 		backoffWait: 0,
 	}
-	
+
 	// Test sequence of backoffs
 	expected := []time.Duration{
 		100 * time.Millisecond,
@@ -993,7 +993,7 @@ func TestApplyBackoffMultiple(t *testing.T) {
 		30 * time.Second, // max
 		30 * time.Second, // max
 	}
-	
+
 	for i, exp := range expected {
 		reader.applyBackoff()
 		if reader.backoffWait != exp {
@@ -1005,11 +1005,11 @@ func TestApplyBackoffMultiple(t *testing.T) {
 // TestReadRegistersForPoint tests the readRegistersForPoint function
 func TestReadRegistersForPoint(t *testing.T) {
 	logger := zerolog.Nop()
-	
+
 	// Create a mock client that returns predictable values
 	// Since we can't easily mock the simonvetter/modbus client, we'll test the logic with a partial reader
 	_ = logger
-	
+
 	// We can't test the actual readRegistersForPoint without a real client
 	// But we can test the parameter handling logic
 	point := config.Point{
@@ -1018,12 +1018,12 @@ func TestReadRegistersForPoint(t *testing.T) {
 		Count:    2,
 		Type:     "int16",
 	}
-	
+
 	// Verify the point parameters are correct
 	if point.Register != 100 {
 		t.Errorf("Register = %v, want %v", point.Register, 100)
 	}
-	
+
 	if point.Count != 2 {
 		t.Errorf("Count = %v, want %v", point.Count, 2)
 	}
@@ -1032,7 +1032,7 @@ func TestReadRegistersForPoint(t *testing.T) {
 // TestReadSinglePoint tests the readSinglePoint function logic
 func TestReadSinglePoint(t *testing.T) {
 	logger := zerolog.Nop()
-	
+
 	reader := &ModbusReader{
 		logger: logger,
 		config: config.Device{
@@ -1040,7 +1040,7 @@ func TestReadSinglePoint(t *testing.T) {
 			Type: "modbus",
 		},
 	}
-	
+
 	// Test with a point
 	point := config.Point{
 		Name:     "temperature",
@@ -1051,57 +1051,57 @@ func TestReadSinglePoint(t *testing.T) {
 		Offset:   0,
 		Unit:     "C",
 	}
-	
+
 	// We can't test the actual readSinglePoint without a real Modbus connection
 	// But we can test the timestamp capture and data point creation
 	timestamp := time.Now().UTC()
-	
+
 	// Test that values are extracted correctly
 	values := []uint16{100}
-	
+
 	// Manually test the decode and scaling logic
 	decodedValue, err := decodeValue(values, point.Type)
 	if err != nil {
 		t.Fatalf("decodeValue failed: %v", err)
 	}
-	
+
 	if decodedValue != int16(100) {
 		t.Errorf("decodedValue = %v, want %v", decodedValue, int16(100))
 	}
-	
+
 	// Test scaling
 	scaled := reader.applyScaleAndOffsetForPoint(decodedValue, point)
-	expectedScaled := float64(100) * point.Scale + point.Offset
+	expectedScaled := float64(100)*point.Scale + point.Offset
 	if scaled != expectedScaled {
 		t.Errorf("scaled = %v, want %v", scaled, expectedScaled)
 	}
-	
+
 	// Test createDataPointFromValues
 	dp, err := reader.createDataPointFromValues(point, values, timestamp)
 	if err != nil {
 		t.Fatalf("createDataPointFromValues failed: %v", err)
 	}
-	
+
 	if dp == nil {
 		t.Fatal("createDataPointFromValues returned nil")
 	}
-	
+
 	if dp.DeviceName != "test_device" {
 		t.Errorf("DeviceName = %v, want %v", dp.DeviceName, "test_device")
 	}
-	
+
 	if dp.PointName != "temperature" {
 		t.Errorf("PointName = %v, want %v", dp.PointName, "temperature")
 	}
-	
+
 	if dp.Value != 10.0 {
 		t.Errorf("Value = %v, want %v", dp.Value, 10.0)
 	}
-	
+
 	if dp.Unit != "C" {
 		t.Errorf("Unit = %v, want %v", dp.Unit, "C")
 	}
-	
+
 	if !dp.Timestamp.Equal(timestamp) {
 		t.Errorf("Timestamp = %v, want %v", dp.Timestamp, timestamp)
 	}
@@ -1110,7 +1110,7 @@ func TestReadSinglePoint(t *testing.T) {
 // TestStart tests the Start method
 func TestStart(t *testing.T) {
 	logger := zerolog.Nop()
-	
+
 	// Create a reader without a real client (partial initialization)
 	reader := &ModbusReader{
 		logger: logger,
@@ -1123,11 +1123,11 @@ func TestStart(t *testing.T) {
 		points:  []config.Point{},
 		regType: modbus.HOLDING_REGISTER,
 	}
-	
+
 	// We can't test Start without a real client, but we can test that it doesn't panic
 	// and returns the correct channel types
 	ctx := context.Background()
-	
+
 	// This will panic if client is nil, which is expected
 	// We're mainly testing the channel return types here
 	defer func() {
@@ -1136,19 +1136,19 @@ func TestStart(t *testing.T) {
 			t.Logf("Expected panic due to nil client: %v", r)
 		}
 	}()
-	
+
 	// Call Start - will panic due to nil client in pollLoop
 	dataCh, doneCh, errCh := reader.Start(ctx)
-	
+
 	// Verify channel types
 	if dataCh == nil {
 		t.Error("dataCh should not be nil")
 	}
-	
+
 	if doneCh == nil {
 		t.Error("doneCh should not be nil")
 	}
-	
+
 	if errCh == nil {
 		t.Error("errCh should not be nil")
 	}
@@ -1157,17 +1157,17 @@ func TestStart(t *testing.T) {
 // TestModbusReaderName tests the Name method
 func TestModbusReaderName(t *testing.T) {
 	logger := zerolog.Nop()
-	
+
 	deviceConfig := config.Device{
 		Name: "test_device",
 		Type: "modbus",
 	}
-	
+
 	reader := &ModbusReader{
 		config: deviceConfig,
 		logger: logger,
 	}
-	
+
 	if reader.Name() != "test_device" {
 		t.Errorf("Name() = %v, want %v", reader.Name(), "test_device")
 	}
@@ -1176,7 +1176,7 @@ func TestModbusReaderName(t *testing.T) {
 // TestModbusReaderValidate tests the Validate method
 func TestModbusReaderValidate(t *testing.T) {
 	logger := zerolog.Nop()
-	
+
 	deviceConfig := config.Device{
 		Name:         "test_device",
 		Type:         "modbus",
@@ -1190,12 +1190,12 @@ func TestModbusReaderValidate(t *testing.T) {
 			},
 		},
 	}
-	
+
 	reader := &ModbusReader{
 		config: deviceConfig,
 		logger: logger,
 	}
-	
+
 	// Validate should return nil for valid config
 	if err := reader.Validate(); err != nil {
 		t.Errorf("Validate() error = %v", err)
@@ -1207,7 +1207,7 @@ func TestGetRegTypeHolding(t *testing.T) {
 	points := []config.Point{
 		{Name: "p1", FunctionCode: 3},
 	}
-	
+
 	regType := getRegType(points)
 	if regType != modbus.HOLDING_REGISTER {
 		t.Errorf("getRegType() = %v, want %v", regType, modbus.HOLDING_REGISTER)
@@ -1219,7 +1219,7 @@ func TestGetRegTypeInput(t *testing.T) {
 	points := []config.Point{
 		{Name: "p1", FunctionCode: 4},
 	}
-	
+
 	regType := getRegType(points)
 	if regType != modbus.INPUT_REGISTER {
 		t.Errorf("getRegType() = %v, want %v", regType, modbus.INPUT_REGISTER)
@@ -1231,7 +1231,7 @@ func TestGetRegTypeDefault(t *testing.T) {
 	points := []config.Point{
 		{Name: "p1"}, // No function code
 	}
-	
+
 	regType := getRegType(points)
 	if regType != modbus.HOLDING_REGISTER {
 		t.Errorf("getRegType() default = %v, want %v", regType, modbus.HOLDING_REGISTER)
@@ -1243,12 +1243,12 @@ func TestDecodeValueFloat32(t *testing.T) {
 	// Test float32 decoding
 	// 0x40490fdb is the IEEE 754 representation of 3.14159
 	registers := []uint16{0x4049, 0x0fdb}
-	
+
 	value, err := decodeValue(registers, "float32")
 	if err != nil {
 		t.Fatalf("decodeValue failed: %v", err)
 	}
-	
+
 	if val, ok := value.(float32); !ok {
 		t.Errorf("Expected float32, got %T", value)
 	} else {

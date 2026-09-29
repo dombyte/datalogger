@@ -1,3 +1,19 @@
-examples/config.yaml
-examples/data.csv
-datalogger
+data/
+coverage.out
+coverage.html
+/datalogger
+/config.yaml
+*.csv
+
+# Local files from the old examples/ layout
+examples/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local deployment files (templates live in example/)
+/docker-compose.yaml
+
+# goreleaser output
+/dist/

@@ -1,0 +1,9 @@
+# Build context for the Dockerfiles: sources only. Never send local config, data or
+# build outputs to the Docker daemon.
+.git
+data/
+config.yaml
+examples/
+*.csv
+datalogger
+dist/

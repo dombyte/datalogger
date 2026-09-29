@@ -1,7 +1,7 @@
 # Datalogger Example Configuration
 # Complete reference showing all available configuration options.
 #
-# Run with: datalogger -config example_config.yaml [-debug]
+# Run with: datalogger -config config.yaml [-debug]
 
 # Devices: Define data sources
 # Each device can be of type "modbus" or "http"
