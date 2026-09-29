@@ -17,3 +17,9 @@ packages:
   github.com/dombyte/datalogger/internal/datasource/http:
     interfaces:
       Client:
+  github.com/dombyte/datalogger/internal/datasource:
+    interfaces:
+      DeviceReader:
+  github.com/dombyte/datalogger/internal/output:
+    interfaces:
+      Writer:

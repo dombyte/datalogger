@@ -141,6 +141,7 @@ func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <
 	errCh := make(chan error, 1)
 
 	go func() {
+		defer close(errCh)
 		batch := make([]*influxdb3.Point, 0, w.batchSize)
 		batchTimer := time.NewTimer(w.batchTimeout)
 		defer batchTimer.Stop()

@@ -32,7 +32,6 @@ type harness struct {
 	dialer *mocks.Dialer
 	client *mocks.Client
 	data   <-chan datasource.DataPoint
-	done   <-chan struct{}
 	cancel context.CancelFunc
 }
 
@@ -55,7 +54,7 @@ func newHarness(t *testing.T, s modbus.Settings) *harness {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel = cancel
-	h.data, h.done, _ = r.Start(ctx)
+	h.data = r.Start(ctx)
 	t.Cleanup(h.stop)
 	return h
 }
@@ -82,7 +81,8 @@ func (h *harness) receive() datasource.DataPoint {
 
 func (h *harness) stop() {
 	h.cancel()
-	<-h.done
+	for range h.data { // drain until the reader closes the channel
+	}
 }
 
 // signal returns a channel closed when a mock call runs.

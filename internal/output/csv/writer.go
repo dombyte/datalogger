@@ -102,6 +102,7 @@ func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <
 	errCh := make(chan error, 1)
 
 	go func() {
+		defer close(errCh)
 		for {
 			select {
 			case <-ctx.Done():

@@ -108,10 +108,14 @@ func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <
 	if err := w.connect(ctx); err != nil {
 		w.logger.Error().Err(err).Msg("Failed to connect to MQTT broker")
 		errCh <- err
+		close(errCh)
 		return errCh
 	}
 
-	go w.run(ctx, input)
+	go func() {
+		defer close(errCh)
+		w.run(ctx, input)
+	}()
 
 	return errCh
 }

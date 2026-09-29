@@ -18,12 +18,13 @@ type DataPoint struct {
 	Unit       string      `json:"unit"`
 }
 
-// DeviceReader is the interface that all device readers must implement.
+// DeviceReader polls one device.
 type DeviceReader interface {
-	// Name returns the device name
+	// Name returns the device name.
 	Name() string
 
-	// Start begins polling the device at its configured interval
-	// Returns channel for DataPoints, done channel, and error channel
-	Start(ctx context.Context) (<-chan DataPoint, <-chan struct{}, <-chan error)
+	// Start starts polling in the background and returns the data channel. The reader
+	// owns the channel and closes it when it stops, which happens after ctx is
+	// cancelled; it never stops on its own because of read errors.
+	Start(ctx context.Context) <-chan DataPoint
 }

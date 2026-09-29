@@ -81,10 +81,6 @@ func TestSetupLogger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := setupLogger(tt.debug)
 
-			if logger == nil {
-				t.Fatal("setupLogger returned nil")
-			}
-
 			// Check log level
 			if logger.GetLevel() != tt.logLevel {
 				t.Errorf("Log level = %v, want %v", logger.GetLevel(), tt.logLevel)

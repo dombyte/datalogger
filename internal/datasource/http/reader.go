@@ -107,27 +107,16 @@ func (r *Reader) Name() string {
 	return r.settings.Name
 }
 
-// Start starts the poll loop. The data and done channels are closed when the loop ends
-// (after ctx is cancelled). The error channel is never written.
-func (r *Reader) Start(
-	ctx context.Context,
-) (<-chan datasource.DataPoint, <-chan struct{}, <-chan error) {
+// Start starts the poll loop; the data channel is closed when the loop ends after ctx
+// is cancelled.
+func (r *Reader) Start(ctx context.Context) <-chan datasource.DataPoint {
 	dataCh := make(chan datasource.DataPoint)
-	doneCh := make(chan struct{})
-	errCh := make(chan error, 1)
-
-	go r.pollLoop(ctx, dataCh, doneCh)
-
-	return dataCh, doneCh, errCh
+	go r.pollLoop(ctx, dataCh)
+	return dataCh
 }
 
 // pollLoop polls on every tick until ctx is cancelled.
-func (r *Reader) pollLoop(
-	ctx context.Context,
-	dataCh chan<- datasource.DataPoint,
-	doneCh chan<- struct{},
-) {
-	defer close(doneCh)
+func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- datasource.DataPoint) {
 	defer close(dataCh)
 
 	ticker := r.clock.NewTicker(r.settings.PollInterval)

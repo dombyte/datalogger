@@ -108,22 +108,25 @@ Rules:
 ## 5. Data Flow and Ownership
 
 ```
-DeviceReader.Start ──dataCh (unbuffered)──▶ router goroutine (one per device)
-                                              │ non-blocking send, copy per output
-                                              ▼
-                              per-output channel (buffer_size, default 1000)
-                                              ▼
-                                     Writer.Start       (one goroutine per output)
+DeviceReader.Start ──data channel (unbuffered)──▶ router goroutine (one per device, in app)
+                                                    │ non-blocking send, copy per output
+                                                    ▼
+                                  per-output input channel (buffer_size, default 1000)
+                                                    ▼
+                                           Writer.Start (one goroutine per output)
 ```
 
-- **Readers own** their data channel and are the only senders on it. A poll sends all its
-  points after the reads are done.
+- **Readers own** their data channel: they are the only senders and close it when they
+  stop. A poll sends all its points after the reads are done.
 - **The router** sends each point to every output whose `devices` list contains the device.
   The send is **non-blocking**: if an output channel is full, the point is **dropped for
-  that output only** and a warning is logged (debug level logs the point). A slow output
-  never blocks a device or the other outputs.
+  that output only** and a warning is logged. A slow output never blocks a device or the
+  other outputs.
+- **`app` owns** the output input channels and closes them during shutdown, after all
+  routers have finished.
 - **Writers own** their external resource (file, broker connection, InfluxDB client) and
-  are the only code that writes to it.
+  are the only code that writes to it. The channel returned by `Writer.Start` is closed
+  when the writer has flushed and stopped (after an error on it, if it failed).
 - There is no shared mutable state between components; all hand-over is by channel.
 
 ---
@@ -131,36 +134,40 @@ DeviceReader.Start ──dataCh (unbuffered)──▶ router goroutine (one per 
 ## 6. Lifecycle
 
 ### Startup
-1. Parse flags, build the logger (console writer on stderr, `-debug` = debug level).
-2. `config.Load` (defaults + validation); any error ends the process (exit 1).
-3. Create readers and writers from config. **Current behaviour:** a device or output that
-   fails to construct (e.g. Modbus not reachable, MQTT broker not reachable) is logged and
-   **skipped**; the app runs without it (see Migration backlog).
-4. Start writers (output context), start readers (source context), start routing, start the
-   component monitor.
+1. `cmd/datalogger`: parse flags, build the logger (console on stderr, `-debug` = debug
+   level), log the build info, `config.Load` (defaults + validation).
+2. `app.New` creates every reader and writer (`Create*` factories in `app/factory.go`).
+   A **construction error** (an address or setting the client library rejects, a point
+   outside the Modbus ranges, an HTTP request that cannot be built) ends the process with
+   exit 1. **Connecting is not construction:** readers connect on their first poll, so a
+   device that is down at startup does not stop the others and recovers on its own.
+3. `app.Run` starts the writers, then the readers with one router each.
 
 ### Failure handling
 - Poll errors are handled inside the reader: exponential backoff (100 ms doubling, max
-  30 s), and a reconnect on connection errors, detected by type: Modbus on `net.OpError`,
-  EOF, closed connection, `ECONNRESET`, `EPIPE` (timeouts and Modbus exceptions keep the
-  connection); HTTP on every transport error (`net.Error`) and truncated bodies (status
-  and parse errors do not). A reader never exits because of read errors.
+  30 s, waited on the injected clock and cut short by shutdown), and a reconnect on
+  connection errors, detected by type: Modbus on `net.OpError`, EOF, closed connection,
+  `ECONNRESET`, `EPIPE` (the next poll dials again; timeouts and Modbus exceptions keep
+  the connection); HTTP closes idle connections on every transport error (`net.Error`)
+  and truncated bodies (status and parse errors do not). A reader never stops because of
+  read errors.
 - Write errors are handled inside the writer (InfluxDB: retries, then the batch is
   dropped and logged; MQTT/CSV: log and continue with the next point).
-- A reader or writer that **exits** while the app is not shutting down is fatal: the
-  component monitor logs it and the process exits 1; the container runtime
-  (`restart: unless-stopped`) restarts it. There is no in-process restart.
+- A reader or writer that **stops** while the app is not shutting down makes `Run`
+  return `ErrComponentStopped`; the process shuts down and exits 1, and the container
+  runtime (`restart: unless-stopped`) restarts it. There is no in-process restart.
 
-### Shutdown (two-phase)
-1. SIGINT/SIGTERM: cancel the **source** context; readers stop polling (no new data).
-2. Outputs keep running for up to **10 s** to drain their channels.
-3. Then the **output** context is cancelled; each writer drains what is left (bounded by
-   its own 10 s timeout), flushes (CSV flush/close, InfluxDB final batch, MQTT disconnect)
-   and exits.
-4. `main` waits for all writers, then exits.
+### Shutdown (producers first)
+1. SIGINT/SIGTERM cancels the signal context (`signal.NotifyContext`); `Run` returns.
+2. `Shutdown` cancels the readers; each closes its data channel, the routers finish.
+3. `app` closes the output input channels; each writer writes what is queued, flushes
+   (CSV flush/close, InfluxDB final batch, MQTT disconnect) and stops.
+4. `main` bounds all of this with one hard deadline of **8 s** (below Docker's 10 s stop
+   timeout); after it the process exits 1. There is no second-signal force mode: a
+   second signal is ignored, the deadline is the force.
 
-Producers-first ordering is deliberate and stays. The second-signal force mode is a
-deviation scheduled for removal (see Migration backlog).
+Exit codes: 0 after a clean shutdown; 1 for startup errors, a stopped component, a
+writer that failed, or a missed deadline.
 
 ---
 

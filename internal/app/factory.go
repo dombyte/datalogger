@@ -1,6 +1,8 @@
 package app
 
 import (
+	"fmt"
+
 	"github.com/rs/zerolog"
 
 	"github.com/dombyte/datalogger/internal/clock"
@@ -8,7 +10,41 @@ import (
 	"github.com/dombyte/datalogger/internal/datasource"
 	"github.com/dombyte/datalogger/internal/datasource/http"
 	"github.com/dombyte/datalogger/internal/datasource/modbus"
+	"github.com/dombyte/datalogger/internal/output"
+	"github.com/dombyte/datalogger/internal/output/csv"
+	"github.com/dombyte/datalogger/internal/output/influxdb"
+	"github.com/dombyte/datalogger/internal/output/mqtt"
 )
+
+// createReader creates the reader for a device type.
+func createReader(
+	d config.Device,
+	log zerolog.Logger,
+	clk clock.Clock,
+) (datasource.DeviceReader, error) {
+	switch d.Type {
+	case "modbus":
+		return createModbusReader(d, log, clk)
+	case "http":
+		return createHTTPReader(d, log, clk)
+	default:
+		return nil, fmt.Errorf("unknown device type %q", d.Type)
+	}
+}
+
+// createWriter creates the writer for an output type.
+func createWriter(o config.Output, log zerolog.Logger) (output.Writer, error) {
+	switch o.Type {
+	case "csv":
+		return csv.New(o, &log)
+	case "influxdb":
+		return influxdb.New(o, &log)
+	case "mqtt":
+		return mqtt.New(o, &log)
+	default:
+		return nil, fmt.Errorf("unknown output type %q", o.Type)
+	}
+}
 
 // createModbusReader maps a device config onto a Modbus reader and its dialer. An
 // error is a configuration error; an unreachable device is not one (it reconnects).

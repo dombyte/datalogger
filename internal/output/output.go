@@ -7,15 +7,15 @@ import (
 	"github.com/dombyte/datalogger/internal/datasource"
 )
 
-// Writer is the interface that all output writers must implement.
+// Writer forwards data points to one external system.
 type Writer interface {
-	// Name returns the output name
+	// Name returns the output name.
 	Name() string
 
-	// Start begins the output writer goroutine
-	// Receives DataPoints from its channel
+	// Start starts the writer in the background. It writes every point from input
+	// until input is closed, then flushes, releases its resource and closes the
+	// returned channel. An error is sent on the channel first if the writer stopped
+	// because it cannot continue. Cancelling ctx aborts early (queued points may be
+	// lost).
 	Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error
-
-	// Devices returns list of device names this output accepts
-	Devices() []string
 }
