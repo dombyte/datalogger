@@ -291,11 +291,15 @@ own `refactor/…` branch; update this list when an item is done.
 3. **Startup failures:** a device/output that cannot be constructed is skipped today. It
    should either fail startup (exit 1) or start in a recovering state and reconnect; the
    choice goes into "Design Decisions".
-4. **Config pitfalls:** implement `response_type: xml` or reject it in validation; apply or
+4. **Lifecycle per standard 4.2/4.3:** `signal.NotifyContext`, `run() int` with exit code,
+   one hard shutdown deadline, **remove the second-signal force mode**, replace the
+   sleep-polling `monitorComponents` + `logger.Fatal` with an error channel/`errgroup`
+   that makes `Run` return an error. The unused per-component `errCh` of readers goes away.
+5. **Config pitfalls:** implement `response_type: xml` or reject it in validation; apply or
    reject `scale`/`offset` on HTTP points; reject 32-bit Modbus types with `count` < 2 in
    validation (today each read fails with a decode error); default `scale` to 1 when
    omitted.
-5. **Layout:** move to `cmd/datalogger` + `internal/…` (section 3 target), with the
+6. **Layout:** move to `cmd/datalogger` + `internal/…` (section 3 target), with the
    composition root in `internal/app` and per-package `Settings` structs.
 
 ---
