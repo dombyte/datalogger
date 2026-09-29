@@ -33,10 +33,24 @@ func createReader(
 }
 
 // createWriter creates the writer for an output type.
-func createWriter(o config.Output, log zerolog.Logger) (output.Writer, error) {
+func createWriter(
+	o config.Output,
+	log zerolog.Logger,
+	clk clock.Clock,
+) (output.Writer, error) {
 	switch o.Type {
 	case "csv":
-		return csv.New(o, &log)
+		c := o.OutputSpecific.Csv
+		return csv.New(csv.Deps{
+			Settings: csv.Settings{
+				Name:       o.Name,
+				FilePath:   c.FilePath,
+				MaxAge:     c.MaxAge,
+				MaxBackups: c.MaxBackups,
+			},
+			Clock: clk,
+			Log:   log,
+		})
 	case "influxdb":
 		return influxdb.New(o, &log)
 	case "mqtt":

@@ -62,7 +62,7 @@ func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) 
 
 	outputs := make([]outputRoute, 0, len(cfg.Outputs))
 	for _, o := range cfg.Outputs {
-		w, err := createWriter(o, log)
+		w, err := createWriter(o, log, clk)
 		if err != nil {
 			return nil, fmt.Errorf("output %s: %w", o.Name, err)
 		}
