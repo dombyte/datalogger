@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
 	"github.com/dombyte/datalogger/datasource/http"
@@ -23,7 +25,6 @@ import (
 	"github.com/dombyte/datalogger/output/csv"
 	"github.com/dombyte/datalogger/output/influxdb"
 	"github.com/dombyte/datalogger/output/mqtt"
-	"github.com/rs/zerolog"
 )
 
 // Build-time variables set via -ldflags

@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/InfluxCommunity/influxdb3-go/v2/influxdb3"
+	"github.com/rs/zerolog"
+
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
-	"github.com/rs/zerolog"
 )
 
 // TestNewInfluxDBWriter tests creating a new InfluxDB writer

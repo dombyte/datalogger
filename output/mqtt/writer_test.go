@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
-	"github.com/rs/zerolog"
 )
 
 // TestParseURL tests the parseURL function
@@ -396,7 +397,7 @@ func TestParseURLReturnsURL(t *testing.T) {
 	}
 
 	// Test that we can call url methods on it
-	var _ = *parsed
+	_ = *parsed
 }
 
 // TestMQTTWriterWithDataPoint tests the writer structure with a DataPoint

@@ -12,10 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dombyte/datalogger/config"
-	"github.com/dombyte/datalogger/datasource"
 	"github.com/rs/zerolog"
 	"github.com/tidwall/gjson"
+
+	"github.com/dombyte/datalogger/config"
+	"github.com/dombyte/datalogger/datasource"
 )
 
 // HttpReader reads data from an HTTP API endpoint.

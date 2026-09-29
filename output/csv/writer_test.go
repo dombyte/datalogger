@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
-	"github.com/rs/zerolog"
 )
 
 // TestNewCSVWriter tests creating a new CSV writer
@@ -484,7 +485,7 @@ func TestCSVWriterOpenFileExisting(t *testing.T) {
 	existingContent := "timestamp,device,point,value,unit\n"
 	existingContent += "2024-01-01T12:00:00Z,device1,temp,23.5,C\n"
 
-	if err := os.WriteFile(filePath, []byte(existingContent), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte(existingContent), 0o644); err != nil {
 		t.Fatalf("Failed to create existing file: %v", err)
 	}
 
@@ -622,13 +623,13 @@ func TestCollectBackupFiles(t *testing.T) {
 	}
 
 	for _, f := range backupFiles {
-		if err := os.WriteFile(f, []byte("data"), 0644); err != nil {
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
 			t.Fatalf("Failed to create backup file: %v", err)
 		}
 	}
 
 	// Create the current file
-	if err := os.WriteFile(filePath, []byte("header"), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte("header"), 0o644); err != nil {
 		t.Fatalf("Failed to create current file: %v", err)
 	}
 
@@ -671,10 +672,10 @@ func TestDeleteOldBackups(t *testing.T) {
 	backup1 := filepath.Join(tempDir, "test.csv.1")
 	backup2 := filepath.Join(tempDir, "test.csv.2")
 
-	if err := os.WriteFile(backup1, []byte("1"), 0644); err != nil {
+	if err := os.WriteFile(backup1, []byte("1"), 0o644); err != nil {
 		t.Fatalf("Failed to create backup: %v", err)
 	}
-	if err := os.WriteFile(backup2, []byte("2"), 0644); err != nil {
+	if err := os.WriteFile(backup2, []byte("2"), 0o644); err != nil {
 		t.Fatalf("Failed to create backup: %v", err)
 	}
 
@@ -727,7 +728,7 @@ func TestDeleteAllBackups(t *testing.T) {
 
 	// Create the files
 	for _, b := range backups {
-		if err := os.WriteFile(b.path, []byte("data"), 0644); err != nil {
+		if err := os.WriteFile(b.path, []byte("data"), 0o644); err != nil {
 			t.Fatalf("Failed to create backup file: %v", err)
 		}
 	}
@@ -757,7 +758,7 @@ func TestDeleteBackupFile(t *testing.T) {
 	}
 
 	// Create a backup file
-	if err := os.WriteFile(backupPath, []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(backupPath, []byte("data"), 0o644); err != nil {
 		t.Fatalf("Failed to create backup file: %v", err)
 	}
 
@@ -789,7 +790,7 @@ func TestDeleteOldestBackups(t *testing.T) {
 	backup3 := filepath.Join(tempDir, "test.csv.3")
 
 	for _, f := range []string{backup1, backup2, backup3} {
-		if err := os.WriteFile(f, []byte("data"), 0644); err != nil {
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
 			t.Fatalf("Failed to create backup: %v", err)
 		}
 	}

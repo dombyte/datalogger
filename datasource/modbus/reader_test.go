@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dombyte/datalogger/config"
-	"github.com/dombyte/datalogger/datasource"
 	"github.com/rs/zerolog"
 	"github.com/simonvetter/modbus"
+
+	"github.com/dombyte/datalogger/config"
+	"github.com/dombyte/datalogger/datasource"
 )
 
 // TestParseParity tests the parseParity function
@@ -863,7 +864,6 @@ func TestModbusLoggerAdapter(t *testing.T) {
 	// Test Write method
 	testMsg := "test message\n"
 	n, err := adapter.Write([]byte(testMsg))
-
 	if err != nil {
 		t.Errorf("Write() error = %v", err)
 	}

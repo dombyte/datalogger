@@ -39,7 +39,7 @@ outputs:
       csv:
         file_path: "/tmp/test.csv"
 `
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
@@ -79,7 +79,7 @@ func TestLoadConfigInvalidYAML(t *testing.T) {
 	configPath := filepath.Join(tempDir, "invalid.yaml")
 
 	// Write invalid YAML
-	if err := os.WriteFile(configPath, []byte("invalid: yaml: content:"), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte("invalid: yaml: content:"), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 

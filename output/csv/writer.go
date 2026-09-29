@@ -11,9 +11,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
-	"github.com/rs/zerolog"
 )
 
 // CSVWriter writes DataPoints to a CSV file.
@@ -49,11 +50,11 @@ func NewCSVWriter(outputConfig config.Output, logger *zerolog.Logger) (*CSVWrite
 func (w *CSVWriter) openFile() error {
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(w.filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	file, err := os.OpenFile(w.filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(w.filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open file %s: %w", w.filePath, err)
 	}
@@ -288,7 +289,8 @@ func (w *CSVWriter) collectBackupFiles(files []string) []struct {
 func (w *CSVWriter) deleteOldBackups(backups []struct {
 	path  string
 	mtime time.Time
-}) {
+},
+) {
 	if w.maxBackups == 0 {
 		// Delete all backups
 		w.deleteAllBackups(backups)
@@ -303,7 +305,8 @@ func (w *CSVWriter) deleteOldBackups(backups []struct {
 func (w *CSVWriter) deleteAllBackups(backups []struct {
 	path  string
 	mtime time.Time
-}) {
+},
+) {
 	for _, backup := range backups {
 		w.deleteBackupFile(backup.path)
 	}
@@ -313,7 +316,8 @@ func (w *CSVWriter) deleteAllBackups(backups []struct {
 func (w *CSVWriter) deleteOldestBackups(backups []struct {
 	path  string
 	mtime time.Time
-}) {
+},
+) {
 	for len(backups) >= w.maxBackups {
 		oldest := backups[0]
 		w.deleteBackupFile(oldest.path)

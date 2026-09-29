@@ -11,10 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dombyte/datalogger/config"
-	"github.com/dombyte/datalogger/datasource"
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/rs/zerolog"
+
+	"github.com/dombyte/datalogger/config"
+	"github.com/dombyte/datalogger/datasource"
 )
 
 // MQTTWriter writes DataPoints to an MQTT broker.

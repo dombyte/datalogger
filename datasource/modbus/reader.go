@@ -8,14 +8,14 @@ import (
 	"log"
 	"math"
 	"strings"
-
 	"sync"
 	"time"
 
-	"github.com/dombyte/datalogger/config"
-	"github.com/dombyte/datalogger/datasource"
 	"github.com/rs/zerolog"
 	"github.com/simonvetter/modbus"
+
+	"github.com/dombyte/datalogger/config"
+	"github.com/dombyte/datalogger/datasource"
 )
 
 // modbusLoggerAdapter adapts zerolog.Logger to the standard log.Logger interface

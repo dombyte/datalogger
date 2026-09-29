@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
 	"github.com/dombyte/datalogger/output"
-	"github.com/rs/zerolog"
 )
 
 // mockOutputWriterForMap is a mock that implements the output.OutputWriter interface for testing
@@ -545,7 +546,6 @@ func TestProcessDataPoints(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-
 }
 
 // TestStartOutputWriters tests the startOutputWriters function
@@ -622,7 +622,7 @@ func TestLoadAndValidateConfig(t *testing.T) {
 
 	// Write a minimal valid config
 	configContent := "version: \"1.0\"\ndevices:\n  - name: test_device\n    type: http\n    poll_interval: 1s\n    timeout: 5s\n    parallelism: 1\n    device_specific:\n      http:\n        address: http://localhost:8080\n        method: GET\n        response_type: json\n    points:\n      - name: temp\n        json_path: temperature\n        type: float64\n        unit: C\n\noutputs:\n  - name: csv_output\n    type: csv\n    devices: [test_device]\n    output_specific:\n      csv:\n        file_path: " + filePath + "\n"
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
@@ -661,7 +661,7 @@ func TestLoadAndValidateConfigInvalidYAML(t *testing.T) {
 
 	// Write invalid YAML
 	invalidYAML := "this is not valid yaml: [[["
-	if err := os.WriteFile(configPath, []byte(invalidYAML), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(invalidYAML), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 

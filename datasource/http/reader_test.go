@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dombyte/datalogger/config"
 	"github.com/rs/zerolog"
+
+	"github.com/dombyte/datalogger/config"
 )
 
 // TestNewHttpReader tests creating a new HTTP reader
