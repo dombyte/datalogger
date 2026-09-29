@@ -17,6 +17,14 @@ import (
 	"github.com/dombyte/datalogger/datasource"
 )
 
+const (
+	dirPerm  = 0o755
+	filePerm = 0o644
+
+	// drainTimeout bounds how long the writer keeps writing queued points on shutdown.
+	drainTimeout = 10 * time.Second
+)
+
 // Writer writes DataPoints to a CSV file.
 type Writer struct {
 	config       config.Output
@@ -50,11 +58,11 @@ func New(outputConfig config.Output, logger *zerolog.Logger) (*Writer, error) {
 func (w *Writer) openFile() error {
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(w.filePath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
-	file, err := os.OpenFile(w.filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(w.filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, filePerm)
 	if err != nil {
 		return fmt.Errorf("failed to open file %s: %w", w.filePath, err)
 	}
@@ -64,7 +72,8 @@ func (w *Writer) openFile() error {
 
 	// Write header if file is empty
 	if info, err := file.Stat(); err == nil && info.Size() == 0 {
-		if err := w.writer.Write([]string{"timestamp", "device", "point", "value", "unit"}); err != nil {
+		header := []string{"timestamp", "device", "point", "value", "unit"}
+		if err := w.writer.Write(header); err != nil {
 			return fmt.Errorf("failed to write CSV header: %w", err)
 		}
 		w.writer.Flush()
@@ -111,20 +120,7 @@ func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <
 					w.file.Close()
 					return
 				}
-
-				w.logger.Debug().Str("device", dp.DeviceName).Str("point", dp.PointName).Msg("CSV writer: writing point")
-				if err := w.writePoint(dp); err != nil {
-					w.logger.Error().Err(err).Msg("Failed to write CSV point")
-					w.lastWriteErr = err
-				} else {
-					// Check if this is recovery from a previous error
-					if w.lastWriteErr != nil {
-						w.logger.Info().Str("device", dp.DeviceName).Str("point", dp.PointName).Msg("Successfully wrote CSV point (recovered from previous error)")
-					} else {
-						w.logger.Debug().Str("device", dp.DeviceName).Str("point", dp.PointName).Msg("Successfully wrote CSV point")
-					}
-					w.lastWriteErr = nil
-				}
+				w.handlePoint(dp)
 			}
 		}
 	}()
@@ -132,10 +128,29 @@ func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <
 	return errCh
 }
 
+// handlePoint writes one point and logs failures and the recovery after one.
+func (w *Writer) handlePoint(dp datasource.DataPoint) {
+	log := w.logger.With().Str("device", dp.DeviceName).Str("point", dp.PointName).Logger()
+	log.Debug().Msg("CSV writer: writing point")
+
+	if err := w.writePoint(dp); err != nil {
+		log.Error().Err(err).Msg("Failed to write CSV point")
+		w.lastWriteErr = err
+		return
+	}
+
+	if w.lastWriteErr != nil {
+		log.Info().Msg("Wrote CSV point (recovered from previous error)")
+	} else {
+		log.Debug().Msg("Successfully wrote CSV point")
+	}
+	w.lastWriteErr = nil
+}
+
 // drainAndClose drains remaining points from the input channel and closes the file.
 func (w *Writer) drainAndClose(input <-chan datasource.DataPoint) {
 	w.logger.Info().Msg("CSV writer: shutdown started, draining remaining points")
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), drainTimeout)
 	defer drainCancel()
 
 	w.logger.Info().Msg("CSV writer: draining remaining points")
@@ -151,7 +166,10 @@ func (w *Writer) drainAndClose(input <-chan datasource.DataPoint) {
 				w.file.Close()
 				return
 			}
-			w.logger.Debug().Str("device", dp.DeviceName).Str("point", dp.PointName).Msg("CSV writer: writing point")
+			w.logger.Debug().
+				Str("device", dp.DeviceName).
+				Str("point", dp.PointName).
+				Msg("CSV writer: writing point")
 			if err := w.writePoint(dp); err != nil {
 				w.logger.Error().Err(err).Msg("Failed to write CSV point")
 			}
@@ -341,8 +359,6 @@ func formatValue(v interface{}) string {
 		return strconv.FormatFloat(val, 'f', -1, 64)
 	case float32:
 		return strconv.FormatFloat(float64(val), 'f', -1, 32)
-	case int:
-		return strconv.Itoa(val)
 	case int64:
 		return strconv.FormatInt(val, 10)
 	case uint64:
