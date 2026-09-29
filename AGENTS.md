@@ -178,7 +178,7 @@ deviation scheduled for removal (see Migration backlog).
   `parity` N/E/O, `stop_bits`). `slave_id` is required.
 - **Register type** is chosen once per device from the first point with
   `function_code` 3 (holding) or 4 (input); default holding. Mixing 3 and 4 in one device
-  is not supported; use two devices.
+  is rejected by validation; use two devices.
 - **Direct mode:** one read per point (`register`, `count`, default 1). Points are read with
   up to `parallelism` concurrent requests. A failed point is logged and skipped; the rest
   of the poll is still delivered.
@@ -188,10 +188,10 @@ deviation scheduled for removal (see Migration backlog).
   **Any failed chunk fails the whole poll** (no partial data).
 - Each point's timestamp is the receive time of its data (direct: its own read; range: the
   chunk that holds its first register).
-- Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool`; value = raw × `scale` +
-  `offset`, always delivered as float64. **`scale` must be set** (use 1 for raw values):
-  an omitted scale is 0 and yields only the offset. 32-bit types need `count: 2` (high word
-  first); with `count: 1` every read of that point fails with a decode error.
+- Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool` (others are rejected by
+  validation); value = raw × `scale` + `offset`, always delivered as float64. `scale`
+  defaults to 1 (an explicit 0 is treated as unset). 32-bit types need `count: 2` (high
+  word first); a smaller count is rejected by validation.
 - Most Modbus devices handle only one request at a time: use `parallelism: 1` unless the
   device is known to support more.
 
@@ -200,9 +200,11 @@ deviation scheduled for removal (see Migration backlog).
   disables certificate verification for this device.
 - `response_type`: `json` (default; values via gjson `json_path`; `type` float*/int*/uint*/
   bool/string converts, otherwise numbers become float64 and bools stay bool) or `text`
-  (the whole body as one string). `xml` is accepted by config but **not implemented**: every
-  point fails with an error.
-- `scale` and `offset` are **ignored** for HTTP points; values are delivered as parsed.
+  (the whole body as one string); anything else is rejected by validation. JSON points
+  need a `json_path`.
+- `scale`/`offset` apply to numeric JSON values: value × scale + offset as float64. With
+  the defaults (1, 0) the value keeps its parsed type, so existing InfluxDB field types do
+  not change; bools and strings are never scaled.
 - Non-200 responses are errors. All points of one response share its receive timestamp.
 - `parallelism > 1` parses points concurrently (the request itself is one call).
 
@@ -295,11 +297,7 @@ own `refactor/…` branch; update this list when an item is done.
    one hard shutdown deadline, **remove the second-signal force mode**, replace the
    sleep-polling `monitorComponents` + `logger.Fatal` with an error channel/`errgroup`
    that makes `Run` return an error. The unused per-component `errCh` of readers goes away.
-5. **Config pitfalls:** implement `response_type: xml` or reject it in validation; apply or
-   reject `scale`/`offset` on HTTP points; reject 32-bit Modbus types with `count` < 2 in
-   validation (today each read fails with a decode error); default `scale` to 1 when
-   omitted.
-6. **Layout:** move to `cmd/datalogger` + `internal/…` (section 3 target), with the
+5. **Layout:** move to `cmd/datalogger` + `internal/…` (section 3 target), with the
    composition root in `internal/app` and per-package `Settings` structs.
 
 ---

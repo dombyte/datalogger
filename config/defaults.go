@@ -29,8 +29,15 @@ func (c *Config) applyDefaults() error {
 	return nil
 }
 
-// applyDefaults fills in the HTTP method and response type.
+// applyDefaults fills in the point scale, the HTTP method and the response type.
 func (d *Device) applyDefaults() {
+	for i := range d.Points {
+		// A scale of 0 would turn every value into the offset, so 0 means "not set".
+		if d.Points[i].Scale == 0 {
+			d.Points[i].Scale = 1
+		}
+	}
+
 	h := &d.DeviceSpecific.HTTP
 	if h.Method == "" {
 		h.Method = defaultHTTPMethod
