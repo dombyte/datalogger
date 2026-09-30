@@ -26,3 +26,7 @@ packages:
   github.com/dombyte/datalogger/internal/output/influxdb:
     interfaces:
       Client:
+  github.com/dombyte/datalogger/internal/output/mqtt:
+    interfaces:
+      Publisher:
+      Dialer:

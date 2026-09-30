@@ -54,7 +54,7 @@ func createWriter(
 	case "influxdb":
 		return createInfluxDBWriter(o, log, clk)
 	case "mqtt":
-		return mqtt.New(o, &log)
+		return createMQTTWriter(o, log, clk)
 	default:
 		return nil, fmt.Errorf("unknown output type %q", o.Type)
 	}
@@ -175,6 +175,36 @@ func createInfluxDBWriter(
 			RetryDelay:   o.RetryDelay,
 		},
 		Client: client,
+		Clock:  clk,
+		Log:    log,
+	})
+}
+
+// createMQTTWriter maps an output config onto an MQTT writer and its dialer.
+func createMQTTWriter(
+	o config.Output,
+	log zerolog.Logger,
+	clk clock.Clock,
+) (output.Writer, error) {
+	m := o.OutputSpecific.Mqtt
+	dialer, err := mqtt.NewDialer(mqtt.ConnSettings{
+		Address:  m.Address,
+		ClientID: m.ClientID,
+		Username: m.Username,
+		Password: m.Password,
+		Insecure: m.Insecure,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mqtt.New(mqtt.Deps{
+		Settings: mqtt.Settings{
+			Name:   o.Name,
+			Topic:  m.Topic,
+			QoS:    byte(m.QoS), // validated: 0-2
+			Retain: m.Retain,
+		},
+		Dialer: dialer,
 		Clock:  clk,
 		Log:    log,
 	})
