@@ -107,6 +107,7 @@ func TestConfigValidate(t *testing.T) {
 						Name:         "test",
 						Type:         "http",
 						PollInterval: 1 * time.Second,
+						Timeout:      time.Second,
 						Parallelism:  1,
 						DeviceSpecific: DeviceSpecific{
 							HTTP: HTTPConfig{
@@ -237,6 +238,7 @@ func TestDeviceValidate(t *testing.T) {
 				Name:         "test",
 				Type:         "http",
 				PollInterval: 1 * time.Second,
+				Timeout:      time.Second,
 				Parallelism:  1,
 				DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{
 					Address: "http://localhost", Method: "GET", ResponseType: "json",
@@ -251,6 +253,7 @@ func TestDeviceValidate(t *testing.T) {
 				Name:         "test",
 				Type:         "modbus",
 				PollInterval: 1 * time.Second,
+				Timeout:      time.Second,
 				Parallelism:  1,
 				DeviceSpecific: DeviceSpecific{
 					Modbus: ModbusConfig{
@@ -262,6 +265,14 @@ func TestDeviceValidate(t *testing.T) {
 				Points: []Point{{Name: "power", Register: 1, Type: "uint16", Scale: 1}},
 			},
 			wantErr: false,
+		},
+		{
+			name: "no timeout (Load fills the default)",
+			device: Device{
+				Name: "test", Type: "http", PollInterval: time.Second, Parallelism: 1,
+				Points: []Point{{Name: "temp", JSONPath: "temp"}},
+			},
+			wantErr: true,
 		},
 		{
 			name:    "empty type",
@@ -854,4 +865,19 @@ func TestApplyDefaultsScale(t *testing.T) {
 	require.NoError(t, cfg.applyDefaults())
 	assert.InDelta(t, 1.0, cfg.Devices[0].Points[0].Scale, 0)
 	assert.InDelta(t, 0.1, cfg.Devices[0].Points[1].Scale, 0)
+}
+
+// TestApplyDefaultsTimeout checks the timeout default: the poll interval, at most 10 s.
+func TestApplyDefaultsTimeout(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Devices: []Device{
+		{Name: "fast", PollInterval: 5 * time.Second},
+		{Name: "slow", PollInterval: time.Minute},
+		{Name: "set", PollInterval: time.Minute, Timeout: 2 * time.Second},
+	}}
+	require.NoError(t, cfg.applyDefaults())
+	assert.Equal(t, 5*time.Second, cfg.Devices[0].Timeout)
+	assert.Equal(t, 10*time.Second, cfg.Devices[1].Timeout)
+	assert.Equal(t, 2*time.Second, cfg.Devices[2].Timeout)
 }

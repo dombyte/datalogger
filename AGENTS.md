@@ -255,9 +255,11 @@ writer that failed, or a missed deadline.
 ### Configuration
 - One YAML file (`-config`, required); template with every option: `example/config.yaml`.
 - Device and output names must be unique; outputs may only reference existing devices;
-  every device needs at least one point; `parallelism` 1–100; `poll_interval` > 0.
-- `config.Load` reads the file, fills defaults (`applyDefaults`: HTTP method GET and
-  response type json, MQTT topic `datalogger` and client ID `logger-<random>`) and then
+  every device needs at least one point; `parallelism` 1–100; `poll_interval` > 0;
+  `timeout` > 0.
+- `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
+  poll interval, at most 10 s; point `scale` 1; HTTP method GET and response type json;
+  MQTT topic `datalogger` and client ID `logger-<random>`) and then
   runs `Validate()`, which only checks and never changes the config.
 - No environment overrides (see Deviations). Secrets (InfluxDB token, MQTT password)
   belong in the local `config.yaml` (gitignored, mounted read-only in the container),
