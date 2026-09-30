@@ -135,6 +135,20 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "no devices",
+			config:  &Config{Outputs: []Output{{Name: "out", Type: "csv"}}},
+			wantErr: true,
+		},
+		{
+			name: "no outputs",
+			config: &Config{
+				Devices: []Device{
+					{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1},
+				},
+			},
+			wantErr: true,
+		},
+		{
 			name: "duplicate device names",
 			config: &Config{
 				Devices: []Device{
