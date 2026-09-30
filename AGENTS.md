@@ -12,8 +12,8 @@ a deviation from a MUST rule of the standard is only valid if it is listed under
 "Deviations" below with its reason. When code and this file disagree, fix one of them in
 the same change.
 
-**Current state:** the code follows standard v3; known gaps would be listed under
-"Migration backlog".
+**Current state:** the code follows standard v3 except for the deviations and the open
+items listed under "Migration backlog".
 
 ---
 
@@ -305,13 +305,20 @@ is meant to stay:
 | Rule | Deviation | Reason |
 |---|---|---|
 | 5, 13: env overrides, secrets from env | Config comes only from the YAML file; no env overrides | The config is mostly lists of devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`, mounted read-only, serves as the secret file |
+| 9: every interface has a mockery mock | `clock.Clock`/`clock.Ticker` are faked by the hand-written `clocktest.Fake` | Tests need time that moves consistently across tickers and `After` (`Advance`); call expectations cannot model that, and standard 9 itself asks for a fake clock |
 
 ---
 
 ## 10. Migration Backlog
 
-The migration to standard v3 is complete. Record new gaps here, one `refactor/…` branch
-each.
+Known gaps to standard v3, one `refactor/…` branch each; update this list when an item
+is done.
+
+1. **Startup test for `cmd/datalogger`** (standard 9: wiring is covered by a startup
+   test): run `run()` against a temporary config (HTTP device on `httptest`, CSV output),
+   send SIGINT and assert exit code 0 and the written rows; plus exit 1 for a bad config
+   and for a config the client libraries reject. `cmd/datalogger` is at 27 % coverage
+   today (only flag parsing and the logger are tested).
 
 ---
 
