@@ -66,46 +66,46 @@ func parseFlags(name string, args []string, output io.Writer) (cliFlags, error) 
 	return f, nil
 }
 
-// flagsOrExit parses os.Args. ok is false when the process should end with code
-// (after -help, -version or a flag error).
-func flagsOrExit() (f cliFlags, code int, ok bool) {
-	f, err := parseFlags(filepath.Base(os.Args[0]), os.Args[1:], os.Stderr)
+// flagsOrExit parses args (with the program name first). ok is false when the process
+// should end with code (after -help, -version or a flag error).
+func flagsOrExit(args []string, stdout, stderr io.Writer) (f cliFlags, code int, ok bool) {
+	f, err := parseFlags(filepath.Base(args[0]), args[1:], stderr)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
 		return f, 0, false
 	case err != nil:
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
 		return f, 1, false
 	case f.showVersion:
-		printVersion()
+		printVersion(stdout)
 		return f, 0, false
 	}
 	return f, 0, true
 }
 
-// printVersion prints the build info.
-func printVersion() {
-	fmt.Printf("Version:    %s\n", Version)
-	fmt.Printf("Git Commit: %s\n", Commit)
-	fmt.Printf("Build Date: %s\n", BuildDate)
-	fmt.Printf("Go Version: %s\n", GoVersion)
-	fmt.Printf("OS/Arch:    %s/%s\n", runtime.GOOS, runtime.GOARCH)
+// printVersion prints the build info to w.
+func printVersion(w io.Writer) {
+	_, _ = fmt.Fprintf(w, "Version:    %s\n", Version)
+	_, _ = fmt.Fprintf(w, "Git Commit: %s\n", Commit)
+	_, _ = fmt.Fprintf(w, "Build Date: %s\n", BuildDate)
+	_, _ = fmt.Fprintf(w, "Go Version: %s\n", GoVersion)
+	_, _ = fmt.Fprintf(w, "OS/Arch:    %s/%s\n", runtime.GOOS, runtime.GOARCH)
 }
 
 func main() {
-	os.Exit(run())
+	os.Exit(run(os.Args, os.Stdout, os.Stderr))
 }
 
-// run starts the datalogger and returns the exit code: 0 after a clean shutdown, 1 if
-// startup fails, a component stops on its own, a writer fails or the shutdown deadline
-// passes.
-func run() int {
-	f, code, ok := flagsOrExit()
+// run starts the datalogger with args (program name first) and returns the exit code:
+// 0 after a clean shutdown, 1 if startup fails, a component stops on its own, a writer
+// fails or the shutdown deadline passes. It returns after SIGINT or SIGTERM.
+func run(args []string, stdout, stderr io.Writer) int {
+	f, code, ok := flagsOrExit(args, stdout, stderr)
 	if !ok {
 		return code
 	}
 
-	logger := setupLogger(f.debug)
+	logger := setupLogger(f.debug, stderr)
 	logger.Info().
 		Str("version", Version).
 		Str("commit", Commit).
@@ -152,13 +152,13 @@ func shutdown(a *app.App, runErr error, logger zerolog.Logger) int {
 	}
 }
 
-// setupLogger builds the console logger on stderr (debug level with -debug).
-func setupLogger(debug bool) zerolog.Logger {
+// setupLogger builds the console logger on out (debug level with -debug).
+func setupLogger(debug bool, out io.Writer) zerolog.Logger {
 	level := zerolog.InfoLevel
 	if debug {
 		level = zerolog.DebugLevel
 	}
-	return zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).
+	return zerolog.New(zerolog.ConsoleWriter{Out: out}).
 		Level(level).
 		With().
 		Timestamp().

@@ -79,7 +79,7 @@ func TestSetupLogger(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			logger := setupLogger(tt.debug)
+			logger := setupLogger(tt.debug, io.Discard)
 
 			// Check log level
 			if logger.GetLevel() != tt.logLevel {

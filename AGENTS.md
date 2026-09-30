@@ -12,8 +12,7 @@ a deviation from a MUST rule of the standard is only valid if it is listed under
 "Deviations" below with its reason. When code and this file disagree, fix one of them in
 the same change.
 
-**Current state:** the code follows standard v3 except for the deviations and the open
-items listed under "Migration backlog".
+**Current state:** the code follows standard v3 except for the deviations listed below.
 
 ---
 
@@ -62,7 +61,8 @@ docker compose -f docker-compose.dev.yaml up --build      # local image with ./c
 ## 3. Project Structure
 
 ```
-cmd/datalogger/          main: flags, logger, build info, config, signal context, exit code
+cmd/datalogger/          main: flags, logger, build info, config, signal context, exit code;
+                         startup test runs run() end to end (HTTP device, CSV output, SIGINT)
 internal/app/            composition root: Create* factories (config → Settings), routing,
                          Run/Shutdown
 internal/config/         Config structs (viper/mapstructure), Load() (defaults + Validate)
@@ -317,11 +317,7 @@ is meant to stay:
 Known gaps to standard v3, one `refactor/…` branch each; update this list when an item
 is done.
 
-1. **Startup test for `cmd/datalogger`** (standard 9: wiring is covered by a startup
-   test): run `run()` against a temporary config (HTTP device on `httptest`, CSV output),
-   send SIGINT and assert exit code 0 and the written rows; plus exit 1 for a bad config
-   and for a config the client libraries reject. `cmd/datalogger` is at 27 % coverage
-   today (only flag parsing and the logger are tested).
+None. Add new gaps here as they are found.
 
 ---
 
