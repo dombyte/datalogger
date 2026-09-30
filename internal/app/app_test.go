@@ -1,12 +1,9 @@
-package main
+package app
 
 import (
 	"context"
 	"errors"
-	"flag"
-	"io"
 	"net"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,9 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dombyte/datalogger/config"
-	"github.com/dombyte/datalogger/datasource"
-	"github.com/dombyte/datalogger/output"
+	"github.com/dombyte/datalogger/internal/config"
+	"github.com/dombyte/datalogger/internal/datasource"
+	"github.com/dombyte/datalogger/internal/output"
 )
 
 // mockOutputWriterForMap is a mock that implements the output.Writer interface for testing
@@ -62,41 +59,6 @@ func (w *mockOutputWriterForBuffer) Start(ctx context.Context, input <-chan data
 
 func (w *mockOutputWriterForBuffer) Devices() []string {
 	return []string{"device1"}
-}
-
-// TestSetupLogger tests the setupLogger function
-func TestSetupLogger(t *testing.T) {
-	tests := []struct {
-		name     string
-		debug    bool
-		logLevel zerolog.Level
-	}{
-		{
-			name:     "debug enabled",
-			debug:    true,
-			logLevel: zerolog.DebugLevel,
-		},
-		{
-			name:     "debug disabled",
-			debug:    false,
-			logLevel: zerolog.InfoLevel,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			logger := setupLogger(tt.debug)
-
-			if logger == nil {
-				t.Fatal("setupLogger returned nil")
-			}
-
-			// Check log level
-			if logger.GetLevel() != tt.logLevel {
-				t.Errorf("Log level = %v, want %v", logger.GetLevel(), tt.logLevel)
-			}
-		})
-	}
 }
 
 // TestMonitorDevice tests the monitorDevice function
@@ -538,65 +500,6 @@ func TestStartRouting(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
-// TestLoadAndValidateConfig tests the loadConfig function
-func TestLoadAndValidateConfig(t *testing.T) {
-	// Create a temporary config file
-	tempDir := t.TempDir()
-	configPath := tempDir + "/test.yaml"
-	filePath := tempDir + "/output.csv"
-
-	// Write a minimal valid config
-	configContent := "version: \"1.0\"\ndevices:\n  - name: test_device\n    type: http\n    poll_interval: 1s\n    timeout: 5s\n    parallelism: 1\n    device_specific:\n      http:\n        address: http://localhost:8080\n        method: GET\n        response_type: json\n    points:\n      - name: temp\n        json_path: temperature\n        type: float64\n        unit: C\n\noutputs:\n  - name: csv_output\n    type: csv\n    devices: [test_device]\n    output_specific:\n      csv:\n        file_path: " + filePath + "\n"
-	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
-		t.Fatalf("Failed to write config file: %v", err)
-	}
-
-	logger := zerolog.Nop()
-
-	// Test with valid config
-	cfg := loadConfig(configPath, &logger)
-	if cfg == nil {
-		t.Fatal("loadConfig returned nil")
-	}
-
-	if len(cfg.Devices) != 1 {
-		t.Errorf("Devices count = %d, want 1", len(cfg.Devices))
-	}
-
-	if cfg.Devices[0].Name != "test_device" {
-		t.Errorf("Device name = %v, want %v", cfg.Devices[0].Name, "test_device")
-	}
-}
-
-// TestLoadAndValidateConfigInvalidPath tests loadConfig with invalid path
-func TestLoadAndValidateConfigInvalidPath(t *testing.T) {
-	// Test with non-existent config file - should exit
-	// We can't easily test os.Exit in tests, so we'll test the Load function directly
-	// which is what loadConfig calls
-	_, err := config.Load("/nonexistent/path/to/config.yaml")
-	if err == nil {
-		t.Error("Expected error for non-existent config file")
-	}
-}
-
-// TestLoadAndValidateConfigInvalidYAML tests loadConfig with invalid YAML
-func TestLoadAndValidateConfigInvalidYAML(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := tempDir + "/invalid.yaml"
-
-	// Write invalid YAML
-	invalidYAML := "this is not valid yaml: [[["
-	if err := os.WriteFile(configPath, []byte(invalidYAML), 0o644); err != nil {
-		t.Fatalf("Failed to write config file: %v", err)
-	}
-
-	// Test Load directly
-	_, err := config.Load(configPath)
-	if err == nil {
-		t.Error("Expected error for invalid YAML")
-	}
-}
-
 // TestCreateDeviceReaders tests the createDeviceReaders function
 func TestCreateDeviceReaders(t *testing.T) {
 	logger := zerolog.Nop()
@@ -809,53 +712,5 @@ func TestRouteDeviceToOutputsNoOutputs(t *testing.T) {
 		t.Errorf("Data point was routed to output1 but shouldn't be: %v", dp)
 	default:
 		// Success - no data was routed
-	}
-}
-
-// TestParseFlags tests the parseFlags function
-// Note: This test is tricky because parseFlags uses global variables and flag.CommandLine
-// TestParseFlags tests the parseFlags function
-func TestParseFlags(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		args    []string
-		want    cliFlags
-		wantErr error
-	}{
-		{
-			name: "config and debug",
-			args: []string{"-config", "test.yaml", "-debug"},
-			want: cliFlags{configPath: "test.yaml", debug: true},
-		},
-		{
-			name: "version without config",
-			args: []string{"-version"},
-			want: cliFlags{showVersion: true},
-		},
-		{
-			name:    "missing config",
-			args:    []string{"-debug"},
-			wantErr: errConfigRequired,
-		},
-		{
-			name:    "help",
-			args:    []string{"-help"},
-			wantErr: flag.ErrHelp,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got, err := parseFlags("datalogger", tt.args, io.Discard)
-			if tt.wantErr != nil {
-				assert.ErrorIs(t, err, tt.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
 	}
 }

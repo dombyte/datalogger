@@ -10,7 +10,7 @@ RUN CGO_ENABLED=0 go build \
     -ldflags="-w -s" \
     -a \
     -installsuffix cgo \
-    -o datalogger .
+    -o datalogger ./cmd/datalogger
 
 
 FROM scratch

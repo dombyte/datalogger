@@ -60,12 +60,13 @@ docker compose -f docker-compose.dev.yaml up --build      # local image with ./c
 ## 3. Project Structure
 
 ```
-main.go                  flag parsing, logger, wiring, routing, shutdown (composition root)
-config/                  Config structs (viper/mapstructure), Load() (defaults + Validate)
-datasource/              DataPoint type, DeviceReader interface
+cmd/datalogger/          main: flags, logger, build info, config load, calls app.Run
+internal/app/            composition root: factories, routing, component monitor, shutdown
+internal/config/         Config structs (viper/mapstructure), Load() (defaults + Validate)
+internal/datasource/     DataPoint type, DeviceReader interface
   modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, backoff, reconnect
   http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text, backoff
-output/                  Writer interface
+internal/output/         Writer interface
   csv/                   CSV writer: flush per point, rotation by max_age, backup cleanup
   influxdb/              InfluxDB 3 writer: batching, retries, v3 write API
   mqtt/                  MQTT v5 writer (paho.golang): one topic per point, JSON payload
@@ -73,25 +74,17 @@ example/                 config.yaml (full reference) and docker-compose.yaml fo
 scripts/pre-commit.sh    local checks (make check)
 ```
 
-Target layout (standard 8.3), reached through the migration backlog:
-
-```
-cmd/datalogger/main.go   flags, logger, signal context, exit code only
-internal/app/            composition root: Create* factories, routing, lifecycle
-internal/config/         YAML, Validate() without side effects
-internal/datasource/     DataPoint, reader contract; modbus/, http/
-internal/output/         writer contract; csv/, influxdb/, mqtt/
-internal/<pkg>/mocks/    mockery output
-```
+Still to come (Migration backlog): `internal/<pkg>/mocks/` (mockery output).
 
 ---
 
 ## 4. Dependency Direction
 
-Current imports:
+Current imports (paths below `internal/`):
 
 ```
-main              → config, datasource, datasource/{modbus,http}, output, output/{csv,influxdb,mqtt}
+cmd/datalogger    → app, config
+app               → config, datasource, datasource/{modbus,http}, output, output/{csv,influxdb,mqtt}
 datasource/modbus → config, datasource, simonvetter/modbus
 datasource/http   → config, datasource, gjson
 output            → datasource
@@ -104,11 +97,11 @@ datasource        → stdlib only
 
 Rules:
 - Readers never import outputs and outputs never import readers; they only share
-  `datasource.DataPoint`. Routing lives in the composition root.
+  `datasource.DataPoint`. Routing lives in the composition root (`app`).
 - Reader/writer packages never import each other (`modbus` ↛ `http`, `csv` ↛ `mqtt`, …).
-- Nothing imports `main`/`internal/app`.
-- Target (standard 3.2): only the composition root imports `config`; every reader/writer
-  package declares its own `Settings` struct, mapped from config by the root.
+- Nothing imports `cmd/datalogger` or `app` (except `cmd/datalogger`).
+- Target (standard 3.2): only `app` and `cmd/datalogger` import `config`; every
+  reader/writer package declares its own `Settings` struct, mapped from config by `app`.
 
 ---
 
@@ -297,8 +290,9 @@ own `refactor/…` branch; update this list when an item is done.
    one hard shutdown deadline, **remove the second-signal force mode**, replace the
    sleep-polling `monitorComponents` + `logger.Fatal` with an error channel/`errgroup`
    that makes `Run` return an error. The unused per-component `errCh` of readers goes away.
-5. **Layout:** move to `cmd/datalogger` + `internal/…` (section 3 target), with the
-   composition root in `internal/app` and per-package `Settings` structs.
+5. **Settings structs:** reader/writer packages still import `config`; give each its own
+   `Settings` struct mapped by `app` (standard 3.2), and route by the config's device
+   lists so `Writer.Devices()` can go.
 
 ---
 

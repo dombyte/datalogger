@@ -11,8 +11,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dombyte/datalogger/config"
-	"github.com/dombyte/datalogger/datasource"
+	"github.com/dombyte/datalogger/internal/config"
+	"github.com/dombyte/datalogger/internal/datasource"
 )
 
 // TestParseURL tests the parseURL function

@@ -8,7 +8,7 @@ before:
 
 builds:
   - id: datalogger-multi-arch
-    main: .
+    main: ./cmd/datalogger
     binary: datalogger
     goos:
       - linux
