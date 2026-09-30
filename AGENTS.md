@@ -214,6 +214,9 @@ writer that failed, or a missed deadline.
   the defaults (1, 0) the value keeps its parsed type, so existing InfluxDB field types do
   not change; bools and strings are never scaled.
 - Non-200 responses are errors. All points of one response share its receive timestamp.
+- A point that cannot be extracted (e.g. its `json_path` is not in the response) is
+  skipped; it is warned about once, further failures are logged at debug, and an info
+  line follows when it can be read again.
 - `parallelism` has no effect: one request per poll, points are parsed in order.
 - A request that cannot be built (bad URL, method) fails startup; an unreachable endpoint
   does not.

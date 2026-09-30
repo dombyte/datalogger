@@ -71,6 +71,8 @@ type Reader struct {
 	logger    zerolog.Logger
 	failCount int
 	backoff   time.Duration
+
+	failedPoints map[string]bool // points whose last extraction failed
 }
 
 // New creates a Reader. It checks that a request can be built from the settings but
@@ -92,6 +94,8 @@ func New(d Deps) (*Reader, error) {
 		client:   d.Client,
 		clock:    d.Clock,
 		logger:   d.Log.With().Str("component", "http").Str("device", d.Settings.Name).Logger(),
+
+		failedPoints: make(map[string]bool),
 	}
 	if d.Settings.PollInterval <= 0 || len(d.Settings.Points) == 0 {
 		return nil, fmt.Errorf("%w: poll interval and points are required", ErrInvalidSettings)
@@ -219,9 +223,10 @@ func (r *Reader) parsePoints(body []byte, received time.Time) []datasource.DataP
 	for _, p := range r.settings.Points {
 		value, err := r.extractValue(body, p)
 		if err != nil {
-			r.logger.Warn().Str("point", p.Name).Err(err).Msg("Failed to extract value")
+			r.pointFailed(p.Name, err)
 			continue
 		}
+		r.pointFound(p.Name)
 		results = append(results, datasource.DataPoint{
 			DeviceName: r.settings.Name,
 			PointName:  p.Name,
@@ -231,6 +236,26 @@ func (r *Reader) parsePoints(body []byte, received time.Time) []datasource.DataP
 		})
 	}
 	return results
+}
+
+// pointFailed warns once per point until it can be read again; repeats go to debug, so
+// a json_path that the device never returns does not flood the log.
+func (r *Reader) pointFailed(name string, err error) {
+	if r.failedPoints[name] {
+		r.logger.Debug().Str("point", name).Err(err).Msg("Failed to extract value")
+		return
+	}
+	r.failedPoints[name] = true
+	r.logger.Warn().Str("point", name).Err(err).
+		Msg("Failed to extract value; further failures of this point are logged at debug")
+}
+
+// pointFound logs at info when a point that failed before can be read again.
+func (r *Reader) pointFound(name string) {
+	if r.failedPoints[name] {
+		delete(r.failedPoints, name)
+		r.logger.Info().Str("point", name).Msg("Value can be extracted again")
+	}
 }
 
 // handlePollError logs the error, grows the backoff and drops idle connections after a
