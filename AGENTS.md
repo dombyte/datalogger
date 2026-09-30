@@ -12,9 +12,8 @@ a deviation from a MUST rule of the standard is only valid if it is listed under
 "Deviations" below with its reason. When code and this file disagree, fix one of them in
 the same change.
 
-**Current state:** the code predates standard v3. The gaps are listed under
-"Migration backlog"; new code follows the standard, and existing code is migrated in
-dedicated `refactor/` branches (with user confirmation), not inside feature work.
+**Current state:** the code follows standard v3; known gaps would be listed under
+"Migration backlog".
 
 ---
 
@@ -43,6 +42,7 @@ golangci-lint run --config .golangci.yml                  # full linter set from
 go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./... # unused exported code
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...     # known vulnerabilities
 go test -race ./...                                       # all unit tests, as in CI
+go run github.com/vektra/mockery/v2@v2.53.7               # regenerate mocks (.mockery.yaml)
 make build                                                # ./datalogger with version info (ldflags)
 ./datalogger -config config.yaml [-debug]                 # run; -version prints build info
 docker compose -f docker-compose.dev.yaml up --build      # local image with ./config.yaml, ./data
@@ -52,56 +52,64 @@ docker compose -f docker-compose.dev.yaml up --build      # local image with ./c
 - Release: push a `vX.Y.Z` tag on `main`; `release.yml` runs the checks, then goreleaser
   (`.goreleaser.yaml`) builds archives and `ghcr.io/dombyte/datalogger` images
   (linux/amd64, arm64, arm/v7).
-- There is no mockery setup yet (see Migration backlog); once added, mocks are generated
-  with `go run github.com/vektra/mockery/v2@v2.53.7` and checked for drift in CI.
+- Mocks: every interface is listed in `.mockery.yaml`; the output in `<pkg>/mocks` is never
+  edited by hand, and CI fails when it differs from a fresh generation. Tests that use a
+  package's mocks are black-box tests (`package <pkg>_test`), because the mocks import
+  the package.
 
 ---
 
 ## 3. Project Structure
 
 ```
-cmd/datalogger/          main: flags, logger, build info, config load, calls app.Run
-internal/app/            composition root: factories, routing, component monitor, shutdown
+cmd/datalogger/          main: flags, logger, build info, config, signal context, exit code
+internal/app/            composition root: Create* factories (config → Settings), routing,
+                         Run/Shutdown
 internal/config/         Config structs (viper/mapstructure), Load() (defaults + Validate)
+internal/clock/          Clock interface (Now, tickers, After) + Sleep; clocktest/ fake
 internal/datasource/     DataPoint type, DeviceReader interface
-  modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, backoff, reconnect
-  http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text, backoff
+  modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, reconnect
+  http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text
 internal/output/         Writer interface
-  csv/                   CSV writer: flush per point, rotation by max_age, backup cleanup
+  csv/                   CSV writer: flush per row, rotation by max_age, backup cleanup
   influxdb/              InfluxDB 3 writer: batching, retries, v3 write API
   mqtt/                  MQTT v5 writer (paho.golang): one topic per point, JSON payload
+internal/**/mocks/       mockery output
 example/                 config.yaml (full reference) and docker-compose.yaml for users
 scripts/pre-commit.sh    local checks (make check)
 ```
 
-Still to come (Migration backlog): `internal/<pkg>/mocks/` (mockery output).
+Each reader/writer package has its own `Settings` (and `Point`) struct, a `Deps` struct
+validated by `New` (`ErrMissingDependency`), small interfaces for its client (`Client`,
+`Dialer`, `Publisher`) and a constructor for the real client (`NewDialer`, `NewClient`).
+Constructors never connect.
 
 ---
 
 ## 4. Dependency Direction
 
-Current imports (paths below `internal/`):
+Imports (paths below `internal/`):
 
 ```
-cmd/datalogger    → app, config
-app               → config, datasource, datasource/{modbus,http}, output, output/{csv,influxdb,mqtt}
-datasource/modbus → config, datasource, simonvetter/modbus
-datasource/http   → config, datasource, gjson
+cmd/datalogger    → app, clock, config
+app               → clock, config, datasource{,/modbus,/http}, output{,/csv,/influxdb,/mqtt}
+datasource/modbus → clock, datasource, simonvetter/modbus
+datasource/http   → clock, datasource, gjson
 output            → datasource
-output/csv        → config, datasource
-output/influxdb   → config, datasource, influxdb3-go
-output/mqtt       → config, datasource, paho.golang
+output/csv        → clock, datasource
+output/influxdb   → clock, datasource, influxdb3-go
+output/mqtt       → clock, datasource, paho.golang
 config            → viper
-datasource        → stdlib only
+clock, datasource → stdlib only
 ```
 
 Rules:
+- Only `app` and `cmd/datalogger` import `config`; `app` maps config onto each package's
+  `Settings`.
 - Readers never import outputs and outputs never import readers; they only share
-  `datasource.DataPoint`. Routing lives in the composition root (`app`).
+  `datasource.DataPoint`. Routing lives in `app`.
 - Reader/writer packages never import each other (`modbus` ↛ `http`, `csv` ↛ `mqtt`, …).
-- Nothing imports `cmd/datalogger` or `app` (except `cmd/datalogger`).
-- Target (standard 3.2): only `app` and `cmd/datalogger` import `config`; every
-  reader/writer package declares its own `Settings` struct, mapped from config by `app`.
+- Nothing but `cmd/datalogger` imports `app`.
 
 ---
 
@@ -206,20 +214,28 @@ writer that failed, or a missed deadline.
   the defaults (1, 0) the value keeps its parsed type, so existing InfluxDB field types do
   not change; bools and strings are never scaled.
 - Non-200 responses are errors. All points of one response share its receive timestamp.
-- `parallelism > 1` parses points concurrently (the request itself is one call).
+- `parallelism` has no effect: one request per poll, points are parsed in order.
+- A request that cannot be built (bad URL, method) fails startup; an unreachable endpoint
+  does not.
 
 ### InfluxDB 3 writer
 - Schema: measurement = device name, tags `point` and `unit` (unit omitted when empty),
   one field `value`, timestamp = reading time. The README documents queries on this
   schema; changing it is a breaking change (`!`).
-- Batching: `batch_size` (default 10000) or `batch_timeout` (default 1 s), whichever comes
-  first. Retries: `max_retries` (default 3) with `retry_delay` (default 1 s); after that the
-  batch is dropped and logged.
+- Batching: a full `batch_size` (default 10000) is written at once, a partial batch every
+  `batch_timeout` (default 1 s). Retries: `max_retries` (default 3) with `retry_delay`
+  (default 1 s); after that the batch is dropped and logged. The last batch is written
+  when the input is closed on shutdown. The client does not connect at startup.
 - Uses the v3 write API; gzip above 1000 bytes; `insecure` skips certificate checks.
 
 ### MQTT writer
-- Broker `address` `tcp://`, `tls://`/`ssl://` (scheme defaults to tcp); `insecure` wraps in
-  TLS without verification. MQTT v5, keep-alive 30 s, clean start.
+- Broker `address` `tcp://`/`mqtt://` or `tls://`/`ssl://`/`mqtts://` (no scheme = tcp;
+  other schemes fail at startup). TLS verifies the broker certificate against the host
+  name; `insecure` uses TLS without verification (also for `tcp://`). MQTT v5, keep-alive
+  30 s, clean start, 10 s connect timeout.
+- Connects on the first point and reconnects after a publish error or a lost connection,
+  with backoff (1 s doubling to 30 s). Points that arrive while no connection is possible
+  are **dropped**; the count is logged on the next successful connect.
 - Topic: `<topic>/<device>/<point>` (`topic` default `datalogger`); payload
   `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}`; `qos` 0–2, `retain`.
 - `client_id` defaults to `logger-<8 random chars>`; username/password are optional.
@@ -228,9 +244,11 @@ writer that failed, or a missed deadline.
 ### CSV writer
 - Columns: `timestamp` (RFC3339Nano), `device`, `point`, `value`, `unit`; header written
   when the file is empty. Every point is flushed immediately.
-- Rotation: when the file is older than `max_age`, it is renamed to
-  `<file>.<YYYYMMDD-HHMMSS>` and a new file is started. `max_backups`: 0 = keep none,
-  > 0 = keep that many, < 0 = keep all.
+- Rotation: when the file is older than `max_age` (checked after each row), it is renamed
+  to `<file>.<YYYYMMDD-HHMMSS>` and a new file is started. `max_backups`: 0 = keep none,
+  > 0 = keep that many, < 0 = keep all; only files with exactly that name pattern are
+  ever deleted.
+- A path that cannot be opened fails startup.
 - The directory is created if missing. In the container, write below `/app/data`
   (mounted from `./data`).
 
@@ -253,8 +271,14 @@ writer that failed, or a missed deadline.
   stalled output must not stop polling or starve other outputs. Tune with `buffer_size`.
 - **Receive-time timestamps in UTC:** readings are stamped when the device answered, so
   slow polls do not shift data; UTC matches InfluxDB and keeps CSV unambiguous.
-- **Two-phase shutdown:** sources stop first, outputs drain afterwards, so no reading that
-  was already taken is lost on a normal stop.
+- **Producers-first shutdown:** sources stop first, outputs drain afterwards, so no reading
+  that was already taken is lost on a normal stop. One hard deadline (8 s, below Docker's
+  10 s) bounds it; a slow final InfluxDB retry can use most of it.
+- **Soft vs. hard startup failures:** components connect lazily and retry, so one device
+  or broker that is down does not stop the others; settings a client library rejects are
+  configuration errors and fail startup, where they are noticed at once.
+- **Drop while an output is disconnected (MQTT):** buffering in memory for an unbounded
+  outage would only move the loss; the dropped count is logged instead.
 - **Exit on component death:** a reader/writer that ends unexpectedly is a bug or an
   unrecoverable state; exiting 1 and letting the container restart the process is simpler
   and safer than restarting single components in-process.
@@ -281,36 +305,22 @@ is meant to stay:
 
 ## 10. Migration Backlog
 
-Known gaps between the current code and standard v3, in suggested order. Each item is its
-own `refactor/…` branch; update this list when an item is done.
-
-1. **Dependency injection for clients:** Modbus, HTTP, InfluxDB and MQTT clients are created
-   inside the packages. Declare small client interfaces in each package, create the real
-   clients in `Create*` factories, add mockery mocks and testify-based tests.
-2. **Injected `Clock`:** replace `time.Now`, `time.Sleep` (backoff) and `time.After` in loops
-   with an injected clock; backoff waits must also stop on context cancel (today
-   `time.Sleep` delays shutdown by up to 30 s).
-3. **Startup failures:** a device/output that cannot be constructed is skipped today. It
-   should either fail startup (exit 1) or start in a recovering state and reconnect; the
-   choice goes into "Design Decisions".
-4. **Lifecycle per standard 4.2/4.3:** `signal.NotifyContext`, `run() int` with exit code,
-   one hard shutdown deadline, **remove the second-signal force mode**, replace the
-   sleep-polling `monitorComponents` + `logger.Fatal` with an error channel/`errgroup`
-   that makes `Run` return an error. The unused per-component `errCh` of readers goes away.
-5. **Settings structs:** reader/writer packages still import `config`; give each its own
-   `Settings` struct mapped by `app` (standard 3.2), and route by the config's device
-   lists so `Writer.Devices()` can go.
+The migration to standard v3 is complete. Record new gaps here, one `refactor/…` branch
+each.
 
 ---
 
 ## 11. Adding a Device or Output Type
 
-1. New package under `datasource/<type>` or `output/<type>` implementing the reader or
-   writer contract; its own settings struct and small interfaces for its client.
+1. New package under `internal/datasource/<type>` or `internal/output/<type>` implementing
+   the reader or writer contract: `Settings`, `Deps` checked in `New`, small interfaces
+   for its client (listed in `.mockery.yaml`), the injected `clock.Clock` for any waiting,
+   and no connecting in the constructor.
 2. Config: add the type-specific struct under `DeviceSpecific`/`OutputSpecific`, its
    validation, and a commented example in `example/config.yaml`.
-3. Composition root: add the `case` to the factory. Nothing else may reference the new
-   package.
+3. Composition root: add the `case` and a `create…` function in `internal/app/factory.go`
+   that maps config onto `Settings` and creates the real client. Nothing else may
+   reference the new package.
 4. Behaviour: document timestamps, error/backoff behaviour and any public format (topics,
    columns, schema) in section 7.
 5. Tests with mocks/fakes only (no real device, broker or DB); an optional integration test
