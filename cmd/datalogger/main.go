@@ -4,17 +4,22 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"syscall"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/dombyte/datalogger/internal/app"
+	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/config"
 )
 
@@ -27,6 +32,10 @@ var (
 	BuildDate = "unknown"
 	GoVersion = "unknown"
 )
+
+// shutdownTimeout is the hard deadline for the whole shutdown; it stays below the
+// 10 s Docker waits before it kills the container.
+const shutdownTimeout = 8 * time.Second
 
 // errConfigRequired is returned when -config is missing.
 var errConfigRequired = errors.New("-config flag is required")
@@ -57,20 +66,21 @@ func parseFlags(name string, args []string, output io.Writer) (cliFlags, error) 
 	return f, nil
 }
 
-// mustParseFlags parses os.Args; -version, -help and flag errors end the process.
-func mustParseFlags() cliFlags {
+// flagsOrExit parses os.Args. ok is false when the process should end with code
+// (after -help, -version or a flag error).
+func flagsOrExit() (f cliFlags, code int, ok bool) {
 	f, err := parseFlags(filepath.Base(os.Args[0]), os.Args[1:], os.Stderr)
 	switch {
 	case errors.Is(err, flag.ErrHelp):
-		os.Exit(0)
+		return f, 0, false
 	case err != nil:
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return f, 1, false
 	case f.showVersion:
 		printVersion()
-		os.Exit(0)
+		return f, 0, false
 	}
-	return f
+	return f, 0, true
 }
 
 // printVersion prints the build info.
@@ -83,7 +93,18 @@ func printVersion() {
 }
 
 func main() {
-	f := mustParseFlags()
+	os.Exit(run())
+}
+
+// run starts the datalogger and returns the exit code: 0 after a clean shutdown, 1 if
+// startup fails, a component stops on its own, a writer fails or the shutdown deadline
+// passes.
+func run() int {
+	f, code, ok := flagsOrExit()
+	if !ok {
+		return code
+	}
+
 	logger := setupLogger(f.debug)
 	logger.Info().
 		Str("version", Version).
@@ -92,32 +113,54 @@ func main() {
 		Str("go_version", GoVersion).
 		Msg("Starting datalogger")
 
-	cfg := loadConfig(f.configPath, logger)
-	app.Run(cfg, logger)
-	logger.Info().Msg("Shutdown complete")
+	cfg, err := config.Load(f.configPath)
+	if err != nil {
+		logger.Error().Err(err).Msg("Failed to load config")
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	a, err := app.New(cfg, logger, clock.Real{})
+	if err != nil {
+		logger.Error().Err(err).Msg("Startup failed")
+		return 1
+	}
+	runErr := a.Run(ctx)
+	if runErr != nil {
+		logger.Error().Err(runErr).Msg("Stopping after a component failure")
+	}
+	return shutdown(a, runErr, logger)
 }
 
-// setupLogger sets up the zerolog logger.
-func setupLogger(debug bool) *zerolog.Logger {
+// shutdown runs a.Shutdown with the hard deadline and returns the exit code.
+func shutdown(a *app.App, runErr error, logger zerolog.Logger) int {
+	done := make(chan error, 1)
+	go func() { done <- a.Shutdown() }()
+
+	select {
+	case err := <-done:
+		if err != nil || runErr != nil {
+			return 1
+		}
+		logger.Info().Msg("Shutdown complete")
+		return 0
+	case <-time.After(shutdownTimeout):
+		logger.Error().Dur("timeout", shutdownTimeout).Msg("Shutdown deadline exceeded")
+		return 1
+	}
+}
+
+// setupLogger builds the console logger on stderr (debug level with -debug).
+func setupLogger(debug bool) zerolog.Logger {
 	level := zerolog.InfoLevel
 	if debug {
 		level = zerolog.DebugLevel
 	}
-
-	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).
+	return zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).
 		Level(level).
 		With().
 		Timestamp().
 		Logger()
-
-	return &logger
-}
-
-// loadConfig loads, completes and validates the configuration file.
-func loadConfig(configPath string, logger *zerolog.Logger) *config.Config {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to load config")
-	}
-	return cfg
 }

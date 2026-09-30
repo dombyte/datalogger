@@ -27,6 +27,12 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Mocks up to date
+        run: |
+          go run github.com/vektra/mockery/v2@v2.53.7
+          git diff --exit-code
+          test -z "$(git status --porcelain)"
+
       - name: Test (race)
         run: go test -race -cover ./...
 

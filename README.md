@@ -12,6 +12,21 @@ Configuration is done via YAML file (passed with `-config` flag). See [example/c
 
 **Output types:** InfluxDB 3.x, MQTT, CSV
 
+## Running
+
+```bash
+datalogger -config config.yaml [-debug]   # -version prints the build info
+```
+
+- Devices and outputs connect in the background: one that is unreachable at startup (or
+  later) is retried with backoff and does not stop the others. Settings that cannot work
+  at all (for example an unsupported address scheme) stop the program at startup.
+- SIGINT/SIGTERM stop the devices first, then every output writes what is queued; this
+  is bounded by 8 seconds.
+- Exit code 0 after a clean stop, 1 on configuration or startup errors, when a component
+  stops unexpectedly, or when the shutdown takes too long. Run it with a restart policy
+  (for example `restart: unless-stopped` in Docker Compose).
+
 ## InfluxDB 3.x Schema Design
 
 ### Schema Structure

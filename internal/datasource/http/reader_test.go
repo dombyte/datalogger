@@ -1,639 +1,228 @@
-package http
+package http_test
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
-	"net/http"
+	nethttp "net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/dombyte/datalogger/internal/config"
+	"github.com/dombyte/datalogger/internal/clock/clocktest"
+	"github.com/dombyte/datalogger/internal/datasource"
+	"github.com/dombyte/datalogger/internal/datasource/http"
+	"github.com/dombyte/datalogger/internal/datasource/http/mocks"
 )
 
-// TestNewHttpReader tests creating a new HTTP reader
-func TestNewHttpReader(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name:         "test_http",
-		Type:         "http",
-		PollInterval: time.Second,
-		Timeout:      5 * time.Second,
-		Parallelism:  1,
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      "http://localhost:8080",
-				Method:       "GET",
-				ResponseType: "json",
-			},
-		},
-		Points: []config.Point{
-			{Name: "temp", JSONPath: "temperature", Type: "float64"},
-		},
-	}
+const interval = time.Second
 
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
+var start = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 
-	if reader == nil {
-		t.Fatal("Reader is nil")
-	}
+type harness struct {
+	t      *testing.T
+	clock  *clocktest.Fake
+	data   <-chan datasource.DataPoint
+	cancel context.CancelFunc
+}
 
-	if reader.Name() != "test_http" {
-		t.Errorf("Name() = %v, want %v", reader.Name(), "test_http")
+func settings(address string, points ...http.Point) http.Settings {
+	return http.Settings{
+		Name: "meter", PollInterval: interval, Address: address,
+		Method: "GET", ResponseType: "json", Points: points,
 	}
 }
 
-// TestHttpReaderName tests the Name method
-func TestHttpReaderName(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name: "my_http_device",
-		Type: "http",
-	}
+func newHarness(t *testing.T, s http.Settings, client http.Client) *harness {
+	t.Helper()
+	h := &harness{t: t, clock: clocktest.NewFake(start)}
+	r, err := http.New(http.Deps{Settings: s, Client: client, Clock: h.clock, Log: zerolog.Nop()})
+	require.NoError(t, err)
 
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	h.data = r.Start(ctx)
+	t.Cleanup(h.stop)
+	return h
+}
 
-	if reader.Name() != "my_http_device" {
-		t.Errorf("Name() = %v, want %v", reader.Name(), "my_http_device")
+func (h *harness) stop() {
+	h.cancel()
+	for range h.data { // drain until the reader closes the channel
 	}
 }
 
-// TestHttpReaderStart tests the Start method
-func TestHttpReaderStart(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name:         "test_http",
-		Type:         "http",
-		PollInterval: 100 * time.Millisecond,
-		Timeout:      5 * time.Second,
-		Parallelism:  1,
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      "http://localhost:8080",
-				Method:       "GET",
-				ResponseType: "json",
-			},
-		},
-		Points: []config.Point{
-			{Name: "temp", JSONPath: "temperature", Type: "float64"},
-		},
-	}
+func (h *harness) advance(n int, d time.Duration) {
+	h.t.Helper()
+	require.Eventually(h.t, func() bool { return h.clock.Waiters() >= n },
+		time.Second, time.Millisecond)
+	h.clock.Advance(d)
+}
 
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	dataCh, doneCh, errCh := reader.Start(ctx)
-
-	if dataCh == nil {
-		t.Fatal("dataCh is nil")
-	}
-
-	if doneCh == nil {
-		t.Fatal("doneCh is nil")
-	}
-
-	if errCh == nil {
-		t.Fatal("errCh is nil")
-	}
-
-	cancel()
-
+func (h *harness) receive() datasource.DataPoint {
+	h.t.Helper()
 	select {
-	case <-doneCh:
-		// Success
-	case <-time.After(1 * time.Second):
-		t.Error("Timeout waiting for done channel")
+	case dp := <-h.data:
+		return dp
+	case <-time.After(time.Second):
+		h.t.Fatal("no data point")
+		return datasource.DataPoint{}
 	}
 }
 
-// TestCreateRequest tests the createRequest method
-func TestCreateRequest(t *testing.T) {
-	logger := zerolog.Nop()
-
-	tests := []struct {
-		name       string
-		httpConfig config.HTTPConfig
-		wantMethod string
-	}{
-		{
-			name: "GET request",
-			httpConfig: config.HTTPConfig{
-				Address: "http://localhost:8080/api",
-				Method:  "GET",
-			},
-			wantMethod: "GET",
-		},
-		{
-			name: "POST request",
-			httpConfig: config.HTTPConfig{
-				Address: "http://localhost:8080/api",
-				Method:  "POST",
-				Body:    `{"key": "value"}`,
-			},
-			wantMethod: "POST",
-		},
-		{
-			name: "GET request with default method",
-			httpConfig: config.HTTPConfig{
-				Address: "http://localhost:8080/api",
-			},
-			wantMethod: "GET",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			deviceConfig := config.Device{
-				Name: "test",
-				Type: "http",
-				DeviceSpecific: config.DeviceSpecific{
-					HTTP: tt.httpConfig,
-				},
-			}
-
-			reader, err := New(deviceConfig, &logger)
-			if err != nil {
-				t.Fatalf("Failed to create HTTP reader: %v", err)
-			}
-
-			req, err := reader.createRequest()
-			if err != nil {
-				t.Fatalf("createRequest() error = %v", err)
-			}
-
-			if req.Method != tt.wantMethod {
-				t.Errorf("Method = %v, want %v", req.Method, tt.wantMethod)
-			}
-		})
-	}
-}
-
-// TestExtractJSONValue tests JSON value extraction
-func TestExtractJSONValue(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name: "test",
-		Type: "http",
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      "http://localhost:8080",
-				Method:       "GET",
-				ResponseType: "json",
-			},
-		},
-	}
-
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	tests := []struct {
-		name    string
-		body    string
-		point   config.Point
-		want    interface{}
-		wantErr bool
-	}{
-		{
-			name:    "simple json float",
-			body:    `{"temperature": 23.5}`,
-			point:   config.Point{Name: "temp", JSONPath: "temperature", Type: "float64"},
-			want:    float64(23.5),
-			wantErr: false,
-		},
-		{
-			name:    "nested json",
-			body:    `{"sensor": {"temperature": 25.0}}`,
-			point:   config.Point{Name: "temp", JSONPath: "sensor.temperature", Type: "float64"},
-			want:    float64(25.0),
-			wantErr: false,
-		},
-		{
-			name:    "json array",
-			body:    `{"values": [1, 2, 3]}`,
-			point:   config.Point{Name: "val", JSONPath: "values.1", Type: "int64"},
-			want:    int64(2),
-			wantErr: false,
-		},
-		{
-			name:    "json bool",
-			body:    `{"enabled": true}`,
-			point:   config.Point{Name: "enabled", JSONPath: "enabled", Type: "bool"},
-			want:    true,
-			wantErr: false,
-		},
-		{
-			name:    "json string",
-			body:    `{"name": "test"}`,
-			point:   config.Point{Name: "name", JSONPath: "name", Type: "string"},
-			want:    "test",
-			wantErr: false,
-		},
-		{
-			name: "scale and offset on an int",
-			body: `{"power": 1500}`,
-			point: config.Point{
-				Name: "power", JSONPath: "power", Type: "int64", Scale: 0.001, Offset: 1,
-			},
-			want: float64(2.5),
-		},
-		{
-			name:  "scale leaves bools alone",
-			body:  `{"enabled": true}`,
-			point: config.Point{Name: "enabled", JSONPath: "enabled", Type: "bool", Scale: 10},
-			want:  true,
-		},
-		{
-			name:    "missing json path",
-			body:    `{"temperature": 23.5}`,
-			point:   config.Point{Name: "temp", JSONPath: "missing", Type: "float64"},
-			want:    nil,
-			wantErr: true,
-		},
-		{
-			name:    "empty json path",
-			body:    `{"temperature": 23.5}`,
-			point:   config.Point{Name: "temp", JSONPath: "", Type: "float64"},
-			want:    nil,
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.point.Scale == 0 {
-				tt.point.Scale = 1 // the config default
-			}
-			got, err := reader.extractJSONValue([]byte(tt.body), tt.point)
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-// TestReadAllPointsWithServer tests reading points from a real HTTP server
-func TestReadAllPointsWithServer(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		response := map[string]interface{}{
-			"temperature": 23.5,
-			"humidity":    60.0,
-		}
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer server.Close()
-
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name:         "test",
-		Type:         "http",
-		PollInterval: time.Second,
-		Timeout:      5 * time.Second,
-		Parallelism:  1,
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      server.URL,
-				Method:       "GET",
-				ResponseType: "json",
-			},
-		},
-		Points: []config.Point{
-			{Name: "temp", JSONPath: "temperature", Type: "float64", Unit: "C"},
-			{Name: "humidity", JSONPath: "humidity", Type: "float64", Unit: "%"},
-		},
-	}
-
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	ctx := context.Background()
-	points, err := reader.readAllPoints(ctx)
-	if err != nil {
-		t.Fatalf("readAllPoints() error = %v", err)
-	}
-
-	if len(points) != 2 {
-		t.Errorf("readAllPoints() returned %d points, want 2", len(points))
-	}
-
-	for _, p := range points {
-		if p.Timestamp.Location() != time.UTC {
-			t.Errorf("Timestamp should be in UTC, got location: %v", p.Timestamp.Location())
-		}
-	}
-}
-
-// TestReadAllPointsError tests error handling in readAllPoints
-func TestReadAllPointsError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name:         "test",
-		Type:         "http",
-		PollInterval: time.Second,
-		Timeout:      5 * time.Second,
-		Parallelism:  1,
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      server.URL,
-				Method:       "GET",
-				ResponseType: "json",
-			},
-		},
-		Points: []config.Point{
-			{Name: "temp", JSONPath: "temperature", Type: "float64"},
-		},
-	}
-
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	ctx := context.Background()
-	_, err = reader.readAllPoints(ctx)
-	if err == nil {
-		t.Error("readAllPoints() expected error for HTTP 500")
-	}
-}
-
-// TestReadAllPointsTimeout tests timeout handling
-func TestReadAllPointsTimeout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(1 * time.Second)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name:         "test",
-		Type:         "http",
-		PollInterval: time.Second,
-		Timeout:      50 * time.Millisecond,
-		Parallelism:  1,
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      server.URL,
-				Method:       "GET",
-				ResponseType: "json",
-			},
-		},
-		Points: []config.Point{
-			{Name: "temp", JSONPath: "temperature", Type: "float64"},
-		},
-	}
-
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	ctx := context.Background()
-	_, err = reader.readAllPoints(ctx)
-	if err == nil {
-		t.Error("readAllPoints() expected timeout error")
-	}
-}
-
-// TestTextResponseType tests handling of text response type
-func TestTextResponseType(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name: "test",
-		Type: "http",
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      "http://localhost:8080",
-				Method:       "GET",
-				ResponseType: "text",
-			},
-		},
-		Points: []config.Point{
-			{Name: "text", JSONPath: "", Type: "string"},
-		},
-	}
-
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	body := []byte("Hello, World!")
-	timestamp := time.Now().UTC()
-
-	results, err := reader.parsePointsSequential(body, timestamp)
-	if err != nil {
-		t.Fatalf("parsePointsSequential() error = %v", err)
-	}
-
-	if len(results) != 1 {
-		t.Errorf("Expected 1 result, got %d", len(results))
-	}
-
-	if results[0].Value != "Hello, World!" {
-		t.Errorf("Value = %v, want %v", results[0].Value, "Hello, World!")
-	}
-}
-
-// TestParsePointsParallel tests the parsePointsParallel function
-func TestParsePointsParallel(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name:         "test",
-		Type:         "http",
-		PollInterval: time.Second,
-		Timeout:      5 * time.Second,
-		Parallelism:  2, // Enable parallelism
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      "http://localhost:8080",
-				Method:       "GET",
-				ResponseType: "json",
-			},
-		},
-		Points: []config.Point{
-			{Name: "temp", JSONPath: "temperature", Type: "float64"},
-			{Name: "humidity", JSONPath: "humidity", Type: "float64"},
-			{Name: "pressure", JSONPath: "pressure", Type: "float64"},
-		},
-	}
-
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	body := []byte(`{"temperature": 23.5, "humidity": 60.0, "pressure": 1013.25}`)
-	timestamp := time.Now().UTC()
-
-	results, err := reader.parsePointsParallel(body, timestamp)
-	if err != nil {
-		t.Fatalf("parsePointsParallel() error = %v", err)
-	}
-
-	if len(results) != 3 {
-		t.Errorf("Expected 3 results, got %d", len(results))
-	}
-
-	// Check that all points have the same timestamp
-	for _, result := range results {
-		if !result.Timestamp.Equal(timestamp) {
-			t.Errorf("Timestamp mismatch for point %s", result.PointName)
-		}
-	}
-}
-
-// TestMarshalJSON tests the MarshalJSON method
-func TestMarshalJSON(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name: "test_json",
-		Type: "http",
-	}
-
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	jsonBytes, err := reader.MarshalJSON()
-	if err != nil {
-		t.Fatalf("MarshalJSON() error = %v", err)
-	}
-
-	// Check that the JSON contains the expected name
-	if !strings.Contains(string(jsonBytes), "test_json") {
-		t.Errorf("MarshalJSON() should contain device name, got: %s", string(jsonBytes))
-	}
-
-	// Check that it's valid JSON
-	var result map[string]interface{}
-	if err := json.Unmarshal(jsonBytes, &result); err != nil {
-		t.Errorf("MarshalJSON() produced invalid JSON: %v", err)
-	}
-
-	if result["name"] != "test_json" {
-		t.Errorf("JSON name = %v, want %v", result["name"], "test_json")
-	}
-}
-
-// TestPollLoopShutdown tests that pollLoop can be shut down
-func TestPollLoopShutdown(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name:         "test",
-		Type:         "http",
-		PollInterval: 100 * time.Millisecond,
-		Timeout:      5 * time.Second,
-		Parallelism:  1,
-		DeviceSpecific: config.DeviceSpecific{
-			HTTP: config.HTTPConfig{
-				Address:      "http://localhost:8080",
-				Method:       "GET",
-				ResponseType: "json",
-			},
-		},
-		Points: []config.Point{
-			{Name: "temp", JSONPath: "temperature", Type: "float64"},
-		},
-	}
-
-	reader, err := New(deviceConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create HTTP reader: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	defer cancel()
-
-	dataCh, doneCh, _ := reader.Start(ctx)
-
-	// Wait for a short time to ensure the poll loop has started
-	time.Sleep(200 * time.Millisecond)
-
-	// The poll loop should be running and will exit when ctx is done
-	// We can't easily verify the loop is running, but we can check it exits cleanly
-
-	// Drain the data channel
+func (h *harness) expectNothing() {
+	h.t.Helper()
 	select {
-	case <-dataCh:
-		// Got data (might happen if there's a server)
-	default:
-		// No data yet (expected since we don't have a real server)
-	}
-
-	// The test will complete when ctx times out
-	// The poll loop should exit cleanly
-
-	select {
-	case <-doneCh:
-		// Success - poll loop exited
-	case <-time.After(2 * time.Second):
-		t.Error("Timeout waiting for poll loop to exit")
+	case dp := <-h.data:
+		h.t.Fatalf("unexpected data point %v", dp)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
-// TestShouldReconnect checks that only transport errors trigger a new client.
-func TestShouldReconnect(t *testing.T) {
+func server(t *testing.T, handler nethttp.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestNewChecksDependencies(t *testing.T) {
 	t.Parallel()
+	point := http.Point{Name: "p", JSONPath: "p", Scale: 1}
 
-	urlErr := &url.Error{Op: "Get", URL: "http://device", Err: syscall.ECONNREFUSED}
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "nil", err: nil, want: false},
-		{name: "transport error", err: urlErr, want: true},
-		{name: "wrapped transport error", err: fmt.Errorf("poll: %w", urlErr), want: true},
-		{name: "truncated body", err: io.ErrUnexpectedEOF, want: true},
-		{name: "status error", err: errors.New("HTTP error: 500"), want: false},
-		{name: "string mentioning connection", err: errors.New("connection"), want: false},
-	}
+	_, err := http.New(http.Deps{Settings: settings("http://x", point), Clock: clocktest.NewFake(start)})
+	assert.ErrorIs(t, err, http.ErrMissingDependency)
 
-	r := &Reader{}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, tt.want, r.shouldReconnect(tt.err))
-		})
-	}
+	_, err = http.New(http.Deps{Settings: settings("http://x", point), Client: mocks.NewClient(t)})
+	assert.ErrorIs(t, err, http.ErrMissingDependency)
+
+	bad := settings("http://x", point)
+	bad.Method = "BAD METHOD"
+	_, err = http.New(http.Deps{
+		Settings: bad, Client: mocks.NewClient(t),
+		Clock: clocktest.NewFake(start),
+	})
+	assert.ErrorIs(t, err, http.ErrInvalidSettings)
+
+	_, err = http.New(http.Deps{
+		Settings: settings("http://x"), Client: mocks.NewClient(t),
+		Clock: clocktest.NewFake(start),
+	})
+	assert.ErrorIs(t, err, http.ErrInvalidSettings, "no points")
+}
+
+func TestPollsJSONWithHeadersAndBody(t *testing.T) {
+	t.Parallel()
+	srv := server(t, func(w nethttp.ResponseWriter, r *nethttp.Request) {
+		body, _ := io.ReadAll(r.Body)
+		assert.Equal(t, nethttp.MethodPost, r.Method)
+		assert.Equal(t, `{"id":1}`, string(body))
+		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		assert.Equal(t, "Bearer x", r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{"power": 1500, "missing_is_skipped": null}`))
+	})
+	s := settings(srv.URL,
+		http.Point{Name: "power", JSONPath: "power", Scale: 0.001, Unit: "kW"},
+		http.Point{Name: "gone", JSONPath: "nope", Scale: 1},
+	)
+	s.Method, s.Body = "POST", `{"id":1}`
+	s.Headers = map[string]string{"Authorization": "Bearer x"}
+	h := newHarness(t, s, http.NewClient(time.Second, false))
+
+	h.advance(1, interval)
+	assert.Equal(t, datasource.DataPoint{
+		DeviceName: "meter", PointName: "power", Value: 1.5,
+		Timestamp: start.Add(interval), Unit: "kW",
+	}, h.receive())
+	h.expectNothing()
+}
+
+func TestTextResponse(t *testing.T) {
+	t.Parallel()
+	srv := server(t, func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		_, _ = w.Write([]byte("OK 42"))
+	})
+	s := settings(srv.URL, http.Point{Name: "status", Scale: 1})
+	s.ResponseType = "text"
+	h := newHarness(t, s, http.NewClient(time.Second, false))
+
+	h.advance(1, interval)
+	assert.Equal(t, "OK 42", h.receive().Value)
+}
+
+func TestStatusErrorBacksOffAndRecovers(t *testing.T) {
+	t.Parallel()
+	calls := make(chan int, 2)
+	var n atomic.Int32
+	status := []int{nethttp.StatusInternalServerError, nethttp.StatusOK}
+	srv := server(t, func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		code := status[n.Add(1)-1]
+		calls <- code
+		w.WriteHeader(code)
+		_, _ = w.Write([]byte(`{"v": 1}`))
+	})
+	// A mock-free client: a status error must not close connections either way.
+	h := newHarness(t, settings(srv.URL, http.Point{Name: "v", JSONPath: "v", Scale: 1}),
+		http.NewClient(time.Second, false))
+
+	h.advance(1, interval)
+	assert.Equal(t, nethttp.StatusInternalServerError, <-calls)
+	h.expectNothing()
+
+	h.advance(1, interval)
+	h.advance(2, 100*time.Millisecond) // backoff
+	assert.Equal(t, "v", h.receive().PointName)
+}
+
+func TestTransportErrorClosesIdleConnections(t *testing.T) {
+	t.Parallel()
+	client := mocks.NewClient(t)
+	refused := &url.Error{Op: "Get", URL: "http://device", Err: syscall.ECONNREFUSED}
+	client.EXPECT().Do(mock.Anything).Return(nil, refused).Once()
+	closed := make(chan struct{})
+	client.EXPECT().CloseIdleConnections().Run(func() { close(closed) }).Once()
+
+	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
+		client)
+	h.advance(1, interval)
+	<-closed
+	h.stop()
+}
+
+func TestStatusErrorKeepsConnections(t *testing.T) {
+	t.Parallel()
+	client := mocks.NewClient(t)
+	done := make(chan struct{})
+	client.EXPECT().Do(mock.Anything).RunAndReturn(
+		func(*nethttp.Request) (*nethttp.Response, error) {
+			defer close(done)
+			return &nethttp.Response{
+				StatusCode: nethttp.StatusServiceUnavailable,
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}).Once()
+	// CloseIdleConnections is not expected: the mock fails the test if it is called.
+
+	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
+		client)
+	h.advance(1, interval)
+	<-done
+	h.stop()
+}
+
+func TestStopClosesChannels(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
+		mocks.NewClient(t))
+	h.stop()
+	_, open := <-h.data
+	assert.False(t, open)
 }

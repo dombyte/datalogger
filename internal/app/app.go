@@ -1,427 +1,206 @@
 // Package app is the composition root: it creates readers and writers from the
-// config, routes data points between them and runs the two-phase shutdown.
+// config, routes data points between them and runs the producers-first shutdown.
 package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
-	"time"
+	"sync/atomic"
 
 	"github.com/rs/zerolog"
 
+	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/config"
 	"github.com/dombyte/datalogger/internal/datasource"
-	"github.com/dombyte/datalogger/internal/datasource/http"
-	"github.com/dombyte/datalogger/internal/datasource/modbus"
 	"github.com/dombyte/datalogger/internal/output"
-	"github.com/dombyte/datalogger/internal/output/csv"
-	"github.com/dombyte/datalogger/internal/output/influxdb"
-	"github.com/dombyte/datalogger/internal/output/mqtt"
 )
 
-const (
-	// drainTimeout is how long outputs may drain after the sources stopped.
-	drainTimeout = 10 * time.Second
+// defaultBufferSize is the output channel size when buffer_size is not set.
+const defaultBufferSize = 1000
 
-	// defaultBufferSize is the output channel size when buffer_size is not set.
-	defaultBufferSize = 1000
+// ErrComponentStopped is returned by Run when a reader or writer stops on its own.
+var ErrComponentStopped = errors.New("app: component stopped unexpectedly")
 
-	// monitorInterval is how often the component monitor checks for exited components.
-	monitorInterval = 1 * time.Second
-
-	// signalBuffer holds a second signal that arrives during the drain phase.
-	signalBuffer = 2
-)
-
-// Run starts all readers and writers, routes the data and blocks until the two-phase
-// shutdown triggered by SIGINT/SIGTERM has finished.
-func Run(cfg *config.Config, logger *zerolog.Logger) {
-	// Separate contexts for two-phase shutdown: stop sources first, then outputs
-	sourceCtx, sourceCancel := context.WithCancel(context.Background())
-	outputCtx, outputCancel := context.WithCancel(context.Background())
-	defer outputCancel()
-	defer sourceCancel()
-
-	sigChan := make(chan os.Signal, signalBuffer)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go handleSignals(sigChan, sourceCancel, outputCancel, logger)
-
-	deviceChannels, deviceDoneChannels := startDeviceReaders(sourceCtx, cfg, logger)
-	outputWriters, outputChannels, outputDoneChannels := startOutputWriters(outputCtx, cfg, logger)
-
-	// The monitor ends the process if a component exits outside of a shutdown.
-	go monitorComponents(deviceDoneChannels, outputDoneChannels, sourceCtx, outputCtx, logger)
-
-	startRouting(deviceChannels, outputWriters, outputChannels, logger)
-	logger.Info().Msg("Datalogger started successfully")
-
-	// Wait for the output context to be cancelled (by the signal handler)
-	<-outputCtx.Done()
-	waitForOutputs(outputDoneChannels, logger)
+// outputRoute is a writer with the devices it accepts and its input buffer size.
+type outputRoute struct {
+	writer     output.Writer
+	devices    []string
+	bufferSize int
 }
 
-// waitForOutputs blocks until every output writer has finished its cleanup.
-func waitForOutputs(outputDoneChannels map[string]<-chan struct{}, logger *zerolog.Logger) {
-	logger.Info().Msg("Waiting for output writers to finish cleanup...")
-	for name, doneCh := range outputDoneChannels {
-		<-doneCh
-		logger.Info().Str("output", name).Msg("Output writer cleanup complete")
-	}
+// App runs all readers and writers of one config.
+type App struct {
+	readers []datasource.DeviceReader
+	outputs []outputRoute
+	log     zerolog.Logger
+
+	cancelSources context.CancelFunc
+	cancelOutputs context.CancelFunc
+	inputs        []chan datasource.DataPoint
+	routers       sync.WaitGroup
+	writers       sync.WaitGroup
+	stopping      atomic.Bool
+
+	mu        sync.Mutex
+	writerErr error
 }
 
-// handleSignals runs the two-phase shutdown: the first signal stops the sources, then
-// the outputs are cancelled after drainTimeout or on a second signal.
-func handleSignals(
-	sigChan <-chan os.Signal,
-	sourceCancel, outputCancel context.CancelFunc,
-	logger *zerolog.Logger,
-) {
-	<-sigChan
-	logger.Info().Msg("Shutdown signal received")
-
-	// Phase 1: Stop data sources (no new data will be polled)
-	logger.Info().Msg("Stopping data sources...")
-	sourceCancel()
-	logger.Info().Msg("Data sources stopped")
-
-	// Phase 2: Give outputs up to drainTimeout to drain their buffers
-	logger.Info().Dur("timeout", drainTimeout).Msg("Waiting for outputs to drain...")
-	select {
-	case <-time.After(drainTimeout):
-		logger.Info().Msg("Shutdown timeout reached, cancelling outputs")
-	case <-sigChan:
-		logger.Info().Msg("Second shutdown signal received, forcing immediate exit")
-	}
-	outputCancel()
-	logger.Info().Msg("Outputs cancelled, waiting for cleanup...")
-}
-
-// startDeviceReaders starts all device readers and returns their data and done channels.
-func startDeviceReaders(
-	ctx context.Context,
-	cfg *config.Config,
-	logger *zerolog.Logger,
-) (map[string]<-chan datasource.DataPoint, map[string]<-chan struct{}) {
-	deviceReaders := createDeviceReaders(cfg, logger)
-	deviceChannels := make(map[string]<-chan datasource.DataPoint)
-	deviceDoneChannels := make(map[string]<-chan struct{})
-
-	for _, reader := range deviceReaders {
-		dataCh, doneCh, errCh := reader.Start(ctx)
-		deviceChannels[reader.Name()] = dataCh
-		deviceDoneChannels[reader.Name()] = doneCh
-		go monitorDevice(reader.Name(), doneCh, errCh, logger)
-	}
-
-	return deviceChannels, deviceDoneChannels
-}
-
-// startOutputWriters starts all output writers and returns the writers, their input
-// channels and their done channels.
-func startOutputWriters(
-	ctx context.Context,
-	cfg *config.Config,
-	logger *zerolog.Logger,
-) ([]output.Writer, map[string]chan<- datasource.DataPoint, map[string]<-chan struct{}) {
-	outputWriters := createOutputWriters(cfg, logger)
-	outputChannels := make(map[string]chan<- datasource.DataPoint)
-	outputDoneChannels := make(map[string]<-chan struct{})
-
-	for _, writer := range outputWriters {
-		bufferSize := writerBufferSize(writer, cfg)
-		ch := make(chan datasource.DataPoint, bufferSize)
-		outputChannels[writer.Name()] = ch
-
-		// Create a done channel for this writer
-		doneCh := make(chan struct{})
-		outputDoneChannels[writer.Name()] = doneCh
-
-		go startWriterGoroutineWithDone(ctx, writer, ch, doneCh, logger)
-	}
-
-	return outputWriters, outputChannels, outputDoneChannels
-}
-
-// startWriterGoroutineWithDone starts a single output writer goroutine with a done channel.
-func startWriterGoroutineWithDone(
-	ctx context.Context,
-	writer output.Writer,
-	ch <-chan datasource.DataPoint,
-	doneCh chan<- struct{},
-	logger *zerolog.Logger,
-) {
-	var once sync.Once
-	closeDone := func() {
-		once.Do(func() { close(doneCh) })
-	}
-
-	// Start the writer in a goroutine
-	go func() {
-		if err := <-writer.Start(ctx, ch); err != nil {
-			logger.Error().Err(err).Str("output", writer.Name()).Msg("Output writer failed")
+// New creates every reader and writer of cfg. An error means the config cannot be run
+// (for example an address the client library rejects); devices and brokers that are
+// unreachable are not an error, the components connect in the background.
+func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) {
+	readers := make([]datasource.DeviceReader, 0, len(cfg.Devices))
+	for _, d := range cfg.Devices {
+		r, err := createReader(d, log, clk)
+		if err != nil {
+			return nil, fmt.Errorf("device %s: %w", d.Name, err)
 		}
-		closeDone()
-	}()
-
-	// Also close doneCh if context is cancelled (in case writer.Start doesn't return)
-	go func() {
-		<-ctx.Done()
-		closeDone()
-	}()
-}
-
-// startRouting sets up routing from device channels to output channels.
-func startRouting(
-	deviceChannels map[string]<-chan datasource.DataPoint,
-	outputWriters []output.Writer,
-	outputChannels map[string]chan<- datasource.DataPoint,
-	logger *zerolog.Logger,
-) {
-	for deviceName, deviceCh := range deviceChannels {
-		go routeDeviceToOutputs(deviceName, deviceCh, outputWriters, outputChannels, logger)
-	}
-}
-
-// createDeviceReaders creates device readers based on the configuration.
-func createDeviceReaders(cfg *config.Config, logger *zerolog.Logger) []datasource.DeviceReader {
-	var readers []datasource.DeviceReader
-
-	for _, deviceConfig := range cfg.Devices {
-		reader := createSingleDeviceReader(&deviceConfig, logger)
-		if reader != nil {
-			readers = append(readers, reader)
-		}
+		readers = append(readers, r)
 	}
 
-	return readers
-}
-
-// createSingleDeviceReader creates a single device reader from a config.
-func createSingleDeviceReader(
-	deviceConfig *config.Device,
-	logger *zerolog.Logger,
-) datasource.DeviceReader {
-	var reader datasource.DeviceReader
-	var err error
-
-	switch deviceConfig.Type {
-	case "modbus":
-		reader, err = modbus.New(*deviceConfig, logger)
-	case "http":
-		reader, err = http.New(*deviceConfig, logger)
-	default:
-		logger.Error().
-			Str("device", deviceConfig.Name).
-			Str("type", deviceConfig.Type).
-			Msg("Unknown device type")
-		return nil
-	}
-
-	if err != nil {
-		logger.Error().Err(err).
-			Str("device", deviceConfig.Name).
-			Msg("Failed to create device reader")
-		return nil
-	}
-
-	return reader
-}
-
-// createOutputWriters creates output writers based on the configuration.
-func createOutputWriters(cfg *config.Config, logger *zerolog.Logger) []output.Writer {
-	var writers []output.Writer
-
-	for _, outputConfig := range cfg.Outputs {
-		writer := createSingleOutputWriter(&outputConfig, logger)
-		if writer != nil {
-			writers = append(writers, writer)
-		}
-	}
-
-	return writers
-}
-
-// createSingleOutputWriter creates a single output writer from a config.
-func createSingleOutputWriter(
-	outputConfig *config.Output,
-	logger *zerolog.Logger,
-) output.Writer {
-	writer, err := createOutputWriterByType(outputConfig, logger)
-	if err != nil {
-		logger.Error().Err(err).
-			Str("output", outputConfig.Name).
-			Msg("Failed to create output writer")
-		return nil
-	}
-
-	return writer
-}
-
-// createOutputWriterByType creates an output writer based on its type.
-func createOutputWriterByType(
-	outputConfig *config.Output,
-	logger *zerolog.Logger,
-) (output.Writer, error) {
-	switch outputConfig.Type {
-	case "influxdb":
-		return influxdb.New(*outputConfig, logger)
-	case "mqtt":
-		return mqtt.New(*outputConfig, logger)
-	case "csv":
-		return csv.New(*outputConfig, logger)
-	default:
-		return nil, fmt.Errorf("unknown output type: %s", outputConfig.Type)
-	}
-}
-
-// writerBufferSize returns the buffer size for an output writer.
-func writerBufferSize(w output.Writer, cfg *config.Config) int {
-	// Check if the output has a specific buffer size
+	outputs := make([]outputRoute, 0, len(cfg.Outputs))
 	for _, o := range cfg.Outputs {
-		if o.Name == w.Name() {
-			if o.BufferSize > 0 {
-				return o.BufferSize
-			}
+		w, err := createWriter(o, log, clk)
+		if err != nil {
+			return nil, fmt.Errorf("output %s: %w", o.Name, err)
 		}
+		bufferSize := o.BufferSize
+		if bufferSize <= 0 {
+			bufferSize = defaultBufferSize
+		}
+		outputs = append(outputs, outputRoute{
+			writer: w, devices: o.Devices, bufferSize: bufferSize,
+		})
 	}
-	return defaultBufferSize
+
+	return newApp(readers, outputs, log), nil
 }
 
-// monitorDevice monitors a device reader for completion or errors.
-func monitorDevice(
-	deviceName string,
-	doneCh <-chan struct{},
-	errCh <-chan error,
-	logger *zerolog.Logger,
-) {
+// newApp wires already created components; tests use it with mocks.
+func newApp(readers []datasource.DeviceReader, outputs []outputRoute, log zerolog.Logger) *App {
+	return &App{
+		readers: readers,
+		outputs: outputs,
+		log:     log.With().Str("component", "app").Logger(),
+	}
+}
+
+// Run starts all components and blocks until ctx is cancelled (nil) or a component
+// stops on its own (ErrComponentStopped). Call Shutdown afterwards in both cases.
+func (a *App) Run(ctx context.Context) error {
+	sourceCtx, cancelSources := context.WithCancel(context.Background())
+	outputCtx, cancelOutputs := context.WithCancel(context.Background())
+	a.cancelSources, a.cancelOutputs = cancelSources, cancelOutputs
+
+	failed := make(chan error, len(a.readers)+len(a.outputs))
+	inputs := a.startWriters(outputCtx, failed)
+	a.startReaders(sourceCtx, inputs, failed)
+	a.log.Info().Int("devices", len(a.readers)).Int("outputs", len(a.outputs)).
+		Msg("Datalogger started")
+
 	select {
-	case <-doneCh:
-		logger.Debug().Str("device", deviceName).Msg("Device reader completed")
-	case err, ok := <-errCh:
-		if ok {
-			logger.Error().Err(err).Str("device", deviceName).Msg("Device reader error")
-		}
+	case <-ctx.Done():
+		a.log.Info().Msg("Shutdown signal received")
+		return nil
+	case err := <-failed:
+		return err
 	}
 }
 
-// monitorComponents monitors all device and output done channels.
-// If a component exits unexpectedly (outside of shutdown), it logs a fatal error.
-// During shutdown (when sourceCtx or outputCtx is cancelled), component exits are expected.
-func monitorComponents(
-	deviceDoneChannels map[string]<-chan struct{},
-	outputDoneChannels map[string]<-chan struct{},
-	sourceCtx context.Context,
-	outputCtx context.Context,
-	logger *zerolog.Logger,
-) {
-	for {
-		select {
-		case <-sourceCtx.Done():
-			// Shutdown in progress, device exits are expected
-			return
-		case <-outputCtx.Done():
-			// Shutdown in progress, output exits are expected
-			return
-		default:
-			exitIfAnyDone(deviceDoneChannels, "device", "Device reader exited unexpectedly", logger)
-			exitIfAnyDone(outputDoneChannels, "output", "Output writer exited unexpectedly", logger)
-			time.Sleep(monitorInterval)
-		}
+// Shutdown stops the readers first, lets the writers drain what is queued and waits
+// for them to finish. It returns the errors of writers that failed. The caller bounds
+// it with a deadline.
+func (a *App) Shutdown() error {
+	a.stopping.Store(true)
+	a.log.Info().Msg("Stopping data sources")
+	a.cancelSources()
+	a.routers.Wait()
+
+	a.log.Info().Msg("Draining outputs")
+	for _, in := range a.inputs {
+		close(in)
 	}
+	a.writers.Wait()
+	a.cancelOutputs()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.writerErr
 }
 
-// exitIfAnyDone ends the process if one of the done channels is closed.
-func exitIfAnyDone(
-	doneChannels map[string]<-chan struct{},
-	kind, msg string,
-	logger *zerolog.Logger,
-) {
-	for name, doneCh := range doneChannels {
-		select {
-		case <-doneCh:
-			logger.Fatal().Str(kind, name).Msg(msg)
-		default:
-		}
-	}
-}
-
-// routeDeviceToOutputs routes all DataPoints from a device to all relevant output channels.
-// This ensures each output receives a copy of every DataPoint, preventing data loss
-// when multiple outputs are configured.
-func routeDeviceToOutputs(
-	deviceName string,
-	deviceCh <-chan datasource.DataPoint,
-	outputWriters []output.Writer,
-	outputChannels map[string]chan<- datasource.DataPoint,
-	logger *zerolog.Logger,
-) {
-	deviceOutputs := buildDeviceOutputMap(deviceName, outputWriters, outputChannels)
-	if len(deviceOutputs) == 0 {
-		return
-	}
-
-	processDataPoints(deviceCh, deviceOutputs, logger)
-}
-
-// buildDeviceOutputMap builds a map of output channels that accept data from a specific device.
-func buildDeviceOutputMap(
-	deviceName string,
-	outputWriters []output.Writer,
-	outputChannels map[string]chan<- datasource.DataPoint,
+// startWriters starts every writer and returns its input channels by name. A writer
+// that stops before Shutdown closed its input is reported on failed.
+func (a *App) startWriters(
+	ctx context.Context,
+	failed chan<- error,
 ) map[string]chan<- datasource.DataPoint {
-	deviceOutputs := make(map[string]chan<- datasource.DataPoint)
-	for _, writer := range outputWriters {
-		for _, acceptedDevice := range writer.Devices() {
-			if acceptedDevice == deviceName {
-				deviceOutputs[writer.Name()] = outputChannels[writer.Name()]
-				break
+	inputs := make(map[string]chan<- datasource.DataPoint, len(a.outputs))
+	for _, o := range a.outputs {
+		in := make(chan datasource.DataPoint, o.bufferSize)
+		a.inputs = append(a.inputs, in)
+		inputs[o.writer.Name()] = in
+
+		done := o.writer.Start(ctx, in)
+		a.writers.Add(1)
+		go a.watchWriter(o.writer.Name(), done, failed)
+	}
+	return inputs
+}
+
+// watchWriter waits for a writer to finish and records why it stopped.
+func (a *App) watchWriter(name string, done <-chan error, failed chan<- error) {
+	defer a.writers.Done()
+
+	var err error
+	for e := range done {
+		err = errors.Join(err, e)
+	}
+	if err != nil {
+		a.log.Error().Err(err).Str("output", name).Msg("Output writer failed")
+		a.mu.Lock()
+		a.writerErr = errors.Join(a.writerErr, fmt.Errorf("output %s: %w", name, err))
+		a.mu.Unlock()
+	}
+	if !a.stopping.Load() {
+		failed <- fmt.Errorf("%w: output %s", ErrComponentStopped, name)
+	}
+}
+
+// startReaders starts every reader with a router that copies its points to the
+// outputs that list the device.
+func (a *App) startReaders(
+	ctx context.Context,
+	inputs map[string]chan<- datasource.DataPoint,
+	failed chan<- error,
+) {
+	for _, r := range a.readers {
+		targets := a.targets(r.Name(), inputs)
+		data := r.Start(ctx)
+		a.routers.Add(1)
+		go func() {
+			defer a.routers.Done()
+			route(data, targets, a.log)
+			if ctx.Err() == nil {
+				failed <- fmt.Errorf("%w: device %s", ErrComponentStopped, r.Name())
+			}
+		}()
+	}
+}
+
+// targets returns the input channels of the outputs that accept the device.
+func (a *App) targets(
+	device string,
+	inputs map[string]chan<- datasource.DataPoint,
+) map[string]chan<- datasource.DataPoint {
+	targets := make(map[string]chan<- datasource.DataPoint)
+	for _, o := range a.outputs {
+		for _, d := range o.devices {
+			if d == device {
+				targets[o.writer.Name()] = inputs[o.writer.Name()]
 			}
 		}
 	}
-	return deviceOutputs
-}
-
-// processDataPoints processes data points and sends them to the appropriate output channels.
-func processDataPoints(
-	deviceCh <-chan datasource.DataPoint,
-	deviceOutputs map[string]chan<- datasource.DataPoint,
-	logger *zerolog.Logger,
-) {
-	for dp := range deviceCh {
-		sendDataPointToOutputs(dp, deviceOutputs, logger)
-	}
-}
-
-// sendDataPointToOutputs sends a data point to all configured outputs.
-func sendDataPointToOutputs(
-	dp datasource.DataPoint,
-	deviceOutputs map[string]chan<- datasource.DataPoint,
-	logger *zerolog.Logger,
-) {
-	for outputName, outputCh := range deviceOutputs {
-		select {
-		case outputCh <- dp:
-			// Data sent successfully
-		default:
-			logChannelFullWarning(dp, outputName, logger)
-		}
-	}
-}
-
-// logChannelFullWarning logs a warning when an output channel is full.
-func logChannelFullWarning(dp datasource.DataPoint, outputName string, logger *zerolog.Logger) {
-	logger.Warn().
-		Str("device", dp.DeviceName).
-		Str("point", dp.PointName).
-		Str("output", outputName).
-		Msg("Output channel full, dropping data point")
-	if logger.Debug().Enabled() {
-		logger.Debug().
-			Interface("data", dp).
-			Msg("Dropped data point details")
-	}
+	return targets
 }

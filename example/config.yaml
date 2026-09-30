@@ -15,7 +15,7 @@
 # Common device options:
 #   poll_interval  how often the device is polled (required, > 0)
 #   timeout        maximum time to wait for one response
-#   parallelism    1-100 concurrent reads (Modbus) or parses (HTTP) within one poll.
+#   parallelism    1-100 concurrent Modbus reads within one poll (no effect for HTTP).
 #                  Most Modbus devices handle only one request at a time: use 1.
 # =====================================================================================
 devices:
@@ -200,7 +200,8 @@ outputs:
   # ----- MQTT with authentication ------------------------------------------------------
   # Topic per point: <topic>/<device>/<point>
   # Payload: {"value": ..., "unit": "...", "timestamp": "<RFC3339 with nanoseconds>"}
-  # address schemes: tcp:// (default when omitted), tls:// or ssl://
+  # address schemes: tcp:// (default when omitted), tls:// or ssl:// (verified TLS).
+  # While the broker is unreachable, points for this output are dropped (and counted).
   - name: mqtt
     type: mqtt
     buffer_size: 1000
