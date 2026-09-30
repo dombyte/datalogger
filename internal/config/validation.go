@@ -16,9 +16,15 @@ const (
 
 // Validate validates the entire configuration.
 func (c *Config) Validate() error {
+	if len(c.Devices) == 0 {
+		return errors.New("at least one device required")
+	}
 	deviceNames, err := c.validateDevices()
 	if err != nil {
 		return err
+	}
+	if len(c.Outputs) == 0 {
+		return errors.New("at least one output required")
 	}
 	return c.validateOutputs(deviceNames)
 }

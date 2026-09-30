@@ -260,7 +260,8 @@ writer that failed, or a missed deadline.
 
 ### Configuration
 - One YAML file (`-config`, required); template with every option: `example/config.yaml`.
-- Device and output names must be unique; outputs may only reference existing devices;
+- At least one device and one output are required; device and output names must be
+  unique; outputs may only reference existing devices;
   every device needs at least one point; `parallelism` 1–100; `poll_interval` > 0;
   `timeout` > 0.
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
