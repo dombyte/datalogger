@@ -2,8 +2,8 @@ name: Checks
 
 on:
   workflow_call: # reused by release.yml so a tag only ships after the checks pass
-  push:
-    branches: [main]
+  # push:
+  #   branches: [main]
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
 

@@ -47,7 +47,7 @@ make build                                                # ./datalogger with ve
 docker compose -f docker-compose.dev.yaml up --build      # local image with ./config.yaml, ./test-dump
 ```
 
-- CI: `.github/workflows/checks.yml` (push to main, PRs, reused by the release).
+- CI: `.github/workflows/checks.yml` (PRs, reused by the release; not on push to main).
 - Release: push a `vX.Y.Z` tag on `main`; `release.yml` runs the checks, then goreleaser
   (`.goreleaser.yaml`) builds archives and `ghcr.io/dombyte/datalogger` images
   (linux/amd64, arm64, arm/v7).
