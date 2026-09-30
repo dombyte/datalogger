@@ -45,7 +45,7 @@ go test -race ./...                                       # all unit tests, as i
 go run github.com/vektra/mockery/v2@v2.53.7               # regenerate mocks (.mockery.yaml)
 make build                                                # ./datalogger with version info (ldflags)
 ./datalogger -config config.yaml [-debug]                 # run; -version prints build info
-docker compose -f docker-compose.dev.yaml up --build      # local image with ./config.yaml, ./data
+docker compose -f docker-compose.dev.yaml up --build      # local image with ./config.yaml, ./test-dump
 ```
 
 - CI: `.github/workflows/checks.yml` (push to main, PRs, reused by the release).
