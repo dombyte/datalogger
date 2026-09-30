@@ -156,17 +156,14 @@ func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- datasource.DataPoin
 		return
 	}
 	r.handlePollSuccess(len(points))
-	send(ctx, dataCh, points)
+	send(dataCh, points)
 }
 
-// send delivers the points; it gives up when ctx ends.
-func send(ctx context.Context, dataCh chan<- datasource.DataPoint, points []datasource.DataPoint) {
+// send delivers the points of a finished poll, also during shutdown: the router reads
+// until the reader closes the channel, so data that was already read is never lost.
+func send(dataCh chan<- datasource.DataPoint, points []datasource.DataPoint) {
 	for _, dp := range points {
-		select {
-		case dataCh <- dp:
-		case <-ctx.Done():
-			return
-		}
+		dataCh <- dp
 	}
 }
 

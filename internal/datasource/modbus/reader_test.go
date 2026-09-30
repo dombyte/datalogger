@@ -307,3 +307,33 @@ func TestStopClosesChannelsAndConnection(t *testing.T) {
 	_, open := <-h.data
 	assert.False(t, open, "data channel is closed")
 }
+
+func TestPollInProgressAtShutdownIsDelivered(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(
+		modbus.Point{Name: "a", Register: 1, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "b", Register: 2, Type: "uint16", Scale: 1},
+	))
+	reading, release := make(chan struct{}), make(chan struct{})
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(1), uint16(1), lib.HOLDING_REGISTER).
+		RunAndReturn(func(uint16, uint16, lib.RegType) ([]uint16, error) {
+			close(reading)
+			<-release // the read finishes only after shutdown started
+			return []uint16{1}, nil
+		}).Once()
+	h.client.EXPECT().ReadRegisters(uint16(2), uint16(1), lib.HOLDING_REGISTER).
+		Return([]uint16{2}, nil).Once()
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	<-reading
+	h.cancel()
+	close(release)
+
+	var got []string
+	for dp := range h.data {
+		got = append(got, dp.PointName)
+	}
+	assert.ElementsMatch(t, []string{"a", "b"}, got, "both points of the running poll arrive")
+}

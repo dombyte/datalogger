@@ -167,7 +167,10 @@ DeviceReader.Start ──data channel (unbuffered)──▶ router goroutine (on
 
 ### Shutdown (producers first)
 1. SIGINT/SIGTERM cancels the signal context (`signal.NotifyContext`); `Run` returns.
-2. `Shutdown` cancels the readers; each closes its data channel, the routers finish.
+2. `Shutdown` cancels the readers: no new poll starts and a backoff wait ends at once.
+   A poll that is already running finishes and its points are still delivered (an HTTP
+   request in flight is aborted, so it has no data yet). Each reader then closes its
+   data channel and the routers finish.
 3. `app` closes the output input channels; each writer writes what is queued, flushes
    (CSV flush/close, InfluxDB final batch, MQTT disconnect) and stops.
 4. `main` bounds all of this with one hard deadline of **8 s** (below Docker's 10 s stop
