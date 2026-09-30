@@ -84,6 +84,10 @@ func (d *Device) validateCommon() error {
 		return errors.New("poll_interval must be positive")
 	}
 
+	if d.Timeout <= 0 {
+		return errors.New("timeout must be positive")
+	}
+
 	if d.Parallelism < minParallelism || d.Parallelism > maxParallelism {
 		return fmt.Errorf("parallelism must be between %d and %d", minParallelism, maxParallelism)
 	}

@@ -12,8 +12,8 @@ a deviation from a MUST rule of the standard is only valid if it is listed under
 "Deviations" below with its reason. When code and this file disagree, fix one of them in
 the same change.
 
-**Current state:** the code follows standard v3; known gaps would be listed under
-"Migration backlog".
+**Current state:** the code follows standard v3 except for the deviations and the open
+items listed under "Migration backlog".
 
 ---
 
@@ -45,7 +45,7 @@ go test -race ./...                                       # all unit tests, as i
 go run github.com/vektra/mockery/v2@v2.53.7               # regenerate mocks (.mockery.yaml)
 make build                                                # ./datalogger with version info (ldflags)
 ./datalogger -config config.yaml [-debug]                 # run; -version prints build info
-docker compose -f docker-compose.dev.yaml up --build      # local image with ./config.yaml, ./data
+docker compose -f docker-compose.dev.yaml up --build      # local image with ./config.yaml, ./test-dump
 ```
 
 - CI: `.github/workflows/checks.yml` (push to main, PRs, reused by the release).
@@ -167,7 +167,10 @@ DeviceReader.Start ──data channel (unbuffered)──▶ router goroutine (on
 
 ### Shutdown (producers first)
 1. SIGINT/SIGTERM cancels the signal context (`signal.NotifyContext`); `Run` returns.
-2. `Shutdown` cancels the readers; each closes its data channel, the routers finish.
+2. `Shutdown` cancels the readers: no new poll starts and a backoff wait ends at once.
+   A poll that is already running finishes and its points are still delivered (an HTTP
+   request in flight is aborted, so it has no data yet). Each reader then closes its
+   data channel and the routers finish.
 3. `app` closes the output input channels; each writer writes what is queued, flushes
    (CSV flush/close, InfluxDB final batch, MQTT disconnect) and stops.
 4. `main` bounds all of this with one hard deadline of **8 s** (below Docker's 10 s stop
@@ -214,6 +217,9 @@ writer that failed, or a missed deadline.
   the defaults (1, 0) the value keeps its parsed type, so existing InfluxDB field types do
   not change; bools and strings are never scaled.
 - Non-200 responses are errors. All points of one response share its receive timestamp.
+- A point that cannot be extracted (e.g. its `json_path` is not in the response) is
+  skipped; it is warned about once, further failures are logged at debug, and an info
+  line follows when it can be read again.
 - `parallelism` has no effect: one request per poll, points are parsed in order.
 - A request that cannot be built (bad URL, method) fails startup; an unreachable endpoint
   does not.
@@ -255,9 +261,11 @@ writer that failed, or a missed deadline.
 ### Configuration
 - One YAML file (`-config`, required); template with every option: `example/config.yaml`.
 - Device and output names must be unique; outputs may only reference existing devices;
-  every device needs at least one point; `parallelism` 1–100; `poll_interval` > 0.
-- `config.Load` reads the file, fills defaults (`applyDefaults`: HTTP method GET and
-  response type json, MQTT topic `datalogger` and client ID `logger-<random>`) and then
+  every device needs at least one point; `parallelism` 1–100; `poll_interval` > 0;
+  `timeout` > 0.
+- `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
+  poll interval, at most 10 s; point `scale` 1; HTTP method GET and response type json;
+  MQTT topic `datalogger` and client ID `logger-<random>`) and then
   runs `Validate()`, which only checks and never changes the config.
 - No environment overrides (see Deviations). Secrets (InfluxDB token, MQTT password)
   belong in the local `config.yaml` (gitignored, mounted read-only in the container),
@@ -300,13 +308,20 @@ is meant to stay:
 | Rule | Deviation | Reason |
 |---|---|---|
 | 5, 13: env overrides, secrets from env | Config comes only from the YAML file; no env overrides | The config is mostly lists of devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`, mounted read-only, serves as the secret file |
+| 9: every interface has a mockery mock | `clock.Clock`/`clock.Ticker` are faked by the hand-written `clocktest.Fake` | Tests need time that moves consistently across tickers and `After` (`Advance`); call expectations cannot model that, and standard 9 itself asks for a fake clock |
 
 ---
 
 ## 10. Migration Backlog
 
-The migration to standard v3 is complete. Record new gaps here, one `refactor/…` branch
-each.
+Known gaps to standard v3, one `refactor/…` branch each; update this list when an item
+is done.
+
+1. **Startup test for `cmd/datalogger`** (standard 9: wiring is covered by a startup
+   test): run `run()` against a temporary config (HTTP device on `httptest`, CSV output),
+   send SIGINT and assert exit code 0 and the written rows; plus exit 1 for a bad config
+   and for a config the client libraries reject. `cmd/datalogger` is at 27 % coverage
+   today (only flag parsing and the logger are tested).
 
 ---
 

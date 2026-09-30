@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"time"
 )
 
 const (
@@ -13,6 +14,9 @@ const (
 
 	// clientIDSuffixLen is the length of the random part of a generated MQTT client ID.
 	clientIDSuffixLen = 8
+
+	// maxDefaultTimeout caps the default device timeout (the poll interval).
+	maxDefaultTimeout = 10 * time.Second
 )
 
 // applyDefaults fills in optional settings that were omitted. Load runs it before
@@ -29,8 +33,14 @@ func (c *Config) applyDefaults() error {
 	return nil
 }
 
-// applyDefaults fills in the point scale, the HTTP method and the response type.
+// applyDefaults fills in the timeout, the point scale, the HTTP method and the response
+// type.
 func (d *Device) applyDefaults() {
+	// Without a timeout a hanging device would block its poll loop forever.
+	if d.Timeout == 0 {
+		d.Timeout = min(d.PollInterval, maxDefaultTimeout)
+	}
+
 	for i := range d.Points {
 		// A scale of 0 would turn every value into the offset, so 0 means "not set".
 		if d.Points[i].Scale == 0 {
