@@ -23,3 +23,6 @@ packages:
   github.com/dombyte/datalogger/internal/output:
     interfaces:
       Writer:
+  github.com/dombyte/datalogger/internal/output/influxdb:
+    interfaces:
+      Client:

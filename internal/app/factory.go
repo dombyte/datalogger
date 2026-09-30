@@ -52,7 +52,7 @@ func createWriter(
 			Log:   log,
 		})
 	case "influxdb":
-		return influxdb.New(o, &log)
+		return createInfluxDBWriter(o, log, clk)
 	case "mqtt":
 		return mqtt.New(o, &log)
 	default:
@@ -145,6 +145,36 @@ func createHTTPReader(
 			Points:       points,
 		},
 		Client: http.NewClient(d.Timeout, h.Insecure),
+		Clock:  clk,
+		Log:    log,
+	})
+}
+
+// createInfluxDBWriter maps an output config onto an InfluxDB writer and its client.
+func createInfluxDBWriter(
+	o config.Output,
+	log zerolog.Logger,
+	clk clock.Clock,
+) (output.Writer, error) {
+	i := o.OutputSpecific.Influxdb
+	client, err := influxdb.NewClient(influxdb.ConnSettings{
+		Address:  i.Address,
+		Token:    i.Token,
+		Database: i.Database,
+		Insecure: i.Insecure,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return influxdb.New(influxdb.Deps{
+		Settings: influxdb.Settings{
+			Name:         o.Name,
+			BatchSize:    o.BatchSize,
+			BatchTimeout: o.BatchTimeout,
+			MaxRetries:   o.MaxRetries,
+			RetryDelay:   o.RetryDelay,
+		},
+		Client: client,
 		Clock:  clk,
 		Log:    log,
 	})
