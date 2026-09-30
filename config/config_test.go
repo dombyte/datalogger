@@ -238,7 +238,7 @@ func TestDeviceValidate(t *testing.T) {
 				Type:           "http",
 				PollInterval:   1 * time.Second,
 				Parallelism:    1,
-				DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{Address: "http://localhost"}},
+				DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{Address: "http://localhost", Method: "GET"}},
 				Points:         []Point{{Name: "temp", JSONPath: "temp"}},
 			},
 			wantErr: false,
@@ -391,11 +391,11 @@ func TestHttpConfigValidate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "valid http config with defaults",
+			name: "empty method (defaults are applied by Load)",
 			config: HTTPConfig{
 				Address: "http://localhost:8080",
 			},
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "empty address",
@@ -720,7 +720,43 @@ func TestInfluxdbConfigValidate(t *testing.T) {
 func TestLoadExampleConfig(t *testing.T) {
 	cfg, err := Load(filepath.Join("..", "example", "config.yaml"))
 	require.NoError(t, err)
-	require.NoError(t, cfg.Validate())
 	assert.NotEmpty(t, cfg.Devices)
 	assert.NotEmpty(t, cfg.Outputs)
+}
+
+// TestApplyDefaults checks the defaults and that set values are kept.
+func TestApplyDefaults(t *testing.T) {
+	cfg := &Config{
+		Devices: []Device{
+			{Name: "defaults", Type: "http"},
+			{Name: "set", Type: "http", DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{
+				Method: "POST", ResponseType: "text",
+			}}},
+		},
+		Outputs: []Output{
+			{Name: "defaults", Type: "mqtt"},
+			{Name: "set", Type: "mqtt", OutputSpecific: OutputSpecific{Mqtt: MqttConfig{
+				Topic: "custom", ClientID: "fixed",
+			}}},
+		},
+	}
+
+	require.NoError(t, cfg.applyDefaults())
+
+	assert.Equal(t, "GET", cfg.Devices[0].DeviceSpecific.HTTP.Method)
+	assert.Equal(t, "json", cfg.Devices[0].DeviceSpecific.HTTP.ResponseType)
+	assert.Equal(t, "POST", cfg.Devices[1].DeviceSpecific.HTTP.Method)
+	assert.Equal(t, "text", cfg.Devices[1].DeviceSpecific.HTTP.ResponseType)
+
+	assert.Equal(t, "datalogger", cfg.Outputs[0].OutputSpecific.Mqtt.Topic)
+	assert.Regexp(t, `^logger-[a-zA-Z0-9]{8}$`, cfg.Outputs[0].OutputSpecific.Mqtt.ClientID)
+	assert.Equal(t, "custom", cfg.Outputs[1].OutputSpecific.Mqtt.Topic)
+	assert.Equal(t, "fixed", cfg.Outputs[1].OutputSpecific.Mqtt.ClientID)
+}
+
+// TestValidateHasNoSideEffects checks that Validate leaves the config unchanged.
+func TestValidateHasNoSideEffects(t *testing.T) {
+	m := MqttConfig{Address: "tcp://localhost:1883"}
+	require.NoError(t, m.Validate())
+	assert.Equal(t, MqttConfig{Address: "tcp://localhost:1883"}, m)
 }

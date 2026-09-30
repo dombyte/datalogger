@@ -9,10 +9,9 @@ import (
 
 // MockOutputWriter is a mock implementation of Writer for testing
 type MockOutputWriter struct {
-	name        string
-	devices     []string
-	validateErr error
-	startErr    error
+	name     string
+	devices  []string
+	startErr error
 }
 
 func (m *MockOutputWriter) Name() string {
@@ -27,10 +26,6 @@ func (m *MockOutputWriter) Start(ctx context.Context, input <-chan datasource.Da
 		return ch
 	}
 	return make(<-chan error)
-}
-
-func (m *MockOutputWriter) Validate() error {
-	return m.validateErr
 }
 
 func (m *MockOutputWriter) Devices() []string {
@@ -57,11 +52,6 @@ func TestOutputWriterInterface(t *testing.T) {
 	devices := mock.Devices()
 	if len(devices) != 2 {
 		t.Errorf("Devices() returned %d devices, want 2", len(devices))
-	}
-
-	// Test Validate method
-	if err := mock.Validate(); err != nil {
-		t.Errorf("Validate() error = %v", err)
 	}
 
 	// Test Start method (can't fully test without context)
@@ -96,50 +86,6 @@ func TestDataPointStruct(t *testing.T) {
 	if dp.Unit != "V" {
 		t.Errorf("Unit = %v, want %v", dp.Unit, "V")
 	}
-}
-
-// TestOutputWriterWithErrors tests error handling in Writer
-func TestOutputWriterWithErrors(t *testing.T) {
-	tests := []struct {
-		name        string
-		validateErr error
-		wantErr     bool
-	}{
-		{
-			name:        "no error",
-			validateErr: nil,
-			wantErr:     false,
-		},
-		{
-			name:        "validation error",
-			validateErr: &testError{msg: "validation failed"},
-			wantErr:     true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mock := &MockOutputWriter{
-				name:        "mock",
-				devices:     []string{"device1"},
-				validateErr: tt.validateErr,
-			}
-
-			err := mock.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-// testError is a simple error for testing
-type testError struct {
-	msg string
-}
-
-func (e *testError) Error() string {
-	return e.msg
 }
 
 // TestOutputWriterDevices tests the Devices method

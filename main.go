@@ -114,7 +114,7 @@ func main() {
 	logger := setupLogger(f.debug)
 
 	// 2. Load configuration
-	cfg := loadAndValidateConfig(f.configPath, logger)
+	cfg := loadConfig(f.configPath, logger)
 
 	// 3. Separate contexts for two-phase shutdown: stop sources first, then outputs
 	sourceCtx, sourceCancel := context.WithCancel(context.Background())
@@ -186,17 +186,12 @@ func handleSignals(
 	logger.Info().Msg("Outputs cancelled, waiting for cleanup...")
 }
 
-// loadAndValidateConfig loads and validates the configuration file.
-func loadAndValidateConfig(configPath string, logger *zerolog.Logger) *config.Config {
+// loadConfig loads, completes and validates the configuration file.
+func loadConfig(configPath string, logger *zerolog.Logger) *config.Config {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to load config")
 	}
-
-	if err := cfg.Validate(); err != nil {
-		logger.Fatal().Err(err).Msg("Invalid configuration")
-	}
-
 	return cfg
 }
 
@@ -344,11 +339,6 @@ func createSingleDeviceReader(
 		return nil
 	}
 
-	if err := reader.Validate(); err != nil {
-		logger.Error().Err(err).Str("device", deviceConfig.Name).Msg("Device validation failed")
-		return nil
-	}
-
 	return reader
 }
 
@@ -373,11 +363,9 @@ func createSingleOutputWriter(
 ) output.Writer {
 	writer, err := createOutputWriterByType(outputConfig, logger)
 	if err != nil {
-		return nil
-	}
-
-	if err := writer.Validate(); err != nil {
-		logger.Error().Err(err).Str("output", outputConfig.Name).Msg("Output validation failed")
+		logger.Error().Err(err).
+			Str("output", outputConfig.Name).
+			Msg("Failed to create output writer")
 		return nil
 	}
 
@@ -397,10 +385,6 @@ func createOutputWriterByType(
 	case "csv":
 		return csv.New(*outputConfig, logger)
 	default:
-		logger.Error().
-			Str("output", outputConfig.Name).
-			Str("type", outputConfig.Type).
-			Msg("Unknown output type")
 		return nil, fmt.Errorf("unknown output type: %s", outputConfig.Type)
 	}
 }

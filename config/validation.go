@@ -1,10 +1,8 @@
 package config
 
 import (
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/big"
 	"strings"
 )
 
@@ -14,9 +12,6 @@ const (
 
 	// maxQoS is the highest MQTT quality-of-service level.
 	maxQoS = 2
-
-	// clientIDSuffixLen is the length of the random part of a generated MQTT client ID.
-	clientIDSuffixLen = 8
 )
 
 // Validate validates the entire configuration.
@@ -157,17 +152,9 @@ func (h *HTTPConfig) Validate() error {
 		return errors.New("address required")
 	}
 
-	if h.Method == "" {
-		h.Method = "GET"
-	}
-
 	method := strings.ToUpper(h.Method)
 	if method != "GET" && method != "POST" {
 		return errors.New("method must be GET or POST")
-	}
-
-	if h.ResponseType == "" {
-		h.ResponseType = "json"
 	}
 
 	return nil
@@ -213,34 +200,10 @@ func (i *InfluxdbConfig) Validate() error {
 	return nil
 }
 
-// generateRandomString generates a random alphanumeric string of the given length.
-func generateRandomString(n int) (string, error) {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
-		if err != nil {
-			return "", fmt.Errorf("generate random string: %w", err)
-		}
-		b[i] = letters[num.Int64()]
-	}
-	return string(b), nil
-}
-
 // Validate validates MQTT configuration.
 func (m *MqttConfig) Validate() error {
 	if m.Address == "" {
 		return errors.New("address required")
-	}
-	if m.Topic == "" {
-		m.Topic = "datalogger"
-	}
-	if m.ClientID == "" {
-		suffix, err := generateRandomString(clientIDSuffixLen)
-		if err != nil {
-			return fmt.Errorf("client_id: %w", err)
-		}
-		m.ClientID = "logger-" + suffix
 	}
 	if m.QoS < 0 || m.QoS > maxQoS {
 		return errors.New("qos must be 0, 1, or 2")

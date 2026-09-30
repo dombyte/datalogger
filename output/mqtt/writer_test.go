@@ -154,37 +154,6 @@ func TestMQTTWriterDevices(t *testing.T) {
 	}
 }
 
-// TestMQTTWriterValidate tests the Validate method
-func TestMQTTWriterValidate(t *testing.T) {
-	logger := zerolog.Nop()
-
-	outputConfig := config.Output{
-		Name:    "mqtt_test",
-		Type:    "mqtt",
-		Devices: []string{"device1"},
-		OutputSpecific: config.OutputSpecific{
-			Mqtt: config.MqttConfig{
-				Address:  "tcp://localhost:1883",
-				ClientID: "test-client",
-				Topic:    "datalogger",
-				QoS:      1,
-				Retain:   false,
-			},
-		},
-	}
-
-	writer := &Writer{
-		config:  outputConfig,
-		logger:  logger,
-		devices: outputConfig.Devices,
-	}
-
-	// Validate should return nil error
-	if err := writer.Validate(); err != nil {
-		t.Errorf("Validate() error = %v", err)
-	}
-}
-
 // TestNewMQTTWriter tests creating a new MQTT writer against a local listener
 // (New only dials; the MQTT handshake happens in Start).
 func TestNewMQTTWriter(t *testing.T) {
@@ -211,7 +180,6 @@ func TestNewMQTTWriter(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "mqtt_test", writer.Name())
 	assert.Equal(t, []string{"device1"}, writer.Devices())
-	assert.NoError(t, writer.Validate())
 }
 
 // TestMQTTWriterCreateClient tests the createClient function
@@ -491,11 +459,6 @@ func TestMQTTWriterStart(t *testing.T) {
 		t.Errorf("Devices()[0] = %v, want %v", writer.Devices()[0], "device1")
 	}
 
-	// Test Validate
-	if err := writer.Validate(); err != nil {
-		t.Errorf("Validate() error = %v", err)
-	}
-
 	// We cannot test Start() without a real MQTT broker and client
 	t.Skip("Skipping Start() test - requires real MQTT broker")
 }
@@ -640,11 +603,6 @@ func TestMQTTWriterWithVariousConfigs(t *testing.T) {
 
 			if writer.Devices()[0] != "device1" {
 				t.Errorf("Devices()[0] = %v, want %v", writer.Devices()[0], "device1")
-			}
-
-			// Test Validate
-			if err := writer.Validate(); err != nil {
-				t.Errorf("Validate() error = %v", err)
 			}
 		})
 	}

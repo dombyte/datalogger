@@ -236,36 +236,6 @@ func TestName(t *testing.T) {
 	}
 }
 
-// TestValidate tests the Validate method
-func TestValidate(t *testing.T) {
-	logger := zerolog.Nop()
-	deviceConfig := config.Device{
-		Name:         "test_device",
-		Type:         "modbus",
-		PollInterval: time.Second,
-		Parallelism:  1,
-		DeviceSpecific: config.DeviceSpecific{
-			Modbus: config.ModbusConfig{
-				Address:      "tcp://localhost:502",
-				SlaveID:      1,
-				RegisterMode: "direct",
-			},
-		},
-	}
-
-	// Note: We can't fully test New without a real Modbus connection
-	// So we'll create a partial reader for testing Validate()
-	reader := &Reader{
-		config: deviceConfig,
-		logger: logger,
-	}
-
-	// Validate should return nil for valid config
-	if err := reader.Validate(); err != nil {
-		t.Errorf("Validate() error = %v", err)
-	}
-}
-
 // TestValidateAddresses tests the validateAddresses function
 func TestValidateAddresses(t *testing.T) {
 	logger := zerolog.Nop()
@@ -1037,35 +1007,6 @@ func TestModbusReaderName(t *testing.T) {
 
 	if reader.Name() != "test_device" {
 		t.Errorf("Name() = %v, want %v", reader.Name(), "test_device")
-	}
-}
-
-// TestModbusReaderValidate tests the Validate method
-func TestModbusReaderValidate(t *testing.T) {
-	logger := zerolog.Nop()
-
-	deviceConfig := config.Device{
-		Name:         "test_device",
-		Type:         "modbus",
-		PollInterval: time.Second,
-		Parallelism:  1,
-		DeviceSpecific: config.DeviceSpecific{
-			Modbus: config.ModbusConfig{
-				Address:      "tcp://localhost:502",
-				SlaveID:      1,
-				RegisterMode: "direct",
-			},
-		},
-	}
-
-	reader := &Reader{
-		config: deviceConfig,
-		logger: logger,
-	}
-
-	// Validate should return nil for valid config
-	if err := reader.Validate(); err != nil {
-		t.Errorf("Validate() error = %v", err)
 	}
 }
 

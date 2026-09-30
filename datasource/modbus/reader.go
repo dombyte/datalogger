@@ -254,12 +254,6 @@ func (r *Reader) Name() string {
 	return r.config.Name
 }
 
-// Validate validates the Modbus reader configuration.
-func (r *Reader) Validate() error {
-	// Configuration was already validated when creating the reader
-	return nil
-}
-
 // Start starts the polling loop and returns channels for data, done, and errors.
 func (r *Reader) Start(
 	ctx context.Context,

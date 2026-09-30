@@ -61,7 +61,7 @@ docker compose -f docker-compose.dev.yaml up --build      # local image with ./c
 
 ```
 main.go                  flag parsing, logger, wiring, routing, shutdown (composition root)
-config/                  Config structs (viper/mapstructure), Load(), Validate() incl. defaults
+config/                  Config structs (viper/mapstructure), Load() (defaults + Validate)
 datasource/              DataPoint type, DeviceReader interface
   modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, backoff, reconnect
   http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text, backoff
@@ -139,7 +139,7 @@ DeviceReader.Start ──dataCh (unbuffered)──▶ router goroutine (one per 
 
 ### Startup
 1. Parse flags, build the logger (console writer on stderr, `-debug` = debug level).
-2. `config.Load` + `Validate()`; any error ends the process (exit 1).
+2. `config.Load` (defaults + validation); any error ends the process (exit 1).
 3. Create readers and writers from config. **Current behaviour:** a device or output that
    fails to construct (e.g. Modbus not reachable, MQTT broker not reachable) is logged and
    **skipped**; the app runs without it (see Migration backlog).
@@ -236,8 +236,9 @@ deviation scheduled for removal (see Migration backlog).
 - One YAML file (`-config`, required); template with every option: `example/config.yaml`.
 - Device and output names must be unique; outputs may only reference existing devices;
   every device needs at least one point; `parallelism` 1–100; `poll_interval` > 0.
-- `Validate()` currently also fills defaults (HTTP method/response type, MQTT topic and
-  client ID); see Migration backlog.
+- `config.Load` reads the file, fills defaults (`applyDefaults`: HTTP method GET and
+  response type json, MQTT topic `datalogger` and client ID `logger-<random>`) and then
+  runs `Validate()`, which only checks and never changes the config.
 - No environment overrides (see Deviations). Secrets (InfluxDB token, MQTT password)
   belong in the local `config.yaml` (gitignored, mounted read-only in the container),
   never in `example/config.yaml` with real values.
@@ -281,19 +282,19 @@ is meant to stay:
 Known gaps between the current code and standard v3, in suggested order. Each item is its
 own `refactor/…` branch; update this list when an item is done.
 
-1. **`Validate()` without side effects:** move defaults (HTTP method/response type, MQTT
-   topic/client ID) into a `Defaults()` step before validation; readers'/writers'
-   `Validate()` methods are no-ops today and should be removed from the interfaces or do
-   real work.
-2. **Dependency injection for clients:** Modbus, HTTP, InfluxDB and MQTT clients are created
+1. **Dependency injection for clients:** Modbus, HTTP, InfluxDB and MQTT clients are created
    inside the packages. Declare small client interfaces in each package, create the real
    clients in `Create*` factories, add mockery mocks and testify-based tests.
-3. **Injected `Clock`:** replace `time.Now`, `time.Sleep` (backoff) and `time.After` in loops
+2. **Injected `Clock`:** replace `time.Now`, `time.Sleep` (backoff) and `time.After` in loops
    with an injected clock; backoff waits must also stop on context cancel (today
    `time.Sleep` delays shutdown by up to 30 s).
-4. **Startup failures:** a device/output that cannot be constructed is skipped today. It
+3. **Startup failures:** a device/output that cannot be constructed is skipped today. It
    should either fail startup (exit 1) or start in a recovering state and reconnect; the
    choice goes into "Design Decisions".
+4. **Lifecycle per standard 4.2/4.3:** `signal.NotifyContext`, `run() int` with exit code,
+   one hard shutdown deadline, **remove the second-signal force mode**, replace the
+   sleep-polling `monitorComponents` + `logger.Fatal` with an error channel/`errgroup`
+   that makes `Run` return an error. The unused per-component `errCh` of readers goes away.
 5. **Config pitfalls:** implement `response_type: xml` or reject it in validation; apply or
    reject `scale`/`offset` on HTTP points; reject 32-bit Modbus types with `count` < 2 in
    validation (today each read fails with a decode error); default `scale` to 1 when

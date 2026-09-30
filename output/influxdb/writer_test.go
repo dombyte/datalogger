@@ -52,11 +52,6 @@ func TestNewInfluxDBWriter(t *testing.T) {
 		if len(devices) != 1 || devices[0] != "device1" {
 			t.Errorf("Devices() = %v, want %v", devices, []string{"device1"})
 		}
-
-		// Test Validate
-		if err := writer.Validate(); err != nil {
-			t.Errorf("Validate() error = %v", err)
-		}
 	} else {
 		// Expected error for connection failure
 		t.Logf("Expected connection error: %v", err)
@@ -128,36 +123,6 @@ func TestInfluxDBWriterDevices(t *testing.T) {
 		if d != devices[i] {
 			t.Errorf("Device %d = %v, want %v", i, d, devices[i])
 		}
-	}
-}
-
-// TestInfluxDBWriterValidate tests the Validate method
-func TestInfluxDBWriterValidate(t *testing.T) {
-	logger := zerolog.Nop()
-
-	outputConfig := config.Output{
-		Name:    "influx_test",
-		Type:    "influxdb",
-		Devices: []string{"device1"},
-		OutputSpecific: config.OutputSpecific{
-			Influxdb: config.InfluxdbConfig{
-				Address:  "http://localhost:8086",
-				Token:    "test-token",
-				Database: "test-db",
-				Insecure: true,
-			},
-		},
-	}
-
-	writer := &Writer{
-		config:  outputConfig,
-		logger:  logger,
-		devices: outputConfig.Devices,
-	}
-
-	// Validate should return nil error
-	if err := writer.Validate(); err != nil {
-		t.Errorf("Validate() error = %v", err)
 	}
 }
 
@@ -430,41 +395,6 @@ func TestHandleInputPoint(t *testing.T) {
 	// The point should have the correct structure
 	if point.GetMeasurement() != "test_device" {
 		t.Errorf("Measurement = %v, want %v", point.GetMeasurement(), "test_device")
-	}
-}
-
-// TestInfluxDBWriterValidateEmptyDevices tests Validate with empty devices
-func TestInfluxDBWriterValidateEmptyDevices(t *testing.T) {
-	logger := zerolog.Nop()
-
-	outputConfig := config.Output{
-		Name:    "influx_test",
-		Type:    "influxdb",
-		Devices: []string{},
-		OutputSpecific: config.OutputSpecific{
-			Influxdb: config.InfluxdbConfig{
-				Address:  "http://localhost:8086",
-				Token:    "test-token",
-				Database: "test-db",
-				Insecure: true,
-			},
-		},
-	}
-
-	writer := &Writer{
-		config:       outputConfig,
-		logger:       logger,
-		devices:      outputConfig.Devices,
-		batchSize:    100,
-		batchTimeout: time.Second,
-		maxRetries:   3,
-		retryDelay:   time.Second,
-	}
-
-	// Validate should still pass with empty devices
-	err := writer.Validate()
-	if err != nil {
-		t.Errorf("Validate() with empty devices returned error: %v", err)
 	}
 }
 

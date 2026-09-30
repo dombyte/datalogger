@@ -97,12 +97,6 @@ func (w *Writer) Devices() []string {
 	return w.devices
 }
 
-// Validate validates the CSV writer configuration.
-func (w *Writer) Validate() error {
-	// Configuration was already validated when creating the writer
-	return nil
-}
-
 // Start starts the CSV writer goroutine.
 func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
 	errCh := make(chan error, 1)

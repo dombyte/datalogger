@@ -117,8 +117,9 @@ type CsvConfig struct {
 	MaxBackups int `mapstructure:"max_backups"`
 }
 
-// Load reads the configuration from a YAML file. It uses its own viper instance and
-// no environment overrides; secrets live in the (gitignored) config file.
+// Load reads the configuration from a YAML file, fills in defaults and validates it.
+// It uses its own viper instance and no environment overrides; secrets live in the
+// (gitignored) config file.
 func Load(path string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
@@ -131,6 +132,13 @@ func Load(path string) (*Config, error) {
 	var config Config
 	if err := v.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+
+	if err := config.applyDefaults(); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
 
 	return &config, nil

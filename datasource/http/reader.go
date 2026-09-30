@@ -65,12 +65,6 @@ func (r *Reader) Name() string {
 	return r.config.Name
 }
 
-// Validate validates the HTTP reader configuration.
-func (r *Reader) Validate() error {
-	// Configuration was already validated when creating the reader
-	return nil
-}
-
 // shouldReconnect reports whether err is a transport error that warrants a new client.
 // HTTP status and parse errors do not; every error from the transport (a *url.Error,
 // which is a net.Error) and truncated bodies do.

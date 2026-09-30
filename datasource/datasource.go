@@ -26,7 +26,4 @@ type DeviceReader interface {
 	// Start begins polling the device at its configured interval
 	// Returns channel for DataPoints, done channel, and error channel
 	Start(ctx context.Context) (<-chan DataPoint, <-chan struct{}, <-chan error)
-
-	// Validate checks configuration before startup
-	Validate() error
 }
