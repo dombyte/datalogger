@@ -2,18 +2,25 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"flag"
+	"io"
+	"net"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
 	"github.com/dombyte/datalogger/output"
-	"github.com/rs/zerolog"
 )
 
-// mockOutputWriterForMap is a mock that implements the output.OutputWriter interface for testing
+// mockOutputWriterForMap is a mock that implements the output.Writer interface for testing
 type mockOutputWriterForMap struct {
 	name    string
 	devices []string
@@ -37,7 +44,7 @@ func (w *mockOutputWriterForMap) Validate() error {
 	return nil
 }
 
-// mockOutputWriterForBuffer is a mock that implements the full output.OutputWriter interface
+// mockOutputWriterForBuffer is a mock that implements the full output.Writer interface
 type mockOutputWriterForBuffer struct {
 	name string
 }
@@ -117,7 +124,7 @@ func TestMonitorDevice(t *testing.T) {
 	// Test error channel
 	doneCh2 := make(chan struct{})
 	errCh2 := make(chan error, 1)
-	errCh2 <- fmt.Errorf("test error")
+	errCh2 <- errors.New("test error")
 	close(errCh2)
 
 	monitorDevice("test_device", doneCh2, errCh2, &logger)
@@ -127,7 +134,7 @@ func TestMonitorDevice(t *testing.T) {
 
 // TestBuildDeviceOutputMap tests the buildDeviceOutputMap function
 func TestBuildDeviceOutputMap(t *testing.T) {
-	outputWriters := []output.OutputWriter{
+	outputWriters := []output.Writer{
 		&mockOutputWriterForMap{name: "output1", devices: []string{"device1", "device2"}},
 		&mockOutputWriterForMap{name: "output2", devices: []string{"device2", "device3"}},
 		&mockOutputWriterForMap{name: "output3", devices: []string{"device1"}},
@@ -139,34 +146,25 @@ func TestBuildDeviceOutputMap(t *testing.T) {
 		"output3": make(chan datasource.DataPoint, 10),
 	}
 
-	// Test with device1
-	result1 := buildDeviceOutputMap("device1", outputWriters, outputChannels)
-	if len(result1) != 2 {
-		t.Errorf("buildDeviceOutputMap for device1 returned %d outputs, want 2", len(result1))
-	}
-	if _, ok := result1["output1"]; !ok {
-		t.Error("output1 should be in device1 outputs")
-	}
-	if _, ok := result1["output3"]; !ok {
-		t.Error("output3 should be in device1 outputs")
+	tests := []struct {
+		device string
+		want   []string
+	}{
+		{device: "device1", want: []string{"output1", "output3"}},
+		{device: "device2", want: []string{"output1", "output2"}},
+		{device: "device4", want: []string{}},
 	}
 
-	// Test with device2
-	result2 := buildDeviceOutputMap("device2", outputWriters, outputChannels)
-	if len(result2) != 2 {
-		t.Errorf("buildDeviceOutputMap for device2 returned %d outputs, want 2", len(result2))
-	}
-	if _, ok := result2["output1"]; !ok {
-		t.Error("output1 should be in device2 outputs")
-	}
-	if _, ok := result2["output2"]; !ok {
-		t.Error("output2 should be in device2 outputs")
-	}
-
-	// Test with device4 (no outputs)
-	result3 := buildDeviceOutputMap("device4", outputWriters, outputChannels)
-	if len(result3) != 0 {
-		t.Errorf("buildDeviceOutputMap for device4 returned %d outputs, want 0", len(result3))
+	for _, tt := range tests {
+		t.Run(tt.device, func(t *testing.T) {
+			result := buildDeviceOutputMap(tt.device, outputWriters, outputChannels)
+			names := make([]string, 0, len(result))
+			for name, ch := range result {
+				assert.Equal(t, outputChannels[name], ch)
+				names = append(names, name)
+			}
+			assert.ElementsMatch(t, tt.want, names)
+		})
 	}
 }
 
@@ -235,185 +233,121 @@ func TestCreateSingleDeviceReader(t *testing.T) {
 	logger := zerolog.Nop()
 
 	tests := []struct {
-		name       string
-		deviceType string
-		wantNil    bool
-		wantName   string
+		name     string
+		device   config.Device
+		wantNil  bool
+		wantName string
 	}{
 		{
-			name:       "unknown device type",
-			deviceType: "unknown_type",
-			wantNil:    true,
+			name:    "unknown device type",
+			device:  config.Device{Name: "unknown_device", Type: "unknown_type"},
+			wantNil: true,
 		},
 		{
-			name:       "http device",
-			deviceType: "http",
-			wantNil:    false,
-			wantName:   "http_device",
+			name: "http device",
+			device: config.Device{
+				Name: "http_device",
+				Type: "http",
+				DeviceSpecific: config.DeviceSpecific{HTTP: config.HTTPConfig{
+					Address:      "http://localhost:8080",
+					Method:       "GET",
+					ResponseType: "json",
+				}},
+				Points: []config.Point{{Name: "temp", JSONPath: "temperature", Type: "float64"}},
+			},
+			wantName: "http_device",
 		},
 		{
-			name:       "modbus device - will fail without real connection",
-			deviceType: "modbus",
-			wantNil:    true, // Will fail to create without real Modbus connection
-			wantName:   "",
+			name: "modbus device that cannot be created",
+			device: config.Device{
+				Name: "modbus_device",
+				Type: "modbus",
+				DeviceSpecific: config.DeviceSpecific{Modbus: config.ModbusConfig{
+					Address:      "invalid://address", // rejected before any dial
+					SlaveID:      1,
+					RegisterMode: "direct",
+				}},
+				Points: []config.Point{{Name: "temp", Register: 0, Type: "int16"}},
+			},
+			wantNil: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			deviceConfig := &config.Device{
-				Name:         "http_device",
-				Type:         tt.deviceType,
-				PollInterval: time.Second,
-				Timeout:      5 * time.Second,
-				Parallelism:  1,
-			}
+			tt.device.PollInterval = time.Second
+			tt.device.Timeout = 5 * time.Second
+			tt.device.Parallelism = 1
 
-			// Set device name for the test
-			if tt.wantName != "" {
-				deviceConfig.Name = tt.wantName
-			}
-
-			// For http device, add required config
-			if tt.deviceType == "http" {
-				deviceConfig.DeviceSpecific = config.DeviceSpecific{
-					Http: config.HttpConfig{
-						Address:      "http://localhost:8080",
-						Method:       "GET",
-						ResponseType: "json",
-					},
-				}
-				deviceConfig.Points = []config.Point{
-					{Name: "temp", JsonPath: "temperature", Type: "float64"},
-				}
-			}
-
-			// For modbus device, add required config
-			if tt.deviceType == "modbus" {
-				deviceConfig.DeviceSpecific = config.DeviceSpecific{
-					Modbus: config.ModbusConfig{
-						Address:      "tcp://localhost:502",
-						SlaveID:      1,
-						RegisterMode: "direct",
-					},
-				}
-				deviceConfig.Points = []config.Point{
-					{Name: "temp", Register: 0, Type: "int16"},
-				}
-			}
-
-			result := createSingleDeviceReader(deviceConfig, &logger)
-
+			result := createSingleDeviceReader(&tt.device, &logger)
 			if tt.wantNil {
-				if result != nil {
-					t.Errorf("createSingleDeviceReader() should return nil, got %v", result)
-				}
-			} else {
-				if result == nil {
-					t.Errorf("createSingleDeviceReader() should return non-nil, got nil")
-				} else if result.Name() != tt.wantName {
-					t.Errorf("createSingleDeviceReader() Name() = %v, want %v", result.Name(), tt.wantName)
-				}
+				assert.Nil(t, result)
+				return
 			}
+			require.NotNil(t, result)
+			assert.Equal(t, tt.wantName, result.Name())
 		})
 	}
 }
 
-// TestCreateOutputWriterByType tests the createOutputWriterByType function
+// TestCreateOutputWriterByType tests the output factory. The MQTT writer dials a local
+// listener; the InfluxDB client does not connect on creation.
 func TestCreateOutputWriterByType(t *testing.T) {
 	logger := zerolog.Nop()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { listener.Close() })
 
 	tests := []struct {
-		name    string
-		outType string
-		wantNil bool
-		wantErr bool
+		name     string
+		outType  string
+		specific config.OutputSpecific
+		wantErr  bool
 	}{
-		{
-			name:    "unknown output type",
-			outType: "unknown_type",
-			wantNil: true,
-			wantErr: true,
-		},
+		{name: "unknown output type", outType: "unknown_type", wantErr: true},
 		{
 			name:    "csv output type",
 			outType: "csv",
-			wantNil: false,
-			wantErr: false,
+			specific: config.OutputSpecific{Csv: config.CsvConfig{
+				FilePath: filepath.Join(t.TempDir(), "test.csv"),
+			}},
 		},
 		{
-			name:    "influxdb output type - creates writer but will fail on Start",
+			name:    "influxdb output type",
 			outType: "influxdb",
-			wantNil: false, // Writer is created, but will fail on Start
-			wantErr: false,
+			specific: config.OutputSpecific{Influxdb: config.InfluxdbConfig{
+				Address:  "http://localhost:8086",
+				Token:    "test-token",
+				Database: "test-db",
+			}},
 		},
 		{
-			name:    "mqtt output type - creates writer but will fail on Start",
+			name:    "mqtt output type",
 			outType: "mqtt",
-			wantNil: false, // Writer is created, but will fail on Start
-			wantErr: false,
+			specific: config.OutputSpecific{Mqtt: config.MqttConfig{
+				Address:  "tcp://" + listener.Addr().String(),
+				ClientID: "test-client",
+				Topic:    "datalogger",
+				QoS:      1,
+			}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			outputConfig := &config.Output{
-				Name:    "test_output",
-				Type:    tt.outType,
-				Devices: []string{"device1"},
-			}
-
-			// Add required config for each type
-			if tt.outType == "csv" {
-				outputConfig.OutputSpecific = config.OutputSpecific{
-					Csv: config.CsvConfig{
-						FilePath: "/tmp/test.csv",
-					},
-				}
-			}
-			if tt.outType == "influxdb" {
-				outputConfig.OutputSpecific = config.OutputSpecific{
-					Influxdb: config.InfluxdbConfig{
-						Address:  "http://localhost:8086",
-						Token:    "test-token",
-						Database: "test-db",
-						Insecure: true,
-					},
-				}
-			}
-			if tt.outType == "mqtt" {
-				outputConfig.OutputSpecific = config.OutputSpecific{
-					Mqtt: config.MqttConfig{
-						Address:  "tcp://localhost:1883",
-						ClientID: "test-client",
-						Topic:    "datalogger",
-						QoS:      1,
-						Retain:   false,
-					},
-				}
-			}
-
-			result, err := createOutputWriterByType(outputConfig, &logger)
-
-			if tt.wantNil {
-				if result != nil {
-					t.Errorf("createOutputWriterByType() result = %v, want nil", result)
-				}
-			} else {
-				if result == nil {
-					t.Errorf("createOutputWriterByType() result = nil, want non-nil")
-				}
-			}
-
+			result, err := createOutputWriterByType(&config.Output{
+				Name:           "test_output",
+				Type:           tt.outType,
+				Devices:        []string{"device1"},
+				OutputSpecific: tt.specific,
+			}, &logger)
 			if tt.wantErr {
-				if err == nil {
-					t.Errorf("createOutputWriterByType() error = nil, want non-nil")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("createOutputWriterByType() error = %v, want nil", err)
-				}
+				assert.Error(t, err)
+				assert.Nil(t, result)
+				return
 			}
+			require.NoError(t, err)
+			assert.NotNil(t, result)
 		})
 	}
 }
@@ -486,7 +420,7 @@ func TestRouteDeviceToOutputs(t *testing.T) {
 	close(deviceCh)
 
 	// Create mock output writers and channels
-	outputWriters := []output.OutputWriter{
+	outputWriters := []output.Writer{
 		&mockOutputWriterForMap{name: "output1", devices: []string{"device1"}},
 	}
 
@@ -545,7 +479,6 @@ func TestProcessDataPoints(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-
 }
 
 // TestStartOutputWriters tests the startOutputWriters function
@@ -573,7 +506,7 @@ func TestStartOutputWriters(t *testing.T) {
 	}
 
 	// This should work since CSV writer doesn't require external connections
-	outputWriters, outputChannels, _ := startOutputWriters(cfg, ctx, &logger)
+	outputWriters, outputChannels, _ := startOutputWriters(ctx, cfg, &logger)
 
 	if len(outputWriters) != 1 {
 		t.Errorf("Expected 1 output writer, got %d", len(outputWriters))
@@ -598,7 +531,7 @@ func TestStartRouting(t *testing.T) {
 	// Create mock channels
 	deviceCh := make(<-chan datasource.DataPoint)
 
-	outputWriters := []output.OutputWriter{
+	outputWriters := []output.Writer{
 		&mockOutputWriterForMap{name: "output1", devices: []string{"device1"}},
 	}
 
@@ -622,7 +555,7 @@ func TestLoadAndValidateConfig(t *testing.T) {
 
 	// Write a minimal valid config
 	configContent := "version: \"1.0\"\ndevices:\n  - name: test_device\n    type: http\n    poll_interval: 1s\n    timeout: 5s\n    parallelism: 1\n    device_specific:\n      http:\n        address: http://localhost:8080\n        method: GET\n        response_type: json\n    points:\n      - name: temp\n        json_path: temperature\n        type: float64\n        unit: C\n\noutputs:\n  - name: csv_output\n    type: csv\n    devices: [test_device]\n    output_specific:\n      csv:\n        file_path: " + filePath + "\n"
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
@@ -661,7 +594,7 @@ func TestLoadAndValidateConfigInvalidYAML(t *testing.T) {
 
 	// Write invalid YAML
 	invalidYAML := "this is not valid yaml: [[["
-	if err := os.WriteFile(configPath, []byte(invalidYAML), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(invalidYAML), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
@@ -685,14 +618,14 @@ func TestCreateDeviceReaders(t *testing.T) {
 				Timeout:      5 * time.Second,
 				Parallelism:  1,
 				DeviceSpecific: config.DeviceSpecific{
-					Http: config.HttpConfig{
+					HTTP: config.HTTPConfig{
 						Address:      "http://localhost:8080",
 						Method:       "GET",
 						ResponseType: "json",
 					},
 				},
 				Points: []config.Point{
-					{Name: "temp", JsonPath: "temperature", Type: "float64"},
+					{Name: "temp", JSONPath: "temperature", Type: "float64"},
 				},
 			},
 		},
@@ -817,14 +750,14 @@ func TestStartDeviceReadersWithRealHTTP(t *testing.T) {
 				Timeout:      5 * time.Second,
 				Parallelism:  1,
 				DeviceSpecific: config.DeviceSpecific{
-					Http: config.HttpConfig{
+					HTTP: config.HTTPConfig{
 						Address:      "http://localhost:8080",
 						Method:       "GET",
 						ResponseType: "json",
 					},
 				},
 				Points: []config.Point{
-					{Name: "temp", JsonPath: "temperature", Type: "float64"},
+					{Name: "temp", JSONPath: "temperature", Type: "float64"},
 				},
 			},
 		},
@@ -836,7 +769,7 @@ func TestStartDeviceReadersWithRealHTTP(t *testing.T) {
 	}
 
 	// Start the readers
-	deviceChannels, _ := startDeviceReaders(cfg, ctx, &logger)
+	deviceChannels, _ := startDeviceReaders(ctx, cfg, &logger)
 
 	if len(deviceChannels) != 1 {
 		t.Errorf("Expected 1 device channel, got %d", len(deviceChannels))
@@ -862,7 +795,7 @@ func TestRouteDeviceToOutputsNoOutputs(t *testing.T) {
 	close(deviceCh)
 
 	// Create mock output writers and channels for a different device
-	outputWriters := []output.OutputWriter{
+	outputWriters := []output.Writer{
 		&mockOutputWriterForMap{name: "output1", devices: []string{"device2"}}, // Different device
 	}
 
@@ -889,33 +822,48 @@ func TestRouteDeviceToOutputsNoOutputs(t *testing.T) {
 
 // TestParseFlags tests the parseFlags function
 // Note: This test is tricky because parseFlags uses global variables and flag.CommandLine
-// which can only be initialized once. We test the flag parsing logic indirectly.
+// TestParseFlags tests the parseFlags function
 func TestParseFlags(t *testing.T) {
-	// Save original args and flags
-	originalArgs := os.Args
-	originalConfigPath := configPath
-	originalDebugFlag := debugFlag
-	originalVersionFlag := versionFlag
+	t.Parallel()
 
-	// Restore original values after test
-	defer func() {
-		os.Args = originalArgs
-		configPath = originalConfigPath
-		debugFlag = originalDebugFlag
-		versionFlag = originalVersionFlag
-	}()
+	tests := []struct {
+		name    string
+		args    []string
+		want    cliFlags
+		wantErr error
+	}{
+		{
+			name: "config and debug",
+			args: []string{"-config", "test.yaml", "-debug"},
+			want: cliFlags{configPath: "test.yaml", debug: true},
+		},
+		{
+			name: "version without config",
+			args: []string{"-version"},
+			want: cliFlags{showVersion: true},
+		},
+		{
+			name:    "missing config",
+			args:    []string{"-debug"},
+			wantErr: errConfigRequired,
+		},
+		{
+			name:    "help",
+			args:    []string{"-help"},
+			wantErr: flag.ErrHelp,
+		},
+	}
 
-	// Test with -config flag
-	os.Args = []string{"datalogger", "-config", "test.yaml"}
-
-	// Reset global flag variables
-	configPath = ""
-	debugFlag = false
-	versionFlag = false
-
-	// We can't call parseFlags directly in a test because it registers
-	// flags with the global flag.CommandLine, which can only be done once
-	// So we'll test the flag parsing logic by checking os.Args parsing
-	// This is a limitation of the flag package design
-	t.Skip("Skipping parseFlags test - requires flag package reset between tests")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseFlags("datalogger", tt.args, io.Discard)
+			if tt.wantErr != nil {
+				assert.ErrorIs(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

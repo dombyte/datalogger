@@ -8,9 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/dombyte/datalogger/config"
 	"github.com/dombyte/datalogger/datasource"
-	"github.com/rs/zerolog"
 )
 
 // TestNewCSVWriter tests creating a new CSV writer
@@ -31,7 +34,7 @@ func TestNewCSVWriter(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -65,7 +68,7 @@ func TestCSVWriterName(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -92,7 +95,7 @@ func TestCSVWriterDevices(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -125,7 +128,7 @@ func TestCSVWriterValidate(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -135,111 +138,62 @@ func TestCSVWriterValidate(t *testing.T) {
 	}
 }
 
+// newTestWriter creates a Writer with the given CSV settings.
+func newTestWriter(t *testing.T, csvConfig config.CsvConfig) *Writer {
+	t.Helper()
+	logger := zerolog.Nop()
+	writer, err := New(config.Output{
+		Name:           "csv_test",
+		Type:           "csv",
+		Devices:        []string{"device1"},
+		OutputSpecific: config.OutputSpecific{Csv: csvConfig},
+	}, &logger)
+	require.NoError(t, err)
+	t.Cleanup(func() { writer.file.Close() })
+	return writer
+}
+
 // TestCSVWriterWritePoint tests the writePoint method
 func TestCSVWriterWritePoint(t *testing.T) {
-	logger := zerolog.Nop()
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "test.csv")
+	filePath := filepath.Join(t.TempDir(), "test.csv")
+	writer := newTestWriter(t, config.CsvConfig{FilePath: filePath})
 
-	outputConfig := config.Output{
-		Name:    "csv_test",
-		Type:    "csv",
-		Devices: []string{"device1"},
-		OutputSpecific: config.OutputSpecific{
-			Csv: config.CsvConfig{
-				FilePath: filePath,
-			},
-		},
-	}
-
-	writer, err := NewCSVWriter(outputConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create CSV writer: %v", err)
-	}
-
-	timestamp := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	dp := datasource.DataPoint{
 		DeviceName: "device1",
 		PointName:  "temperature",
 		Value:      23.5,
-		Timestamp:  timestamp,
+		Timestamp:  time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
 		Unit:       "C",
 	}
-
-	if err := writer.writePoint(dp); err != nil {
-		t.Fatalf("writePoint() error = %v", err)
-	}
+	require.NoError(t, writer.writePoint(dp))
 
 	content, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("Failed to read CSV file: %v", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	if len(lines) < 2 {
-		t.Errorf("Expected at least 2 lines (header + data), got %d", len(lines))
-	}
-
-	if !strings.Contains(lines[0], "timestamp,device,point,value,unit") {
-		t.Errorf("Header line missing expected columns: %s", lines[0])
-	}
-
-	if !strings.Contains(lines[1], "device1") || !strings.Contains(lines[1], "temperature") ||
-		!strings.Contains(lines[1], "23.5") || !strings.Contains(lines[1], "C") {
-		t.Errorf("Data line missing expected values: %s", lines[1])
-	}
+	require.NoError(t, err)
+	assert.Equal(t,
+		"timestamp,device,point,value,unit\n"+
+			"2024-01-01T12:00:00Z,device1,temperature,23.5,C\n",
+		string(content))
 }
 
 // TestCSVWriterMultiplePoints tests writing multiple points
 func TestCSVWriterMultiplePoints(t *testing.T) {
-	logger := zerolog.Nop()
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "test.csv")
+	filePath := filepath.Join(t.TempDir(), "test.csv")
+	writer := newTestWriter(t, config.CsvConfig{FilePath: filePath})
 
-	outputConfig := config.Output{
-		Name:    "csv_test",
-		Type:    "csv",
-		Devices: []string{"device1"},
-		OutputSpecific: config.OutputSpecific{
-			Csv: config.CsvConfig{
-				FilePath: filePath,
-			},
-		},
-	}
-
-	writer, err := NewCSVWriter(outputConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create CSV writer: %v", err)
-	}
-
+	ts := time.Now().UTC()
 	points := []datasource.DataPoint{
-		{DeviceName: "device1", PointName: "temp", Value: 23.5, Timestamp: time.Now().UTC(), Unit: "C"},
-		{DeviceName: "device1", PointName: "humidity", Value: 60.0, Timestamp: time.Now().UTC(), Unit: "%"},
-		{DeviceName: "device1", PointName: "pressure", Value: 1013.25, Timestamp: time.Now().UTC(), Unit: "hPa"},
+		{DeviceName: "device1", PointName: "temp", Value: 23.5, Timestamp: ts, Unit: "C"},
+		{DeviceName: "device1", PointName: "humidity", Value: 60.0, Timestamp: ts, Unit: "%"},
+		{DeviceName: "device1", PointName: "pressure", Value: 1013.25, Timestamp: ts, Unit: "hPa"},
 	}
-
 	for _, dp := range points {
-		if err := writer.writePoint(dp); err != nil {
-			t.Fatalf("writePoint() error = %v", err)
-		}
+		require.NoError(t, writer.writePoint(dp))
 	}
 
 	content, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("Failed to read CSV file: %v", err)
-	}
-
-	lines := strings.Split(string(content), "\n")
-	dataLines := 0
-	for _, line := range lines {
-		if strings.TrimSpace(line) != "" {
-			dataLines++
-		}
-	}
-
-	if dataLines < 4 {
-		t.Errorf("Expected at least 4 non-empty lines (header + 3 data), got %d", dataLines)
-	}
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	assert.Len(t, lines, 4, "header + 3 data lines")
 }
 
 // TestCSVWriterFormatValue tests the formatValue function
@@ -289,7 +243,7 @@ func TestCSVWriterFileCreation(t *testing.T) {
 		},
 	}
 
-	_, err := NewCSVWriter(outputConfig, &logger)
+	_, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -329,7 +283,7 @@ func TestCSVWriterStart(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -390,7 +344,7 @@ func TestCSVWriterStartShutdown(t *testing.T) {
 		},
 	}
 
-	writer, err := NewCSVWriter(outputConfig, &logger)
+	writer, err := New(outputConfig, &logger)
 	if err != nil {
 		t.Fatalf("Failed to create CSV writer: %v", err)
 	}
@@ -401,7 +355,7 @@ func TestCSVWriterStartShutdown(t *testing.T) {
 
 	_ = writer.Start(ctx, inputCh)
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		inputCh <- datasource.DataPoint{
 			DeviceName: "device1",
 			PointName:  "temp",
@@ -438,7 +392,7 @@ func TestCSVWriterOpenFile(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger: logger,
 		config: config.Output{
 			Name:    "csv_test",
@@ -477,83 +431,30 @@ func TestCSVWriterOpenFile(t *testing.T) {
 
 // TestCSVWriterOpenFileExisting tests opening an existing file
 func TestCSVWriterOpenFileExisting(t *testing.T) {
-	logger := zerolog.Nop()
-	tempDir := t.TempDir()
-	filePath := filepath.Join(tempDir, "test.csv")
+	filePath := filepath.Join(t.TempDir(), "test.csv")
+	existingContent := "timestamp,device,point,value,unit\n" +
+		"2024-01-01T12:00:00Z,device1,temp,23.5,C\n"
+	require.NoError(t, os.WriteFile(filePath, []byte(existingContent), 0o644))
 
-	existingContent := "timestamp,device,point,value,unit\n"
-	existingContent += "2024-01-01T12:00:00Z,device1,temp,23.5,C\n"
-
-	if err := os.WriteFile(filePath, []byte(existingContent), 0644); err != nil {
-		t.Fatalf("Failed to create existing file: %v", err)
-	}
-
-	writer := &CSVWriter{
-		logger: logger,
-		config: config.Output{
-			Name:    "csv_test",
-			Type:    "csv",
-			Devices: []string{"device1"},
-			OutputSpecific: config.OutputSpecific{
-				Csv: config.CsvConfig{
-					FilePath: filePath,
-				},
-			},
-		},
-		filePath: filePath,
-	}
-
-	if err := writer.openFile(); err != nil {
-		t.Fatalf("openFile() error = %v", err)
-	}
+	writer := &Writer{logger: zerolog.Nop(), filePath: filePath}
+	require.NoError(t, writer.openFile())
+	t.Cleanup(func() { writer.file.Close() })
 
 	content, err := os.ReadFile(filePath)
-	if err != nil {
-		t.Fatalf("Failed to read CSV file: %v", err)
-	}
-
-	if !strings.Contains(string(content), "2024-01-01T12:00:00Z") {
-		t.Error("Existing content was not preserved")
-	}
-
-	lines := strings.Split(string(content), "\n")
-	headerCount := 0
-	for _, line := range lines {
-		if strings.Contains(line, "timestamp,device,point,value,unit") {
-			headerCount++
-		}
-	}
-
-	if headerCount != 1 {
-		t.Errorf("Header appears %d times, expected 1", headerCount)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, existingContent, string(content), "no second header, content kept")
 }
 
 // TestCSVWriterRotation tests file rotation functionality
 func TestCSVWriterRotation(t *testing.T) {
-	logger := zerolog.Nop()
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
+	writer := newTestWriter(t, config.CsvConfig{
+		FilePath:   filePath,
+		MaxAge:     time.Hour,
+		MaxBackups: 2,
+	})
 
-	outputConfig := config.Output{
-		Name:    "csv_rotation_test",
-		Type:    "csv",
-		Devices: []string{"device1"},
-		OutputSpecific: config.OutputSpecific{
-			Csv: config.CsvConfig{
-				FilePath:   filePath,
-				MaxAge:     100 * time.Millisecond, // Rotate after 100ms
-				MaxBackups: 2,
-			},
-		},
-	}
-
-	writer, err := NewCSVWriter(outputConfig, &logger)
-	if err != nil {
-		t.Fatalf("Failed to create CSV writer: %v", err)
-	}
-
-	// Write a point to trigger rotation check
 	dp := datasource.DataPoint{
 		DeviceName: "device1",
 		PointName:  "temp",
@@ -561,45 +462,16 @@ func TestCSVWriterRotation(t *testing.T) {
 		Timestamp:  time.Now().UTC(),
 		Unit:       "C",
 	}
+	require.NoError(t, writer.writePoint(dp))
 
-	if err := writer.writePoint(dp); err != nil {
-		t.Fatalf("Failed to write point: %v", err)
-	}
+	// Age the current file past max_age instead of sleeping.
+	writer.fileCreated = time.Now().Add(-2 * time.Hour)
+	require.NoError(t, writer.writePoint(dp))
 
-	// Wait for rotation to trigger (MaxAge is 100ms)
-	time.Sleep(150 * time.Millisecond)
-
-	// Write another point to trigger rotation
-	if err := writer.writePoint(dp); err != nil {
-		t.Fatalf("Failed to write second point: %v", err)
-	}
-
-	// Check that the original file was rotated
-	files, err := os.ReadDir(tempDir)
-	if err != nil {
-		t.Fatalf("Failed to read directory: %v", err)
-	}
-
-	// There should be the original file plus at least one rotated file
-	if len(files) < 2 {
-		t.Errorf("Expected at least 2 files (original + rotated), got %d", len(files))
-	}
-
-	// Check that one of the files is the rotated one
-	rotatedFound := false
-	for _, file := range files {
-		if strings.Contains(file.Name(), ".") && file.Name() != "." {
-			rotatedFound = true
-			break
-		}
-	}
-
-	if !rotatedFound {
-		t.Error("No rotated file found")
-	}
-
-	// Clean up
-	writer.file.Close()
+	backups, err := filepath.Glob(filePath + ".*")
+	require.NoError(t, err)
+	assert.Len(t, backups, 1, "one rotated file")
+	assert.FileExists(t, filePath, "a new file is started")
 }
 
 // TestCollectBackupFiles tests the collectBackupFiles function
@@ -608,7 +480,7 @@ func TestCollectBackupFiles(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:   logger,
 		config:   config.Output{Name: "test", Type: "csv"},
 		filePath: filePath,
@@ -622,13 +494,13 @@ func TestCollectBackupFiles(t *testing.T) {
 	}
 
 	for _, f := range backupFiles {
-		if err := os.WriteFile(f, []byte("data"), 0644); err != nil {
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
 			t.Fatalf("Failed to create backup file: %v", err)
 		}
 	}
 
 	// Create the current file
-	if err := os.WriteFile(filePath, []byte("header"), 0644); err != nil {
+	if err := os.WriteFile(filePath, []byte("header"), 0o644); err != nil {
 		t.Fatalf("Failed to create current file: %v", err)
 	}
 
@@ -660,7 +532,7 @@ func TestDeleteOldBackups(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:     logger,
 		config:     config.Output{Name: "test", Type: "csv"},
 		filePath:   filePath,
@@ -671,10 +543,10 @@ func TestDeleteOldBackups(t *testing.T) {
 	backup1 := filepath.Join(tempDir, "test.csv.1")
 	backup2 := filepath.Join(tempDir, "test.csv.2")
 
-	if err := os.WriteFile(backup1, []byte("1"), 0644); err != nil {
+	if err := os.WriteFile(backup1, []byte("1"), 0o644); err != nil {
 		t.Fatalf("Failed to create backup: %v", err)
 	}
-	if err := os.WriteFile(backup2, []byte("2"), 0644); err != nil {
+	if err := os.WriteFile(backup2, []byte("2"), 0o644); err != nil {
 		t.Fatalf("Failed to create backup: %v", err)
 	}
 
@@ -708,7 +580,7 @@ func TestDeleteAllBackups(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:     logger,
 		config:     config.Output{Name: "test", Type: "csv"},
 		filePath:   filePath,
@@ -727,7 +599,7 @@ func TestDeleteAllBackups(t *testing.T) {
 
 	// Create the files
 	for _, b := range backups {
-		if err := os.WriteFile(b.path, []byte("data"), 0644); err != nil {
+		if err := os.WriteFile(b.path, []byte("data"), 0o644); err != nil {
 			t.Fatalf("Failed to create backup file: %v", err)
 		}
 	}
@@ -750,14 +622,14 @@ func TestDeleteBackupFile(t *testing.T) {
 	filePath := filepath.Join(tempDir, "test.csv")
 	backupPath := filepath.Join(tempDir, "test.csv.backup")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:   logger,
 		config:   config.Output{Name: "test", Type: "csv"},
 		filePath: filePath,
 	}
 
 	// Create a backup file
-	if err := os.WriteFile(backupPath, []byte("data"), 0644); err != nil {
+	if err := os.WriteFile(backupPath, []byte("data"), 0o644); err != nil {
 		t.Fatalf("Failed to create backup file: %v", err)
 	}
 
@@ -776,7 +648,7 @@ func TestDeleteOldestBackups(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "test.csv")
 
-	writer := &CSVWriter{
+	writer := &Writer{
 		logger:     logger,
 		config:     config.Output{Name: "test", Type: "csv"},
 		filePath:   filePath,
@@ -789,7 +661,7 @@ func TestDeleteOldestBackups(t *testing.T) {
 	backup3 := filepath.Join(tempDir, "test.csv.3")
 
 	for _, f := range []string{backup1, backup2, backup3} {
-		if err := os.WriteFile(f, []byte("data"), 0644); err != nil {
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
 			t.Fatalf("Failed to create backup: %v", err)
 		}
 	}

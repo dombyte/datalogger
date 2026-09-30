@@ -7,8 +7,8 @@ import (
 	"github.com/dombyte/datalogger/datasource"
 )
 
-// OutputWriter is the interface that all output writers must implement.
-type OutputWriter interface {
+// Writer is the interface that all output writers must implement.
+type Writer interface {
 	// Name returns the output name
 	Name() string
 

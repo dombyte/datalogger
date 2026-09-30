@@ -65,7 +65,7 @@ config/                  Config structs (viper/mapstructure), Load(), Validate()
 datasource/              DataPoint type, DeviceReader interface
   modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, backoff, reconnect
   http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text, backoff
-output/                  OutputWriter interface
+output/                  Writer interface
   csv/                   CSV writer: flush per point, rotation by max_age, backup cleanup
   influxdb/              InfluxDB 3 writer: batching, retries, v3 write API
   mqtt/                  MQTT v5 writer (paho.golang): one topic per point, JSON payload
@@ -120,7 +120,7 @@ DeviceReader.Start ──dataCh (unbuffered)──▶ router goroutine (one per 
                                               ▼
                               per-output channel (buffer_size, default 1000)
                                               ▼
-                                     OutputWriter.Start (one goroutine per output)
+                                     Writer.Start       (one goroutine per output)
 ```
 
 - **Readers own** their data channel and are the only senders on it. A poll sends all its
@@ -148,8 +148,10 @@ DeviceReader.Start ──dataCh (unbuffered)──▶ router goroutine (one per 
 
 ### Failure handling
 - Poll errors are handled inside the reader: exponential backoff (100 ms doubling, max
-  30 s), and a reconnect when the error text looks like a connection problem. A reader
-  never exits because of read errors.
+  30 s), and a reconnect on connection errors, detected by type: Modbus on `net.OpError`,
+  EOF, closed connection, `ECONNRESET`, `EPIPE` (timeouts and Modbus exceptions keep the
+  connection); HTTP on every transport error (`net.Error`) and truncated bodies (status
+  and parse errors do not). A reader never exits because of read errors.
 - Write errors are handled inside the writer (InfluxDB: retries, then the batch is
   dropped and logged; MQTT/CSV: log and continue with the next point).
 - A reader or writer that **exits** while the app is not shutting down is fatal: the
@@ -189,7 +191,7 @@ deviation scheduled for removal (see Migration backlog).
 - Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool`; value = raw × `scale` +
   `offset`, always delivered as float64. **`scale` must be set** (use 1 for raw values):
   an omitted scale is 0 and yields only the offset. 32-bit types need `count: 2` (high word
-  first); with `count: 1` the decoder indexes past the read registers and panics.
+  first); with `count: 1` every read of that point fails with a decode error.
 - Most Modbus devices handle only one request at a time: use `parallelism: 1` unless the
   device is known to support more.
 
@@ -277,43 +279,32 @@ is meant to stay:
 Known gaps between the current code and standard v3, in suggested order. Each item is its
 own `refactor/…` branch; update this list when an item is done.
 
-1. **Make `make check` green:** fix formatting (`golangci-lint fmt`), the failing config
-   tests and the ~125 lint findings (mostly `lll`, `gocyclo`, `revive`, `mnd`), and the
-   deadcode findings.
-2. **Tests without network:** `TestCreateOutputWriterByType` dials a real MQTT broker. Move
-   such tests behind `//go:build integration` or inject the connection.
-3. **Globals in `main`:** `configPath`, `debugFlag`, `versionFlag` → local flag parsing;
-   keep only the linker-set build info with `//nolint:gochecknoglobals`.
-4. **viper global instance:** `config.Load` uses the package-level viper; use `viper.New()`
+1. **viper global instance:** `config.Load` uses the package-level viper; use `viper.New()`
    (or plain YAML) and pass the env lookup in explicitly. Env overrides must fail on
    invalid values.
-5. **`Validate()` without side effects:** move defaults (HTTP method/response type, MQTT
+2. **`Validate()` without side effects:** move defaults (HTTP method/response type, MQTT
    topic/client ID) into a `Defaults()` step before validation; readers'/writers'
    `Validate()` methods are no-ops today and should be removed from the interfaces or do
    real work.
-6. **Dependency injection for clients:** Modbus, HTTP, InfluxDB and MQTT clients are created
+3. **Dependency injection for clients:** Modbus, HTTP, InfluxDB and MQTT clients are created
    inside the packages. Declare small client interfaces in each package, create the real
    clients in `Create*` factories, add mockery mocks and testify-based tests.
-7. **Injected `Clock`:** replace `time.Now`, `time.Sleep` (backoff) and `time.After` in loops
+4. **Injected `Clock`:** replace `time.Now`, `time.Sleep` (backoff) and `time.After` in loops
    with an injected clock; backoff waits must also stop on context cancel (today
    `time.Sleep` delays shutdown by up to 30 s).
-8. **Startup failures:** a device/output that cannot be constructed is skipped today. It
+5. **Startup failures:** a device/output that cannot be constructed is skipped today. It
    should either fail startup (exit 1) or start in a recovering state and reconnect; the
    choice goes into "Design Decisions".
-9. **Lifecycle per standard 4.2/4.3:** `signal.NotifyContext`, `run() int` with exit code,
+6. **Lifecycle per standard 4.2/4.3:** `signal.NotifyContext`, `run() int` with exit code,
    one hard shutdown deadline, **remove the second-signal force mode**, replace the
    sleep-polling `monitorComponents` + `logger.Fatal` with an error channel/`errgroup`
    that makes `Run` return an error. The unused per-component `errCh` of readers goes away.
-10. **Connection error detection:** `shouldReconnect` matches error strings; use
-    `errors.Is`/`errors.As` (`net.Error`, `io.EOF`, `syscall.ECONNRESET`, …).
-11. **Config pitfalls:** implement `response_type: xml` or reject it in validation; apply or
-    reject `scale`/`offset` on HTTP points; reject 32-bit Modbus types with `count` < 2
-    instead of panicking; default `scale` to 1 when omitted.
-12. **Naming:** `output.OutputWriter` → `output.Writer`, `HttpReader`/`HttpConfig`/`JsonPath`
-    → `HTTPReader`/`HTTPConfig`/`JSONPath`, drop the deprecated
-    `applyScaleAndOffsetForPoint`. Config keys (`json_path`, …) stay unchanged.
-13. **Layout:** move to `cmd/datalogger` + `internal/…` (section 3 target), with the
-    composition root in `internal/app` and per-package `Settings` structs.
+7. **Config pitfalls:** implement `response_type: xml` or reject it in validation; apply or
+   reject `scale`/`offset` on HTTP points; reject 32-bit Modbus types with `count` < 2 in
+   validation (today each read fails with a decode error); default `scale` to 1 when
+   omitted.
+8. **Layout:** move to `cmd/datalogger` + `internal/…` (section 3 target), with the
+   composition root in `internal/app` and per-package `Settings` structs.
 
 ---
 

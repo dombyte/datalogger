@@ -13,26 +13,41 @@ type Range struct {
 	End   uint16
 }
 
-// parseRanges parses range specifications in the format "start-end" and returns a slice of Ranges.
+// parseRanges parses range specifications "start-end" (inclusive) into Ranges.
 func parseRanges(rangeSpecs []string) ([]Range, error) {
 	var ranges []Range
 	for _, spec := range rangeSpecs {
-		parts := strings.Split(spec, "-")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid range format '%s': expected 'start-end'", spec)
-		}
-		start, err := strconv.Atoi(parts[0])
+		rng, err := parseRange(spec)
 		if err != nil {
-			return nil, fmt.Errorf("invalid start address in range '%s': %w", spec, err)
+			return nil, err
 		}
-		end, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return nil, fmt.Errorf("invalid end address in range '%s': %w", spec, err)
-		}
-		if start > end {
-			return nil, fmt.Errorf("invalid range '%s': start > end", spec)
-		}
-		ranges = append(ranges, Range{Start: uint16(start), End: uint16(end)})
+		ranges = append(ranges, rng)
 	}
 	return ranges, nil
+}
+
+// parseRange parses one "start-end" specification.
+func parseRange(spec string) (Range, error) {
+	startStr, endStr, ok := strings.Cut(spec, "-")
+	if !ok {
+		return Range{}, fmt.Errorf("invalid range format '%s': expected 'start-end'", spec)
+	}
+	start, err := parseAddress(startStr)
+	if err != nil {
+		return Range{}, fmt.Errorf("invalid start address in range '%s': %w", spec, err)
+	}
+	end, err := parseAddress(endStr)
+	if err != nil {
+		return Range{}, fmt.Errorf("invalid end address in range '%s': %w", spec, err)
+	}
+	if start > end {
+		return Range{}, fmt.Errorf("invalid range '%s': start > end", spec)
+	}
+	return Range{Start: start, End: end}, nil
+}
+
+// parseAddress parses a register address (0-65535).
+func parseAddress(s string) (uint16, error) {
+	v, err := strconv.ParseUint(s, 10, 16)
+	return uint16(v), err
 }

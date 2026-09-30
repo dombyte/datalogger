@@ -7,7 +7,7 @@ import (
 	"github.com/dombyte/datalogger/datasource"
 )
 
-// MockOutputWriter is a mock implementation of OutputWriter for testing
+// MockOutputWriter is a mock implementation of Writer for testing
 type MockOutputWriter struct {
 	name        string
 	devices     []string
@@ -37,7 +37,7 @@ func (m *MockOutputWriter) Devices() []string {
 	return m.devices
 }
 
-// TestOutputWriterInterface tests that the OutputWriter interface is properly defined
+// TestOutputWriterInterface tests that the Writer interface is properly defined
 func TestOutputWriterInterface(t *testing.T) {
 	// Create a mock writer
 	mock := &MockOutputWriter{
@@ -45,8 +45,8 @@ func TestOutputWriterInterface(t *testing.T) {
 		devices: []string{"device1", "device2"},
 	}
 
-	// Verify it implements OutputWriter interface
-	var _ OutputWriter = mock
+	// Verify it implements Writer interface
+	var _ Writer = mock
 
 	// Test Name method
 	if mock.Name() != "mock" {
@@ -65,7 +65,7 @@ func TestOutputWriterInterface(t *testing.T) {
 	}
 
 	// Test Start method (can't fully test without context)
-	ch := mock.Start(nil, nil)
+	ch := mock.Start(context.Background(), nil)
 	if ch == nil {
 		t.Error("Start() returned nil channel")
 	}
@@ -98,7 +98,7 @@ func TestDataPointStruct(t *testing.T) {
 	}
 }
 
-// TestOutputWriterWithErrors tests error handling in OutputWriter
+// TestOutputWriterWithErrors tests error handling in Writer
 func TestOutputWriterWithErrors(t *testing.T) {
 	tests := []struct {
 		name        string

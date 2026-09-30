@@ -16,11 +16,12 @@ type Config struct {
 
 // Device represents a device configuration.
 type Device struct {
-	Name           string         `mapstructure:"name"`
-	Type           string         `mapstructure:"type"` // "modbus" or "http"
-	PollInterval   time.Duration  `mapstructure:"poll_interval"`
-	Timeout        time.Duration  `mapstructure:"timeout"`
-	Parallelism    int            `mapstructure:"parallelism"` // 1-100, controls concurrent reads within device poll
+	Name         string        `mapstructure:"name"`
+	Type         string        `mapstructure:"type"` // "modbus" or "http"
+	PollInterval time.Duration `mapstructure:"poll_interval"`
+	Timeout      time.Duration `mapstructure:"timeout"`
+	// Parallelism (1-100) limits the concurrent reads within one device poll.
+	Parallelism    int            `mapstructure:"parallelism"`
 	DeviceSpecific DeviceSpecific `mapstructure:"device_specific"`
 	Points         []Point        `mapstructure:"points"`
 }
@@ -30,9 +31,9 @@ type Point struct {
 	Name         string  `mapstructure:"name"`
 	Register     uint16  `mapstructure:"register"`      // Modbus: starting register address
 	Count        uint16  `mapstructure:"count"`         // Modbus: number of registers to read
-	Type         string  `mapstructure:"type"`          // int16, uint16, int32, uint32, float32, bool, string
-	FunctionCode uint8   `mapstructure:"function_code"` // Modbus: 3 or 4 (optional for HTTP)
-	JsonPath     string  `mapstructure:"json_path"`     // HTTP: "main.temp" or "a_voltage"
+	Type         string  `mapstructure:"type"`          // int16/uint16/int32/uint32/float32/bool
+	FunctionCode uint8   `mapstructure:"function_code"` // Modbus: 3 or 4
+	JSONPath     string  `mapstructure:"json_path"`     // HTTP: "main.temp"
 	Scale        float64 `mapstructure:"scale"`
 	Offset       float64 `mapstructure:"offset"`
 	Unit         string  `mapstructure:"unit"`
@@ -41,23 +42,24 @@ type Point struct {
 // DeviceSpecific contains device-type-specific configuration.
 type DeviceSpecific struct {
 	Modbus ModbusConfig `mapstructure:"modbus"`
-	Http   HttpConfig   `mapstructure:"http"`
+	HTTP   HTTPConfig   `mapstructure:"http"`
 }
 
 // ModbusConfig contains Modbus-specific configuration.
 type ModbusConfig struct {
-	Address      string   `mapstructure:"address"` // "tcp://192.168.1.100:502" or "rtu:///dev/ttyUSB0"
+	// Address is "tcp://host:port" or "rtu:///dev/ttyUSB0".
+	Address      string   `mapstructure:"address"`
 	SlaveID      uint8    `mapstructure:"slave_id"`
 	Speed        int      `mapstructure:"speed"`         // RTU only
 	DataBits     int      `mapstructure:"data_bits"`     // RTU only, default 8
 	Parity       string   `mapstructure:"parity"`        // RTU only: "N", "E", "O"
 	StopBits     int      `mapstructure:"stop_bits"`     // RTU only, default 1
 	RegisterMode string   `mapstructure:"register_mode"` // "direct" or "range"
-	Ranges       []string `mapstructure:"ranges"`        // Manual ranges: ["3000-3011", "3011-3060"]
+	Ranges       []string `mapstructure:"ranges"`        // e.g. ["3000-3011", "3012-3060"]
 }
 
-// HttpConfig contains HTTP-specific configuration.
-type HttpConfig struct {
+// HTTPConfig contains HTTP-specific configuration.
+type HTTPConfig struct {
 	Address      string            `mapstructure:"address"`
 	Method       string            `mapstructure:"method"` // GET or POST
 	Headers      map[string]string `mapstructure:"headers"`
@@ -68,13 +70,14 @@ type HttpConfig struct {
 
 // Output represents an output configuration.
 type Output struct {
-	Name           string         `mapstructure:"name"`
-	Type           string         `mapstructure:"type"` // influxdb, mqtt, csv
-	BufferSize     int            `mapstructure:"buffer_size"`
-	BatchSize      int            `mapstructure:"batch_size"`    // Number of points per batch (0 = default)
-	BatchTimeout   time.Duration  `mapstructure:"batch_timeout"` // Max time before flushing batch (0 = default)
-	MaxRetries     int            `mapstructure:"max_retries"`   // Max retry attempts for failed writes (0 = default)
-	RetryDelay     time.Duration  `mapstructure:"retry_delay"`   // Delay between retries (0 = default)
+	Name       string `mapstructure:"name"`
+	Type       string `mapstructure:"type"` // influxdb, mqtt, csv
+	BufferSize int    `mapstructure:"buffer_size"`
+	// BatchSize, BatchTimeout, MaxRetries and RetryDelay tune InfluxDB writes; 0 = default.
+	BatchSize      int            `mapstructure:"batch_size"`
+	BatchTimeout   time.Duration  `mapstructure:"batch_timeout"`
+	MaxRetries     int            `mapstructure:"max_retries"`
+	RetryDelay     time.Duration  `mapstructure:"retry_delay"`
 	Devices        []string       `mapstructure:"devices"`
 	OutputSpecific OutputSpecific `mapstructure:"output_specific"`
 }
@@ -108,9 +111,10 @@ type MqttConfig struct {
 
 // CsvConfig contains CSV-specific configuration.
 type CsvConfig struct {
-	FilePath   string        `mapstructure:"file_path"`
-	MaxAge     time.Duration `mapstructure:"max_age"`     // Max age before rotation
-	MaxBackups int           `mapstructure:"max_backups"` // Maximum number of rotated files to keep (0 = keep none, < 0 = keep all)
+	FilePath string        `mapstructure:"file_path"`
+	MaxAge   time.Duration `mapstructure:"max_age"` // Max age before rotation
+	// MaxBackups is the number of rotated files to keep (0 = keep none, < 0 = keep all).
+	MaxBackups int `mapstructure:"max_backups"`
 }
 
 // Load loads the configuration from a YAML file.

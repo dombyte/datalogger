@@ -39,7 +39,7 @@ outputs:
       csv:
         file_path: "/tmp/test.csv"
 `
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
@@ -79,7 +79,7 @@ func TestLoadConfigInvalidYAML(t *testing.T) {
 	configPath := filepath.Join(tempDir, "invalid.yaml")
 
 	// Write invalid YAML
-	if err := os.WriteFile(configPath, []byte("invalid: yaml: content:"), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte("invalid: yaml: content:"), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
@@ -106,12 +106,13 @@ func TestConfigValidate(t *testing.T) {
 						PollInterval: 1 * time.Second,
 						Parallelism:  1,
 						DeviceSpecific: DeviceSpecific{
-							Http: HttpConfig{
+							HTTP: HTTPConfig{
 								Address:      "http://localhost",
 								Method:       "GET",
 								ResponseType: "json",
 							},
 						},
+						Points: []Point{{Name: "temp", JSONPath: "temp"}},
 					},
 				},
 				Outputs: []Output{
@@ -228,8 +229,15 @@ func TestDeviceValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "valid http device",
-			device:  Device{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1, DeviceSpecific: DeviceSpecific{Http: HttpConfig{Address: "http://localhost"}}},
+			name: "valid http device",
+			device: Device{
+				Name:           "test",
+				Type:           "http",
+				PollInterval:   1 * time.Second,
+				Parallelism:    1,
+				DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{Address: "http://localhost"}},
+				Points:         []Point{{Name: "temp", JSONPath: "temp"}},
+			},
 			wantErr: false,
 		},
 		{
@@ -246,6 +254,7 @@ func TestDeviceValidate(t *testing.T) {
 						RegisterMode: "direct",
 					},
 				},
+				Points: []Point{{Name: "power", Register: 1, Type: "uint16", Scale: 1}},
 			},
 			wantErr: false,
 		},
@@ -362,16 +371,16 @@ func TestModbusConfigValidate(t *testing.T) {
 	}
 }
 
-// TestHttpConfigValidate tests HttpConfig.Validate
+// TestHttpConfigValidate tests HTTPConfig.Validate
 func TestHttpConfigValidate(t *testing.T) {
 	tests := []struct {
 		name    string
-		config  HttpConfig
+		config  HTTPConfig
 		wantErr bool
 	}{
 		{
 			name: "valid http config",
-			config: HttpConfig{
+			config: HTTPConfig{
 				Address:      "http://localhost:8080",
 				Method:       "GET",
 				ResponseType: "json",
@@ -380,19 +389,19 @@ func TestHttpConfigValidate(t *testing.T) {
 		},
 		{
 			name: "valid http config with defaults",
-			config: HttpConfig{
+			config: HTTPConfig{
 				Address: "http://localhost:8080",
 			},
 			wantErr: false,
 		},
 		{
 			name:    "empty address",
-			config:  HttpConfig{Method: "GET"},
+			config:  HTTPConfig{Method: "GET"},
 			wantErr: true,
 		},
 		{
 			name:    "invalid method",
-			config:  HttpConfig{Address: "http://localhost:8080", Method: "PUT"},
+			config:  HTTPConfig{Address: "http://localhost:8080", Method: "PUT"},
 			wantErr: true,
 		},
 	}
