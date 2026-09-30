@@ -234,12 +234,14 @@ func TestDeviceValidate(t *testing.T) {
 		{
 			name: "valid http device",
 			device: Device{
-				Name:           "test",
-				Type:           "http",
-				PollInterval:   1 * time.Second,
-				Parallelism:    1,
-				DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{Address: "http://localhost", Method: "GET"}},
-				Points:         []Point{{Name: "temp", JSONPath: "temp"}},
+				Name:         "test",
+				Type:         "http",
+				PollInterval: 1 * time.Second,
+				Parallelism:  1,
+				DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{
+					Address: "http://localhost", Method: "GET", ResponseType: "json",
+				}},
+				Points: []Point{{Name: "temp", JSONPath: "temp"}},
 			},
 			wantErr: false,
 		},
@@ -759,4 +761,97 @@ func TestValidateHasNoSideEffects(t *testing.T) {
 	m := MqttConfig{Address: "tcp://localhost:1883"}
 	require.NoError(t, m.Validate())
 	assert.Equal(t, MqttConfig{Address: "tcp://localhost:1883"}, m)
+}
+
+// TestValidatePoints covers the per-type point rules.
+func TestValidatePoints(t *testing.T) {
+	t.Parallel()
+
+	modbus := func(points ...Point) Device {
+		return Device{Type: "modbus", Points: points}
+	}
+	http := func(responseType string, points ...Point) Device {
+		return Device{
+			Type:           "http",
+			DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{ResponseType: responseType}},
+			Points:         points,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		device  Device
+		wantErr string
+	}{
+		{name: "modbus uint16", device: modbus(Point{Name: "p", Type: "uint16"})},
+		{name: "modbus float32 count 2", device: modbus(Point{Name: "p", Type: "float32", Count: 2})},
+		{
+			name:    "modbus float32 without count",
+			device:  modbus(Point{Name: "p", Type: "float32"}),
+			wantErr: "points[0] p: type float32 needs count: 2",
+		},
+		{
+			name:    "modbus unknown type",
+			device:  modbus(Point{Name: "p", Type: "string"}),
+			wantErr: `type must be int16, uint16, int32, uint32, float32 or bool, got "string"`,
+		},
+		{
+			name:    "modbus bad function code",
+			device:  modbus(Point{Name: "p", Type: "int16", FunctionCode: 6}),
+			wantErr: "function_code must be 3 or 4, got 6",
+		},
+		{
+			name: "modbus mixed function codes",
+			device: modbus(
+				Point{Name: "a", Type: "int16", FunctionCode: 3},
+				Point{Name: "b", Type: "int16"},
+				Point{Name: "c", Type: "int16", FunctionCode: 4},
+			),
+			wantErr: "points[2] c: function_code 4 mixed with 3",
+		},
+		{name: "http json with path", device: http("json", Point{Name: "p", JSONPath: "a.b"})},
+		{name: "http text without path", device: http("text", Point{Name: "p"})},
+		{
+			name:    "http json without path",
+			device:  http("json", Point{Name: "p"}),
+			wantErr: "points[0] p: json_path required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.device.validatePoints()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+// TestHTTPResponseType checks that only json and text are accepted.
+func TestHTTPResponseType(t *testing.T) {
+	t.Parallel()
+
+	for _, rt := range []string{"json", "text"} {
+		h := HTTPConfig{Address: "http://x", Method: "GET", ResponseType: rt}
+		assert.NoError(t, h.Validate(), rt)
+	}
+	h := HTTPConfig{Address: "http://x", Method: "GET", ResponseType: "xml"}
+	assert.ErrorContains(t, h.Validate(), "response_type must be json or text")
+}
+
+// TestApplyDefaultsScale checks that an omitted scale becomes 1 and a set one is kept.
+func TestApplyDefaultsScale(t *testing.T) {
+	t.Parallel()
+
+	cfg := &Config{Devices: []Device{{
+		Type:   "modbus",
+		Points: []Point{{Name: "unset"}, {Name: "set", Scale: 0.1}},
+	}}}
+	require.NoError(t, cfg.applyDefaults())
+	assert.InDelta(t, 1.0, cfg.Devices[0].Points[0].Scale, 0)
+	assert.InDelta(t, 0.1, cfg.Devices[0].Points[1].Scale, 0)
 }

@@ -368,8 +368,6 @@ func (r *Reader) extractValue(body []byte, point config.Point) (interface{}, err
 	case "text":
 		// For text, just use the whole body
 		return string(body), nil
-	case "xml":
-		return nil, errors.New("XML parsing not implemented")
 	default:
 		return nil, fmt.Errorf("unknown response type: %s", httpConfig.ResponseType)
 	}
@@ -386,7 +384,30 @@ func (r *Reader) extractJSONValue(body []byte, point config.Point) (interface{},
 		return nil, fmt.Errorf("JSONPath %s not found", point.JSONPath)
 	}
 
-	return r.convertJSONResult(result, point.Type)
+	value, err := r.convertJSONResult(result, point.Type)
+	if err != nil {
+		return nil, err
+	}
+	return applyScaleAndOffset(value, point), nil
+}
+
+// applyScaleAndOffset returns value × scale + offset as float64 for numeric values.
+// With scale 1 and offset 0 (the defaults) the value keeps its type; bools and strings
+// are never changed.
+func applyScaleAndOffset(value interface{}, point config.Point) interface{} {
+	if point.Scale == 1 && point.Offset == 0 {
+		return value
+	}
+	switch v := value.(type) {
+	case float64:
+		return v*point.Scale + point.Offset
+	case int64:
+		return float64(v)*point.Scale + point.Offset
+	case uint64:
+		return float64(v)*point.Scale + point.Offset
+	default:
+		return value
+	}
 }
 
 // convertJSONResult converts a gjson.Result to the appropriate type.

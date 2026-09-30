@@ -92,7 +92,7 @@ func (d *Device) validateCommon() error {
 		return errors.New("device must have at least one point")
 	}
 
-	return nil
+	return d.validatePoints()
 }
 
 // Validate validates Modbus configuration.
@@ -155,6 +155,10 @@ func (h *HTTPConfig) Validate() error {
 	method := strings.ToUpper(h.Method)
 	if method != "GET" && method != "POST" {
 		return errors.New("method must be GET or POST")
+	}
+
+	if h.ResponseType != "json" && h.ResponseType != "text" {
+		return fmt.Errorf("response_type must be json or text, got %q", h.ResponseType)
 	}
 
 	return nil

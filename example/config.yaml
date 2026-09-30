@@ -37,12 +37,11 @@ devices:
     # Point options (Modbus):
     #   register       start register address
     #   count          number of registers: 1 for 16-bit types and bool,
-    #                  2 for int32/uint32/float32 (high word first)
+    #                  2 for int32/uint32/float32 (high word first; required)
     #   type           int16, uint16, int32, uint32, float32, bool
     #   function_code  3 = holding registers, 4 = input registers. One register type per
-    #                  device: configure a second device if you need both.
-    #   scale, offset  value = raw * scale + offset. Always set scale (1 for raw values):
-    #                  an omitted scale is 0 and only the offset is returned.
+    #                  device (mixing is rejected): configure a second device for both.
+    #   scale, offset  value = raw * scale + offset (scale defaults to 1, offset to 0).
     #   unit           free text, passed to the outputs
     points:
       - name: pv_voltage_1
@@ -115,9 +114,10 @@ devices:
 
   # ----- HTTP GET, JSON response -------------------------------------------------------
   # Values are read with gjson paths: https://github.com/tidwall/gjson/blob/master/SYNTAX.md
-  # HTTP points do not apply scale or offset: values are delivered as they are in the
-  # response. Without type, numbers become float64 and booleans stay booleans; set type
-  # (float64, int64, uint64, bool, string) to convert explicitly.
+  # Without type, numbers become float64 and booleans stay booleans; set type
+  # (float64, int64, uint64, bool, string) to convert explicitly. scale and offset apply to
+  # numbers (value * scale + offset, delivered as float64); with the defaults (1, 0) values
+  # keep their type.
   - name: energy_meter
     type: http
     poll_interval: 1s
@@ -144,7 +144,6 @@ devices:
 
   # ----- HTTP POST with body and auth header -------------------------------------------
   # response_type: json (default) or text (the whole body as one string value).
-  # xml is accepted by the config but not implemented yet: every point would fail.
   - name: cloud_api
     type: http
     poll_interval: 1m

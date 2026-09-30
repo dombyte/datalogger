@@ -16,6 +16,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/dombyte/datalogger/config"
 )
@@ -251,6 +252,20 @@ func TestExtractJSONValue(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "scale and offset on an int",
+			body: `{"power": 1500}`,
+			point: config.Point{
+				Name: "power", JSONPath: "power", Type: "int64", Scale: 0.001, Offset: 1,
+			},
+			want: float64(2.5),
+		},
+		{
+			name:  "scale leaves bools alone",
+			body:  `{"enabled": true}`,
+			point: config.Point{Name: "enabled", JSONPath: "enabled", Type: "bool", Scale: 10},
+			want:  true,
+		},
+		{
 			name:    "missing json path",
 			body:    `{"temperature": 23.5}`,
 			point:   config.Point{Name: "temp", JSONPath: "missing", Type: "float64"},
@@ -268,17 +283,16 @@ func TestExtractJSONValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.point.Scale == 0 {
+				tt.point.Scale = 1 // the config default
+			}
 			got, err := reader.extractJSONValue([]byte(tt.body), tt.point)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("extractJSONValue() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				assert.Error(t, err)
 				return
 			}
-
-			if !tt.wantErr && tt.want != nil {
-				if got != tt.want {
-					t.Errorf("extractJSONValue() = %v (%T), want %v (%T)", got, got, tt.want, tt.want)
-				}
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
