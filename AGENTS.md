@@ -18,15 +18,16 @@ Datalogger polls **devices** and forwards every reading to one or more **outputs
 
 - **Inputs:** Modbus TCP/RTU (direct or range register reads), HTTP APIs (JSON via gjson
   paths, or the whole body as text).
-- **Outputs:** InfluxDB 3.x, MQTT, CSV files (with age-based rotation).
+- **Outputs:** InfluxDB 3.x, MQTT, CSV files (with age-based rotation), a read-only HTTP
+  API with the latest value of every point.
 - **Transforms:** a point may have an `expr` (expr-lang) that changes its value after a
   poll, using the other points of that poll and named lookup tables.
 - **Routing:** each output lists the devices it accepts; every reading of such a device is
   copied to that output, except the points it lists in `exclude_points`.
 - **Timestamps** are taken when the data is received from the device (not when the poll
   starts), in UTC.
-- **Runtime:** a single binary configured by one YAML file (`-config`), no HTTP server, no
-  database of its own. Shipped as binaries and a multi-arch `scratch` image on ghcr.io.
+- **Runtime:** a single binary configured by one YAML file (`-config`), no database of its
+  own; the only HTTP server is the optional `api` output. Shipped as binaries and a multi-arch `scratch` image on ghcr.io.
 
 ---
 
@@ -75,6 +76,7 @@ internal/output/         Writer interface
   csv/                   CSV writer: flush per row, rotation by max_age, backup cleanup
   influxdb/              InfluxDB 3 writer: batching, retries, v3 write API
   mqtt/                  MQTT v5 writer (paho.golang): one topic per point, JSON payload
+  api/                   HTTP API: latest value per point in memory, read-only JSON
 internal/**/mocks/       mockery output
 example/                 config.yaml (full reference) and docker-compose.yaml for users
 scripts/pre-commit.sh    local checks (make check)
@@ -82,8 +84,8 @@ scripts/pre-commit.sh    local checks (make check)
 
 Each reader/writer package has its own `Settings` (and `Point`) struct, a `Deps` struct
 validated by `New` (`ErrMissingDependency`), small interfaces for its client (`Client`,
-`Dialer`, `Publisher`) and a constructor for the real client (`NewDialer`, `NewClient`).
-Constructors never connect.
+`Dialer`, `Publisher`) and a constructor for the real client (`NewDialer`, `NewClient`;
+`api.Listen` binds the port, injected as a `net.Listener`). Constructors never connect.
 
 ---
 
@@ -93,8 +95,8 @@ Imports (paths below `internal/`):
 
 ```
 cmd/datalogger    → app, clock, config
-app               → clock, config, datasource{,/modbus,/http}, output{,/csv,/influxdb,/mqtt},
-                    transform
+app               → clock, config, datasource{,/modbus,/http},
+                    output{,/csv,/influxdb,/mqtt,/api}, transform
 transform         → datasource, expr-lang/expr
 datasource/modbus → clock, datasource, simonvetter/modbus
 datasource/http   → clock, datasource, gjson
@@ -102,6 +104,7 @@ output            → datasource
 output/csv        → clock, datasource
 output/influxdb   → clock, datasource, influxdb3-go
 output/mqtt       → clock, datasource, paho.golang
+output/api        → clock, datasource
 config            → viper
 clock, datasource → stdlib only
 ```
@@ -155,7 +158,8 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
 2. `app.New` creates every reader and writer (`Create*` factories in `app/factory.go`).
    A **construction error** (an address or setting the client library rejects, a point
    outside the Modbus ranges, an HTTP request that cannot be built, an expression that
-   does not compile or names an unknown point or lookup) ends the process with exit 1. **Connecting is not construction:** readers connect on their first poll, so a
+   does not compile or names an unknown point or lookup, an API port that cannot be
+   bound) ends the process with exit 1. **Connecting is not construction:** readers connect on their first poll, so a
    device that is down at startup does not stop the others and recovers on its own.
 3. `app.Run` starts the writers, then the readers with one router each.
 
@@ -180,7 +184,8 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    request in flight is aborted, so it has no data yet). Each reader then closes its
    data channel and the routers finish.
 3. `app` closes the output input channels; each writer writes what is queued, flushes
-   (CSV flush/close, InfluxDB final batch, MQTT disconnect) and stops.
+   (CSV flush/close, InfluxDB final batch, MQTT disconnect, API server shutdown) and
+   stops.
 4. `main` bounds all of this with one hard deadline of **8 s** (below Docker's 10 s stop
    timeout); after it the process exits 1. There is no second-signal force mode: a
    second signal is ignored, the deadline is the force.
@@ -266,6 +271,24 @@ writer that failed, or a missed deadline.
 - The directory is created if missing. In the container, write below `/app/data`
   (mounted from `./data`).
 
+### API output
+- `listen` (`host:port`, required) is bound at startup; a port in use fails startup.
+  `token` (optional) requires `Authorization: Bearer <token>` on `/api/…` (compared in
+  constant time, never logged); `/healthz` is always open.
+- Keeps the latest point per device and point in memory (nothing persisted); points of
+  devices not in `devices` are ignored, `exclude_points` never arrive.
+- `GET /api/devices` → `{"devices": [{"device", "points": <count>, "age_ms": <newest> |
+  null}]}` sorted by name; `GET /api/devices/{device}` → `{"device", "points": {<point>:
+  {"value", "unit", "timestamp", "age_ms"}}}`; `GET /api/devices/{device}/{point}` →
+  `{"device", "point", "value", "unit", "timestamp", "age_ms"}`. Errors are
+  `{"error": "…"}` with 404 (unknown device, point without value) or 401.
+- `timestamp` is the reading time (RFC3339Nano, UTC); `age_ms` = now − timestamp on the
+  injected clock, per request. NaN/±Inf values are `null` (no JSON form).
+- Server timeouts: read header/read/write 5 s, idle 60 s. On shutdown running requests
+  get 2 s (on the injected clock), then their connections are closed.
+- Paths and response format are a public interface; changing them is a breaking change
+  (`!`).
+
 ### Transforms (`expr`, `lookups`, `exclude_points`)
 - A point's `expr` ([expr-lang](https://expr-lang.org)) replaces its value after
   `scale`/`offset`. The environment: `value` (this point), `points.<name>` (every point
@@ -286,7 +309,8 @@ writer that failed, or a missed deadline.
 - One YAML file (`-config`, required); template with every option: `example/config.yaml`.
 - At least one device and one output are required; device and output names must be
   unique; outputs may only reference existing devices; `exclude_points` entries must be
-  `device/point` with a device of that output and an existing point;
+  `device/point` with a device of that output and an existing point; API `listen` must be
+  `host:port`;
   every device needs at least one point; point names are unique per device; device and
   point names must not contain `/`; `parallelism` 1–100; `poll_interval` > 0;
   `timeout` > 0.
@@ -334,6 +358,11 @@ writer that failed, or a missed deadline.
 - **Config only from the YAML file, no env overrides:** the config is mostly lists of
   devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`,
   mounted read-only, serves as the secret file.
+- **API output serves latest values only:** no history, no staleness setting; `age_ms`
+  lets the client decide what is too old, and history belongs in InfluxDB or CSV. The
+  values live in a mutex-guarded map inside the writer: its goroutine is the only
+  writer, the HTTP handlers of the same component read copies, so nothing is shared
+  between components. The port is bound in the factory so a port in use fails startup.
 - **Hand-written fake clock instead of a mock:** `clock.Clock`/`clock.Ticker` are faked by
   `clocktest.Fake`, not by mockery. Tests need time that moves consistently across tickers
   and `After` (`Advance`); call expectations cannot model that.
@@ -504,7 +533,7 @@ writer that failed, or a missed deadline.
 - **No AI signatures:** no `Co-Authored-By:` AI trailer, no "generated by" line, in
   commits, PR descriptions or release notes.
 
-Scopes used here: `config`, `modbus`, `http`, `csv`, `influxdb`, `mqtt`, `routing`,
+Scopes used here: `config`, `modbus`, `http`, `csv`, `influxdb`, `mqtt`, `api`, `routing`,
 `shutdown`, `transform`, `release`, `docker`, `ci`, `deps`
 
 ```
@@ -561,12 +590,13 @@ The required CI checks MUST be green before a PR is merged.
 Known gaps to the rules above, one branch each; update this list when an item is done.
 
 - **Coverage below 100 %:** `datasource/http` 99.2 %, `datasource/modbus` 98.3 %,
-  `output/mqtt` 99.0 %, `output/csv` 95.6 %. The open blocks are defensive branches
-  that tests cannot reach: errors already ruled out at construction (HTTP request
-  build, Modbus client creation and range coverage), a library call that never fails
-  (`SetUnitId`), the TLS server name fallback for an address without port (the dial
-  fails first) and CSV errors that need a broken file system (stat, directory listing,
-  reopen right after a rename). Remove them or accept them per package.
+  `output/mqtt` 99.0 %, `output/csv` 95.6 %, `output/api` 97.8 %. The open blocks are
+  defensive branches that tests cannot reach: errors already ruled out at construction
+  (HTTP request build, Modbus client creation and range coverage), a library call that
+  never fails (`SetUnitId`), the TLS server name fallback for an address without port
+  (the dial fails first), CSV errors that need a broken file system (stat, directory
+  listing, reopen right after a rename) and API server errors after shutdown or on a
+  response write to a client that went away. Remove them or accept them per package.
 - **Mixed value types in InfluxDB:** all points of a device share the `value` field, but
   HTTP points can deliver bool, int64 or string next to float64, and InfluxDB 3 keeps one
   type per column, so such a device's writes can be rejected. Today: keep such points

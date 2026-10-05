@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"net"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	"github.com/dombyte/datalogger/internal/config"
 	"github.com/dombyte/datalogger/internal/datasource"
 	dsmocks "github.com/dombyte/datalogger/internal/datasource/mocks"
+	"github.com/dombyte/datalogger/internal/output"
 	outmocks "github.com/dombyte/datalogger/internal/output/mocks"
 	"github.com/dombyte/datalogger/internal/transform"
 )
@@ -291,16 +293,23 @@ func TestNewCreatesEveryOutputType(t *testing.T) {
 	}
 	mqttOut := config.Output{Name: "mqtt", Type: "mqtt"}
 	mqttOut.OutputSpecific.Mqtt = config.MqttConfig{Address: "tcp://broker:1883", ClientID: "c"}
+	apiOut := config.Output{Name: "api", Type: "api"}
+	apiOut.OutputSpecific.API.Listen = "127.0.0.1:0"
 	clk := clocktest.NewFake(time.Now())
 
 	a, err := New(&config.Config{
 		Devices: []config.Device{device},
-		Outputs: []config.Output{csvOut, influxOut, mqttOut},
+		Outputs: []config.Output{csvOut, influxOut, mqttOut, apiOut},
 	}, zerolog.Nop(), clk)
 	require.NoError(t, err, "constructors do not connect")
-	require.Len(t, a.outputs, 3)
+	require.Len(t, a.outputs, 4)
 	assert.Equal(t, defaultBufferSize, a.outputs[0].bufferSize)
 	assert.Equal(t, 5, a.outputs[1].bufferSize)
+	stopWriter(t, a.outputs[3].writer) // releases the bound port
+
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = busy.Close() }()
 
 	for name, change := range map[string]func(*config.Output){
 		"unknown output type": func(o *config.Output) { o.Type = "kafka" },
@@ -308,6 +317,10 @@ func TestNewCreatesEveryOutputType(t *testing.T) {
 		"mqtt scheme": func(o *config.Output) {
 			*o = mqttOut
 			o.OutputSpecific.Mqtt.Address = "http://broker"
+		},
+		"api port in use": func(o *config.Output) {
+			*o = apiOut
+			o.OutputSpecific.API.Listen = busy.Addr().String()
 		},
 	} {
 		out := csvOut
@@ -320,4 +333,14 @@ func TestNewCreatesEveryOutputType(t *testing.T) {
 	device.Type = "snmp"
 	_, err = New(&config.Config{Devices: []config.Device{device}}, zerolog.Nop(), clk)
 	assert.ErrorContains(t, err, `unknown device type "snmp"`)
+}
+
+// stopWriter starts w with a closed input and waits until it stopped.
+func stopWriter(t *testing.T, w output.Writer) {
+	t.Helper()
+	in := make(chan datasource.DataPoint)
+	close(in)
+	for err := range w.Start(context.Background(), in) {
+		require.NoError(t, err)
+	}
 }

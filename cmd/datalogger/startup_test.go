@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -134,6 +135,10 @@ func TestRunStartupErrors(t *testing.T) {
 	t.Parallel()
 
 	mqttOutput := "      mqtt:\n        address: \"http://broker.invalid:1883\""
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = busy.Close() })
+	apiOutput := fmt.Sprintf("      api:\n        listen: %q", busy.Addr().String())
 	tests := []struct {
 		name    string
 		config  string // written to a file and passed as -config; empty: no -config
@@ -168,6 +173,12 @@ func TestRunStartupErrors(t *testing.T) {
 			config:  fmt.Sprintf(startupConfig, "http://192.0.2.1", "mqtt", mqttOutput),
 			want:    1,
 			wantLog: "Startup failed",
+		},
+		{
+			name:    "api port in use",
+			config:  fmt.Sprintf(startupConfig, "http://192.0.2.1", "api", apiOutput),
+			want:    1,
+			wantLog: "address already in use",
 		},
 	}
 
