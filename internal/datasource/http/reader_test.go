@@ -101,19 +101,19 @@ func TestNewChecksDependencies(t *testing.T) {
 	_, err := http.New(http.Deps{Settings: settings("http://x", point), Clock: clocktest.NewFake(start)})
 	assert.ErrorIs(t, err, http.ErrMissingDependency)
 
-	_, err = http.New(http.Deps{Settings: settings("http://x", point), Client: mocks.NewClient(t)})
+	_, err = http.New(http.Deps{Settings: settings("http://x", point), Client: mocks.NewMockClient(t)})
 	assert.ErrorIs(t, err, http.ErrMissingDependency)
 
 	bad := settings("http://x", point)
 	bad.Method = "BAD METHOD"
 	_, err = http.New(http.Deps{
-		Settings: bad, Client: mocks.NewClient(t),
+		Settings: bad, Client: mocks.NewMockClient(t),
 		Clock: clocktest.NewFake(start),
 	})
 	assert.ErrorIs(t, err, http.ErrInvalidSettings)
 
 	_, err = http.New(http.Deps{
-		Settings: settings("http://x"), Client: mocks.NewClient(t),
+		Settings: settings("http://x"), Client: mocks.NewMockClient(t),
 		Clock: clocktest.NewFake(start),
 	})
 	assert.ErrorIs(t, err, http.ErrInvalidSettings, "no points")
@@ -184,7 +184,7 @@ func TestStatusErrorBacksOffAndRecovers(t *testing.T) {
 
 func TestTransportErrorClosesIdleConnections(t *testing.T) {
 	t.Parallel()
-	client := mocks.NewClient(t)
+	client := mocks.NewMockClient(t)
 	refused := &url.Error{Op: "Get", URL: "http://device", Err: syscall.ECONNREFUSED}
 	client.EXPECT().Do(mock.Anything).Return(nil, refused).Once()
 	closed := make(chan struct{})
@@ -199,7 +199,7 @@ func TestTransportErrorClosesIdleConnections(t *testing.T) {
 
 func TestStatusErrorKeepsConnections(t *testing.T) {
 	t.Parallel()
-	client := mocks.NewClient(t)
+	client := mocks.NewMockClient(t)
 	done := make(chan struct{})
 	client.EXPECT().Do(mock.Anything).RunAndReturn(
 		func(*nethttp.Request) (*nethttp.Response, error) {
@@ -221,7 +221,7 @@ func TestStatusErrorKeepsConnections(t *testing.T) {
 func TestStopClosesChannels(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
-		mocks.NewClient(t))
+		mocks.NewMockClient(t))
 	h.stop()
 	_, open := <-h.data
 	assert.False(t, open)

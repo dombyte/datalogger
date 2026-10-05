@@ -4,7 +4,8 @@
     "gomod",
     "dockerfile",
     "docker-compose",
-    "github-actions"
+    "github-actions",
+    "custom.regex"
   ],
   "extends": [
     "config:recommended",
@@ -25,6 +26,12 @@
         "gomod"
       ],
       "groupName": "Go dependencies"
+    },
+    {
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "groupName": "Go tools"
     },
     {
       "matchManagers": [
@@ -54,6 +61,37 @@
         "github-actions"
       ],
       "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Go module majors change the module path and need code changes; update by hand",
+      "matchManagers": [
+        "gomod",
+        "custom.regex"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "golangci-lint majors need a .golangci.yml migration; update by hand",
+      "matchPackageNames": [
+        "golangci/golangci-lint"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "The example compose file uses our own image at :latest on purpose",
+      "matchManagers": [
+        "docker-compose"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/dombyte/datalogger"
+      ],
+      "enabled": false
     }
   ],
   "vulnerabilityAlerts": {
@@ -63,5 +101,20 @@
     ]
   },
   "separateMinorPatch": true,
-  "stopUpdatingLabel": "renovate/stop_updating"
+  "stopUpdatingLabel": "renovate/stop_updating",
+  "customManagers": [
+    {
+      "description": "Go tools run as `go run <module>[/cmd/<tool>]@vX.Y.Z` in CI, the pre-commit script and AGENTS.md",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/",
+        "/^scripts/.+\\.sh$/",
+        "/^AGENTS\\.md$/"
+      ],
+      "matchStrings": [
+        "go run (?<depName>[^@\\s]+?)(?:/cmd/[^@\\s]+)?@(?<currentValue>v[^\\s]+)"
+      ],
+      "datasourceTemplate": "go"
+    }
+  ]
 }

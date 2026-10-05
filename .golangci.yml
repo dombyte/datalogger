@@ -56,7 +56,7 @@ linters:
         - pattern: ^panic$
           msg: "no panic at runtime; return an error"
 
-    # Line length: hard limit of 100 chars (go-project-standard.md 8.1)
+    # Line length: hard limit of 100 chars (AGENTS.md 9.4)
     lll:
       line-length: 100
       tab-width: 4
@@ -157,7 +157,7 @@ formatters:
     gofumpt:
       extra-rules: false
     goimports:
-      # Import groups: stdlib, third-party, project (go-project-standard.md 8.1)
+      # Import groups: stdlib, third-party, project (AGENTS.md 9.4)
       local-prefixes:
         - github.com/dombyte/datalogger
   exclusions:

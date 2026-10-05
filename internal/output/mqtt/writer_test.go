@@ -23,7 +23,7 @@ var start = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 type harness struct {
 	t      *testing.T
 	clock  *clocktest.Fake
-	dialer *mocks.Dialer
+	dialer *mocks.MockDialer
 	input  chan datasource.DataPoint
 	done   <-chan error
 }
@@ -33,7 +33,7 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{
 		t:      t,
 		clock:  clocktest.NewFake(start),
-		dialer: mocks.NewDialer(t),
+		dialer: mocks.NewMockDialer(t),
 		input:  make(chan datasource.DataPoint),
 	}
 	w, err := mqtt.New(mqtt.Deps{
@@ -63,16 +63,16 @@ func (h *harness) stop() {
 }
 
 // session returns a publisher mock whose Done channel stays open until lost is closed.
-func session(t *testing.T) (*mocks.Publisher, chan struct{}) {
+func session(t *testing.T) (*mocks.MockPublisher, chan struct{}) {
 	t.Helper()
-	p := mocks.NewPublisher(t)
+	p := mocks.NewMockPublisher(t)
 	lost := make(chan struct{})
 	p.EXPECT().Done().Return(lost).Maybe()
 	return p, lost
 }
 
 // published records the publishes on p.
-func published(p *mocks.Publisher, err error) chan *paho.Publish {
+func published(p *mocks.MockPublisher, err error) chan *paho.Publish {
 	ch := make(chan *paho.Publish, 10)
 	p.EXPECT().Publish(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
@@ -86,7 +86,7 @@ func TestNewChecksDependencies(t *testing.T) {
 	t.Parallel()
 	_, err := mqtt.New(mqtt.Deps{Clock: clocktest.NewFake(start)})
 	assert.ErrorIs(t, err, mqtt.ErrMissingDependency)
-	_, err = mqtt.New(mqtt.Deps{Dialer: mocks.NewDialer(t)})
+	_, err = mqtt.New(mqtt.Deps{Dialer: mocks.NewMockDialer(t)})
 	assert.ErrorIs(t, err, mqtt.ErrMissingDependency)
 }
 

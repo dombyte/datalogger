@@ -29,8 +29,8 @@ var start = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 type harness struct {
 	t      *testing.T
 	clock  *clocktest.Fake
-	dialer *mocks.Dialer
-	client *mocks.Client
+	dialer *mocks.MockDialer
+	client *mocks.MockClient
 	data   <-chan datasource.DataPoint
 	cancel context.CancelFunc
 }
@@ -44,8 +44,8 @@ func newHarness(t *testing.T, s modbus.Settings) *harness {
 	h := &harness{
 		t:      t,
 		clock:  clocktest.NewFake(start),
-		dialer: mocks.NewDialer(t),
-		client: mocks.NewClient(t),
+		dialer: mocks.NewMockDialer(t),
+		client: mocks.NewMockClient(t),
 	}
 	r, err := modbus.New(modbus.Deps{
 		Settings: s, Dialer: h.dialer, Clock: h.clock, Log: zerolog.Nop(),
@@ -101,7 +101,7 @@ func TestNewChecksDependencies(t *testing.T) {
 	point := modbus.Point{Name: "p", Register: 10, Type: "uint16", Scale: 1}
 	valid := modbus.Deps{
 		Settings: settings(point),
-		Dialer:   mocks.NewDialer(t),
+		Dialer:   mocks.NewMockDialer(t),
 		Clock:    clocktest.NewFake(start),
 	}
 	tests := []struct {
@@ -195,7 +195,7 @@ func TestReconnectsAfterConnectionError(t *testing.T) {
 	t.Parallel()
 	point := modbus.Point{Name: "p", Register: 5, Type: "uint16", Scale: 1}
 	h := newHarness(t, settings(point))
-	second := mocks.NewClient(t)
+	second := mocks.NewMockClient(t)
 
 	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
 	h.client.EXPECT().ReadRegisters(uint16(5), uint16(1), lib.HOLDING_REGISTER).

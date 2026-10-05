@@ -23,7 +23,7 @@ var start = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 type harness struct {
 	t      *testing.T
 	clock  *clocktest.Fake
-	client *mocks.Client
+	client *mocks.MockClient
 	input  chan datasource.DataPoint
 	done   <-chan error
 	writes chan []string // line protocol of every WritePoints call
@@ -34,7 +34,7 @@ func newHarness(t *testing.T, s influxdb.Settings) *harness {
 	h := &harness{
 		t:      t,
 		clock:  clocktest.NewFake(start),
-		client: mocks.NewClient(t),
+		client: mocks.NewMockClient(t),
 		input:  make(chan datasource.DataPoint),
 		writes: make(chan []string, 10),
 	}
@@ -100,7 +100,7 @@ func TestNewChecksDependencies(t *testing.T) {
 	t.Parallel()
 	_, err := influxdb.New(influxdb.Deps{Clock: clocktest.NewFake(start)})
 	assert.ErrorIs(t, err, influxdb.ErrMissingDependency)
-	_, err = influxdb.New(influxdb.Deps{Client: mocks.NewClient(t)})
+	_, err = influxdb.New(influxdb.Deps{Client: mocks.NewMockClient(t)})
 	assert.ErrorIs(t, err, influxdb.ErrMissingDependency)
 }
 

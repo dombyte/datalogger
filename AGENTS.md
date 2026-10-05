@@ -1,18 +1,14 @@
 # Agent Documentation
 
-## Standard
+This file is the complete guide for working on datalogger: what the program does, how it is
+built, and the rules every change follows (architecture, errors, logging, code style,
+testing, tooling, Git workflow, review). It needs no other document.
 
-This project follows the **Go Project Standard v3.0**
-(local reference: `/home/dom/Dokumente/Git/go-project-standard.md`; will be replaced by a URL).
-That document holds the rules for every Go project: dependency injection, composition root,
-errors, logging, lifecycle, code style, testing, tooling, Git workflow and review criteria.
-
-This file holds only what is specific to datalogger. It wins for project-specific questions;
-a deviation from a MUST rule of the standard is only valid if it is listed under
-"Deviations" below with its reason. When code and this file disagree, fix one of them in
+Keywords: **MUST** = blocker if violated, **SHOULD** = fix unless there is a written
+reason, **MAY** = allowed option. When code and this file disagree, fix one of them in
 the same change.
 
-**Current state:** the code follows standard v3 except for the deviations listed below.
+**Current state:** the code follows every rule below; open gaps are listed in section 13.
 
 ---
 
@@ -37,24 +33,26 @@ Datalogger polls **devices** and forwards every reading to one or more **outputs
 ```bash
 make check                                                # ./scripts/pre-commit.sh, check-only
 golangci-lint fmt --config .golangci.yml                  # gofumpt + goimports
-golangci-lint run --config .golangci.yml                  # full linter set from the standard
-go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./... # unused exported code
+golangci-lint run --config .golangci.yml                  # full linter set (section 10)
+go run golang.org/x/tools/cmd/deadcode@v0.51.0 -test ./... # unused exported code
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...     # known vulnerabilities
 go test -race ./...                                       # all unit tests, as in CI
-go run github.com/vektra/mockery/v2@v2.53.7               # regenerate mocks (.mockery.yaml)
+go tool mockery                                           # regenerate mocks (.mockery.yaml)
 make build                                                # ./datalogger with version info (ldflags)
 ./datalogger -config config.yaml [-debug]                 # run; -version prints build info
 docker compose -f docker-compose.dev.yaml up --build      # local image with ./config.yaml, ./test-dump
 ```
 
-- CI: `.github/workflows/checks.yml` (PRs, reused by the release; not on push to main).
-- Release: push a `vX.Y.Z` tag on `main`; `release.yml` runs the checks, then goreleaser
-  (`.goreleaser.yaml`) builds archives and `ghcr.io/dombyte/datalogger` images
-  (linux/amd64, arm64, arm/v7).
-- Mocks: every interface is listed in `.mockery.yaml`; the output in `<pkg>/mocks` is never
-  edited by hand, and CI fails when it differs from a fresh generation. Tests that use a
-  package's mocks are black-box tests (`package <pkg>_test`), because the mocks import
-  the package.
+- CI: `.github/workflows/checks.yml` (PRs, pushes to main, reused by the release; see
+  section 11.1).
+- Release: push a `vX.Y.Z` (or `vX.Y.Z-rcN`) tag on `main`; `release.yml` runs the
+  checks, then goreleaser (`.goreleaser.yaml`) builds archives and
+  `ghcr.io/dombyte/datalogger` images (linux/amd64, arm64, arm/v7).
+- Mocks: mockery v3 runs as a Go tool (`tool` directive in `go.mod`, so Renovate updates
+  it with the modules). Every interface is listed in `.mockery.yaml` (`Mock<Interface>`,
+  `NewMock<Interface>(t)`); the output in `<pkg>/mocks` is never edited by hand, and CI
+  fails when it differs from a fresh generation. Tests that use a package's mocks are
+  black-box tests (`package <pkg>_test`), because the mocks import the package.
 
 ---
 
@@ -268,7 +266,7 @@ writer that failed, or a missed deadline.
   poll interval, at most 10 s; point `scale` 1; HTTP method GET and response type json;
   MQTT topic `datalogger` and client ID `logger-<random>`) and then
   runs `Validate()`, which only checks and never changes the config.
-- No environment overrides (see Deviations). Secrets (InfluxDB token, MQTT password)
+- No environment overrides (see section 8). Secrets (InfluxDB token, MQTT password)
   belong in the local `config.yaml` (gitignored, mounted read-only in the container),
   never in `example/config.yaml` with real values.
 
@@ -297,32 +295,212 @@ writer that failed, or a missed deadline.
   both are configured twice.
 - **InfluxDB schema with `point` as tag:** one table per device with a fixed column set,
   queryable by point without schema changes when points are added.
+- **Config only from the YAML file, no env overrides:** the config is mostly lists of
+  devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`,
+  mounted read-only, serves as the secret file.
+- **Hand-written fake clock instead of a mock:** `clock.Clock`/`clock.Ticker` are faked by
+  `clocktest.Fake`, not by mockery. Tests need time that moves consistently across tickers
+  and `After` (`Advance`); call expectations cannot model that.
 
 ---
 
-## 9. Deviations from the Standard
+## 9. Code Rules
 
-Everything else in the code that does not match the standard is a backlog item below,
-not an accepted deviation. Add a row here (rule, deviation, reason) only for a choice that
-is meant to stay:
+### 9.1 Architecture (MUST)
+- **Dependency injection:** every dependency a type uses (client, dialer, clock, logger,
+  channel) is passed in through its constructor; nothing is created inside methods.
+  Dependencies are **interfaces declared by the consumer**, next to the code that uses
+  them, and kept small (only the methods it calls). Shared contracts are exported by
+  their package: `datasource.DeviceReader`, `output.Writer`, `clock.Clock`.
+- **Composition root:** `internal/app` is the only code that names concrete reader/writer
+  types; it creates them through `Create*` factories that switch on the config type and
+  return a typed error for an unknown one.
+- **Required dependencies:** all dependencies are required. `New(Deps)` validates them
+  once and returns `ErrMissingDependency` naming every missing field. No optional
+  components behind `if x != nil`; a feature that can be switched off is a separate
+  component. Missing **data** (no reading yet) is normal and returns an explicit answer.
+- **Functional options** (MAY) only for optional *settings* with a default, and only from
+  three of them on; never for dependencies.
+- **No global state:** no package-level loggers, singletons, caches or lookup tables
+  (build them in a constructor). Allowed package-level variables: `Err…` sentinels and the
+  linker-set build info in `main` (`Version`, `Commit`, `BuildDate`, `GoVersion`, marked
+  `//nolint:gochecknoglobals // written by the linker at build time`).
+- **Lifecycle:** every goroutine has an owner that starts it, can stop it and waits for
+  it. Waiting loops use the injected `clock.Clock`, capture `now` once per iteration and
+  derive everything from it. Every channel has a documented owner (the sender closes)
+  and a documented behaviour when full (section 5). Component exits are watched with
+  channels, never with sleep-polling. `os.Exit` only in `main`.
 
-| Rule | Deviation | Reason |
+### 9.2 Errors (MUST)
+- Wrap with `%w` and context, prefixed with the package:
+  `fmt.Errorf("modbus: read chunk %d-%d: %w", start, end, err)`.
+- **Sentinels** (`ErrMissingDependency`, `ErrComponentStopped`) for conditions callers
+  branch on; **custom types** when callers need data. Both work with `errors.Is`/`As`.
+- **Never swallow** an error: handle it, return it, or log it with the reason it is safe
+  to continue. `_ = f()` needs a `//nolint` with an explanation.
+- **Log once**, at the boundary that handles the error; lower layers return, they do not
+  log and return.
+- Error strings: lowercase, no trailing punctuation.
+- **No panic** (enforced by `forbidigo`). Startup errors go back to `main`, which exits 1.
+
+### 9.3 Logging
+- One `zerolog.Logger` is built in `main` and injected; every component gets
+  `log.With().Str("component", name).Logger()`.
+- Context fields, not formatted strings: `.Str("device", name).Err(err).Msg(...)`.
+- Levels: `debug` per poll/point detail, `info` lifecycle, `warn` recovered problems,
+  `error` failures that need attention.
+- Never log secrets: InfluxDB token, MQTT password, HTTP auth headers, URLs with
+  credentials.
+
+### 9.4 Style (MUST, enforced by golangci-lint)
+- gofumpt + goimports; import groups stdlib / third-party / project
+  (`github.com/dombyte/datalogger`).
+- Lines ≤ 100 chars (tab width 4), functions ≤ 40 lines and ≤ 40 statements,
+  cyclomatic complexity < 8, ≤ 5 parameters (use a struct beyond that).
+- No magic numbers outside constants; a constant with a comment beats a config knob
+  nobody sets. Add options only when real use needs them (YAGNI; no abstraction before a
+  second real use).
+- Naming: packages lowercase and singular; files lowercase with underscores; one-letter
+  receivers, consistent per type; stdlib acronyms (`ID`, `URL`, `HTTP`); `Err…` sentinels,
+  `…Error` types; functions verb + noun.
+- Layout: all code under `internal/` (no `pkg/`), at most 3 levels below it.
+- Docs: package doc and doc comments on exported types MUST, on exported functions
+  SHOULD; they start with the name. Inline comments explain **why**. Non-obvious design
+  decisions go into section 8 of this file, not into long code comments.
+
+### 9.5 Testing
+- stdlib `testing` + testify (`require` for preconditions, `assert` for checks) + mockery
+  mocks (section 2) + `clocktest.Fake`.
+- Table-driven tests with named cases; `t.Parallel()` where there is no shared state.
+- Unit tests use no network, no real clock and no sleeps: mocks, the fake clock,
+  `httptest`, `t.TempDir()`. Tests against a real device, broker or DB are integration
+  tests behind `//go:build integration` and are not part of `go test ./...`.
+- Always run with `-race`. New code comes with tests; a bug fix comes with a regression
+  test that fails before the fix.
+- Coverage (SHOULD): ≥ 70 % per package with logic, ≥ 80 % for packages with five or more
+  complex functions; `cmd/datalogger` and `app` are covered by the startup test instead.
+
+---
+
+## 10. Tooling, CI and Releases
+
+- **Checks** (`make check` locally, `checks.yml` in CI, same pinned tool versions):
+  `golangci-lint fmt` diff, `golangci-lint run`, deadcode, govulncheck, build,
+  `go test -race`; CI also checks `go mod tidy` and mock drift. `scripts/pre-commit.sh`
+  is check-only: it never rewrites or stages files.
+- **Linters** (`.golangci.yml`, golangci-lint v2): revive, staticcheck, govet, unused,
+  errcheck, errorlint, gosec, gocyclo, dupl, mnd, lll, misspell, unconvert, perfsprint,
+  whitespace, importas, goprintffuncname, ineffassign, wastedassign, durationcheck,
+  makezero, tparallel, copyloopvar, intrange, bodyclose, rowserrcheck, sqlclosecheck,
+  gochecknoglobals, forbidigo (`panic`), nolintlint (every `//nolint` names the linter and
+  gives a reason). Tests are excluded from revive, dupl, errcheck, gosec, lll,
+  gochecknoglobals, forbidigo and mnd.
+- **Tool versions** are pinned (pinned `go run` commands, the mockery `tool` in `go.mod`,
+  the golangci-lint action `version:`) and bumped deliberately, the same locally and in CI.
+- **Renovate** (`renovate.json`) updates dependencies for exactly the ecosystems used here:
+  `gomod`, `dockerfile`, `docker-compose`, `github-actions`. Every pinned version in the
+  repo is tracked; the golangci-lint `version:` of the CI action is seen by the
+  `github-actions` manager. A pin no built-in manager sees (pinned `go run` commands in
+  workflows, scripts and this file) needs a `customManagers` regex, added in the same
+  change that adds the pin. Updates that need manual work (Go module majors, golangci-lint
+  majors) are disabled with a `description` saying why. Text that only describes a
+  pinning pattern must not match such a regex. GitHub vulnerability alerts stay enabled;
+  Renovate's `vulnerabilityAlerts` reads them.
+- **Images:** `Dockerfile` (dev) and `Dockerfile.goreleaser` build `scratch` images with
+  CA certs and tzdata from pinned base images; `.dockerignore`/`.gitignore` keep local
+  config, data and build output out.
+- **Releases:** SemVer tags `vX.Y.Z` (pre-releases `vX.Y.Z-alphaN`/`-betaN`/`-rcN`) only
+  on commits on `main`. `release.yml` triggers only on SemVer-shaped tags; a guard job
+  checks the exact tag format and that the tag is on `main`, then the checks rerun
+  (`checks.yml`), then goreleaser
+  (`go mod verify` only, `-trimpath`, reproducible via `CommitDate`, `goamd64: v1`) builds
+  the archives and images. Image tags: `vX.Y.Z` always; `vX.Y`, `vX`, `latest` only for
+  stable releases. The changelog is grouped from commit subjects (section 11.2);
+  pre-releases compare against the last stable tag.
+- **Build info** (`Version`, `Commit`, `BuildDate`, `GoVersion`) is set via ldflags
+  (`make build`, goreleaser) and shown by `-version` and in the startup log.
+
+---
+
+## 11. Git Workflow
+
+### 11.1 Branches
+- Changes go through a PR from a `type/description` branch (`feat/…`, `fix/…`, `docs/…`,
+  `refactor/…`, `chore/…`, `ci/…`). The maintainer MAY commit or merge directly into
+  `main` after `make check` passes (ruleset bypass for the admin role; bots such as
+  Renovate always need a PR with green checks).
+- `main` is protected by a repository ruleset: no deletion or force push, signed commits,
+  PR required, the `checks.yml` jobs required with "branches must be up to date".
+- CI minutes: `checks.yml` runs on every PR, every direct push to `main` and every
+  release tag, but not again on the merge commit of a PR. A `gate` job asks the API
+  (`repos/{repo}/commits/{sha}/pulls`) whether the pushed commit is a PR's
+  `merge_commit_sha`; if so the other jobs are skipped, and if the call fails they run.
+  This is safe only because "up to date" is on: the PR run tested the same tree that lands
+  on `main`. A newer push to a PR cancels its superseded run; runs on `main` and tags
+  always finish, and one release per tag runs at a time.
+- Merge with a regular merge commit; squash or rebase only when the user confirms. Only
+  rewrite history that is not on a remote.
+- **Batching:** several small changes MAY share one PR. Create one batch branch from
+  `main`; cut each change as its own local `type/description` branch from it, run
+  `make check`, merge it back with `git merge --no-ff` (never push these branches). Push
+  the batch branch once all changes are merged and open one PR.
+
+### 11.2 Commits (MUST)
+
+[Conventional Commits](https://www.conventionalcommits.org):
+`<type>[(<scope>)][!]: <imperative, lowercase subject>`
+
+| Type | Use for | Changelog group |
 |---|---|---|
-| 5, 13: env overrides, secrets from env | Config comes only from the YAML file; no env overrides | The config is mostly lists of devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`, mounted read-only, serves as the secret file |
-| 9: every interface has a mockery mock | `clock.Clock`/`clock.Ticker` are faked by the hand-written `clocktest.Fake` | Tests need time that moves consistently across tickers and `After` (`Advance`); call expectations cannot model that, and standard 9 itself asks for a fake clock |
+| `feat` | new or changed user-visible behaviour | Features |
+| `fix` | bug fixes, incl. security hardening | Bug fixes |
+| `perf` | performance improvements | Performance |
+| `refactor` | restructuring without behaviour change | Refactoring |
+| `docs` | README, AGENTS.md, comment-only changes | Documentation |
+| `chore`, `build`, `ci`, `test`, `style` | tooling, CI, tests, formatting | Maintenance |
+| `<type>(deps)` | dependency and toolchain bumps | Dependencies |
+
+- `!` before the colon marks a breaking change for users upgrading (config keys, MQTT
+  topic/payload, CSV columns, InfluxDB schema); a `BREAKING CHANGE:` footer alone is not
+  enough, the changelog reads only the subject.
+- Subject: imperative, lowercase first word, no trailing period, ≤ 72 characters.
+- Merge commits keep git's default message.
+- **No AI signatures:** no `Co-Authored-By:` AI trailer, no "generated by" line, in
+  commits, PR descriptions or release notes.
+
+Scopes used here: `config`, `modbus`, `http`, `csv`, `influxdb`, `mqtt`, `routing`,
+`shutdown`, `release`, `docker`, `ci`, `deps`
+
+```
+feat(mqtt): support TLS client certificates
+fix(modbus): stop backoff wait on shutdown
+refactor(config): move defaults out of Validate
+feat(influxdb)!: store unit as field instead of tag
+```
+
+### 11.3 Review Criteria
+The required CI checks MUST be green before a PR is merged.
+
+- **Blocker:** does not build, failing tests, lint/format/gosec findings; global state,
+  panic, a concrete type where an interface belongs, a dependency created inside a
+  method; swallowed errors; new code without tests, drifted mocks; AI signatures or
+  non-conventional commit subjects; secrets in code, config or logs.
+- **Must fix:** missing package/type docs; a breaking change without `!`; a rule in this
+  file that no longer matches the code.
+- **Should fix:** duplication, nesting deeper than 4 levels, unclear names, missing
+  function docs, coverage below the targets in 9.5.
+
+### 11.4 Security
+- Validate input at the boundary: config in `config.Validate`, device responses in the
+  reader that parses them.
+- Every outgoing call has a timeout (device `timeout`, MQTT connect timeout, InfluxDB
+  client); clients verify certificates unless the documented `insecure` option is set.
+- Secrets only in the gitignored `config.yaml` (section 8), never committed or logged.
+- Dependencies: Renovate plus `govulncheck` in CI and in `make check`.
 
 ---
 
-## 10. Migration Backlog
-
-Known gaps to standard v3, one `refactor/…` branch each; update this list when an item
-is done.
-
-None. Add new gaps here as they are found.
-
----
-
-## 11. Adding a Device or Output Type
+## 12. Adding a Device or Output Type
 
 1. New package under `internal/datasource/<type>` or `internal/output/<type>` implementing
    the reader or writer contract: `Settings`, `Deps` checked in `New`, small interfaces
@@ -332,27 +510,18 @@ None. Add new gaps here as they are found.
    validation, and a commented example in `example/config.yaml`.
 3. Composition root: add the `case` and a `create…` function in `internal/app/factory.go`
    that maps config onto `Settings` and creates the real client. Nothing else may
-   reference the new package.
+   reference the new package; update section 4.
 4. Behaviour: document timestamps, error/backoff behaviour and any public format (topics,
    columns, schema) in section 7.
 5. Tests with mocks/fakes only (no real device, broker or DB); an optional integration test
    behind the build tag.
 6. README: user-facing documentation of the new type.
+7. `make check` passes; branch `feat/…`, commit `feat(<scope>): …`.
 
 ---
 
-## 12. Commit Scopes
+## 13. Backlog
 
-Conventional Commits per the standard; no AI signatures. Scopes used here:
+Known gaps to the rules above, one branch each; update this list when an item is done.
 
-`config`, `modbus`, `http`, `csv`, `influxdb`, `mqtt`, `routing`, `shutdown`, `release`,
-`docker`, `ci`, `deps`
-
-Examples:
-
-```
-feat(mqtt): support TLS client certificates
-fix(modbus): stop backoff wait on shutdown
-refactor(config): move defaults out of Validate
-feat(influxdb)!: store unit as field instead of tag
-```
+None. Add new gaps here as they are found.
