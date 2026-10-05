@@ -86,3 +86,19 @@ func TestNewFailsForUnusablePath(t *testing.T) {
 	_, err = csv.New(csv.Deps{Settings: csv.Settings{FilePath: filepath.Join(t.TempDir(), "x")}})
 	assert.ErrorIs(t, err, csv.ErrMissingDependency)
 }
+
+func TestNameAndStopOnCancel(t *testing.T) {
+	t.Parallel()
+	w, err := csv.New(csv.Deps{
+		Settings: csv.Settings{Name: "file", FilePath: filepath.Join(t.TempDir(), "data.csv")},
+		Clock:    clocktest.NewFake(start),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "file", w.Name())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := w.Start(ctx, make(chan datasource.DataPoint))
+	cancel()
+	_, open := <-done
+	assert.False(t, open, "the writer stops when ctx is cancelled")
+}

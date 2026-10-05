@@ -142,9 +142,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 
-	if err := config.applyDefaults(); err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
+	config.applyDefaults()
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}

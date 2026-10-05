@@ -355,3 +355,88 @@ func TestPollInProgressAtShutdownIsDelivered(t *testing.T) {
 	require.Len(t, got, 1, "the running poll arrives as one batch")
 	assert.ElementsMatch(t, []string{"a", "b"}, got[0], "both points of the running poll arrive")
 }
+
+func TestNameAndStopBeforeFirstPoll(t *testing.T) {
+	t.Parallel()
+	r, err := modbus.New(modbus.Deps{
+		Settings: settings(modbus.Point{Name: "p", Register: 1, Type: "uint16", Scale: 1}),
+		Dialer:   mocks.NewMockDialer(t), // never dialed, so nothing to close
+		Clock:    clocktest.NewFake(start),
+		Log:      zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "inverter", r.Name())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	data := r.Start(ctx)
+	cancel()
+	_, open := <-data
+	assert.False(t, open)
+}
+
+func TestDirectModeAllPointsFailedBacksOff(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(
+		modbus.Point{Name: "a", Register: 1, Type: "uint16", Scale: 1, FunctionCode: 3},
+		modbus.Point{Name: "b", Register: 2, Type: "uint16", Scale: 1},
+	))
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(mock.Anything, uint16(1), lib.HOLDING_REGISTER).
+		Return(nil, lib.ErrRequestTimedOut).Twice()
+	// A timeout keeps the connection: Close only on stop.
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	h.advance(1, interval)                                               // the next tick waits out the backoff: the poll failed
+	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 }, // ticker + backoff
+		time.Second, time.Millisecond)
+	h.stop() // ends the backoff wait at once
+	assert.Empty(t, h.pending)
+}
+
+func TestRangeModeSkipsPointThatCannotBeDecoded(t *testing.T) {
+	t.Parallel()
+	s := settings(
+		modbus.Point{Name: "odd", Register: 0, Type: "int64", Scale: 1}, // unknown type
+		modbus.Point{Name: "ok", Register: 1, Type: "uint16", Scale: 1},
+	)
+	s.RangeMode, s.Ranges = true, []string{"0-1"}
+	h := newHarness(t, s)
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(0), uint16(2), lib.HOLDING_REGISTER).
+		Return([]uint16{1, 2}, nil).Once()
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	assert.Equal(t, []string{"ok"}, names(h.receivePoll()))
+}
+
+func TestShutdownDuringFailingReadIsNotAnError(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(modbus.Point{Name: "p", Register: 1, Type: "uint16", Scale: 1}))
+	reading, release := make(chan struct{}), make(chan struct{})
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(1), uint16(1), lib.HOLDING_REGISTER).
+		RunAndReturn(func(uint16, uint16, lib.RegType) ([]uint16, error) {
+			close(reading)
+			<-release // the read fails only after shutdown started
+			return nil, io.EOF
+		}).Once()
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	<-reading
+	h.cancel()
+	close(release)
+	h.stop()
+	assert.Empty(t, h.pending)
+}
+
+// names returns the point names of a poll.
+func names(points []datasource.DataPoint) []string {
+	out := make([]string, len(points))
+	for i, dp := range points {
+		out[i] = dp.PointName
+	}
+	return out
+}

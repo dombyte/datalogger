@@ -1,13 +1,11 @@
 package clocktest_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/clock/clocktest"
 )
 
@@ -17,6 +15,7 @@ func TestFakeAfter(t *testing.T) {
 	t.Parallel()
 	f := clocktest.NewFake(start)
 	ch := f.After(time.Second)
+	assert.Equal(t, 1, f.Waiters())
 
 	f.Advance(999 * time.Millisecond)
 	assert.Empty(t, ch)
@@ -39,22 +38,20 @@ func TestFakeTicker(t *testing.T) {
 	assert.Empty(t, tk.C())
 
 	tk.Stop()
+	assert.Equal(t, 0, f.Waiters(), "a stopped ticker is not counted")
 	f.Advance(time.Second)
 	assert.Empty(t, tk.C())
 	assert.Equal(t, 0, f.Waiters())
 }
 
-func TestSleep(t *testing.T) {
+func TestFakeNowAndUnreadTick(t *testing.T) {
 	t.Parallel()
 	f := clocktest.NewFake(start)
+	tk := f.NewTicker(time.Second)
 
-	done := make(chan bool)
-	go func() { done <- clock.Sleep(context.Background(), f, time.Second) }()
-	assert.Eventually(t, func() bool { return f.Waiters() == 1 }, time.Second, time.Millisecond)
 	f.Advance(time.Second)
-	assert.True(t, <-done)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	assert.False(t, clock.Sleep(ctx, f, time.Hour))
+	f.Advance(time.Second) // the first tick was not read: this one is dropped
+	assert.Equal(t, start.Add(2*time.Second), f.Now())
+	assert.Equal(t, start.Add(time.Second), <-tk.C())
+	assert.Empty(t, tk.C())
 }

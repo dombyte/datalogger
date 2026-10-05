@@ -159,3 +159,50 @@ func TestRetriesThenDropsAndRecovers(t *testing.T) {
 	assert.Contains(t, h.write()[0], "point=next")
 	h.stop()
 }
+
+// startCancellable starts a writer with a cancellable context; the client is closed
+// with closeErr when the writer stops.
+func startCancellable(t *testing.T, s influxdb.Settings, closeErr error) (
+	*harness, context.CancelFunc,
+) {
+	t.Helper()
+	h := &harness{
+		t: t, clock: clocktest.NewFake(start), client: mocks.NewMockClient(t),
+		input: make(chan datasource.DataPoint), writes: make(chan []string, 10),
+	}
+	w, err := influxdb.New(influxdb.Deps{
+		Settings: s, Client: h.client, Clock: h.clock, Log: zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, s.Name, w.Name())
+	h.client.EXPECT().Close().Return(closeErr).Once()
+	ctx, cancel := context.WithCancel(context.Background())
+	h.done = w.Start(ctx, h.input)
+	return h, cancel
+}
+
+func TestStopsOnCancelEvenWhenCloseFails(t *testing.T) {
+	t.Parallel()
+	h, cancel := startCancellable(t, influxdb.Settings{Name: "db"}, errors.New("closed"))
+
+	cancel()
+	for err := range h.done {
+		require.NoError(t, err, "a failed close is only logged")
+	}
+}
+
+func TestCancelEndsRetries(t *testing.T) {
+	t.Parallel()
+	h, cancel := startCancellable(t,
+		influxdb.Settings{BatchSize: 1, MaxRetries: 5, RetryDelay: time.Hour}, nil)
+	h.expectWrites(errors.New("503"))
+
+	h.input <- point("power", 1.0, "")
+	h.write()
+	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 }, // ticker + retry
+		time.Second, time.Millisecond)
+	cancel()
+	for err := range h.done {
+		require.NoError(t, err)
+	}
+}

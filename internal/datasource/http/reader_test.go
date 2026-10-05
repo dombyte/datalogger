@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -241,4 +242,67 @@ func TestStopClosesChannels(t *testing.T) {
 	h.stop()
 	_, open := <-h.data
 	assert.False(t, open)
+}
+
+func TestName(t *testing.T) {
+	t.Parallel()
+	r, err := http.New(http.Deps{
+		Settings: settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
+		Client:   mocks.NewMockClient(t), Clock: clocktest.NewFake(start),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "meter", r.Name())
+}
+
+func TestTruncatedBodyClosesIdleConnections(t *testing.T) {
+	t.Parallel()
+	client := mocks.NewMockClient(t)
+	client.EXPECT().Do(mock.Anything).Return(&nethttp.Response{
+		StatusCode: nethttp.StatusOK,
+		Body:       io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF)),
+	}, nil).Once()
+	closed := make(chan struct{})
+	client.EXPECT().CloseIdleConnections().Run(func() { close(closed) }).Once()
+
+	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
+		client)
+	h.advance(1, interval)
+	<-closed
+	h.stop()
+}
+
+func TestShutdownEndsBackoffWait(t *testing.T) {
+	t.Parallel()
+	client := mocks.NewMockClient(t)
+	client.EXPECT().Do(mock.Anything).Return(&nethttp.Response{
+		StatusCode: nethttp.StatusServiceUnavailable,
+		Body:       io.NopCloser(strings.NewReader("")),
+	}, nil).Once()
+
+	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
+		client)
+	h.advance(1, interval)                                               // fails: backoff
+	h.advance(1, interval)                                               // next tick waits out the backoff
+	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 }, // ticker + backoff
+		time.Second, time.Millisecond)
+	h.stop() // returns only if the backoff wait ends at once; no second request
+}
+
+func TestShutdownAbortsRequestInFlight(t *testing.T) {
+	t.Parallel()
+	client := mocks.NewMockClient(t)
+	inFlight := make(chan struct{})
+	client.EXPECT().Do(mock.Anything).RunAndReturn(
+		func(req *nethttp.Request) (*nethttp.Response, error) {
+			close(inFlight)
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		}).Once()
+	// CloseIdleConnections is not expected: a cancelled poll is not a transport error.
+
+	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
+		client)
+	h.advance(1, interval)
+	<-inFlight
+	h.stop()
 }
