@@ -14,7 +14,38 @@ import (
 	"github.com/dombyte/datalogger/internal/output/csv"
 	"github.com/dombyte/datalogger/internal/output/influxdb"
 	"github.com/dombyte/datalogger/internal/output/mqtt"
+	"github.com/dombyte/datalogger/internal/transform"
 )
+
+// createSource creates the reader of a device and the transformer for its points.
+func createSource(
+	d config.Device,
+	lookups map[string]map[int]string,
+	log zerolog.Logger,
+	clk clock.Clock,
+) (source, error) {
+	r, err := createReader(d, log, clk)
+	if err != nil {
+		return source{}, err
+	}
+	s := transform.Settings{
+		Device:  d.Name,
+		Points:  make([]string, len(d.Points)),
+		Exprs:   make(map[string]string),
+		Lookups: lookups,
+	}
+	for i, p := range d.Points {
+		s.Points[i] = p.Name
+		if p.Expr != "" {
+			s.Exprs[p.Name] = p.Expr
+		}
+	}
+	tr, err := transform.New(s, log)
+	if err != nil {
+		return source{}, err
+	}
+	return source{reader: r, transform: tr}, nil
+}
 
 // createReader creates the reader for a device type.
 func createReader(

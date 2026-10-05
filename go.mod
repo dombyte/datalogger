@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/InfluxCommunity/influxdb3-go/v2 v2.17.0
 	github.com/eclipse/paho.golang v0.23.0
+	github.com/expr-lang/expr v1.17.8
 	github.com/rs/zerolog v1.35.1
 	github.com/simonvetter/modbus v1.6.4
 	github.com/spf13/viper v1.21.0

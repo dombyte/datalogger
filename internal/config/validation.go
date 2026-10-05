@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -12,6 +13,9 @@ const (
 
 	// maxQoS is the highest MQTT quality-of-service level.
 	maxQoS = 2
+
+	// pathSeparator separates device and point in exclude_points ("device/point").
+	pathSeparator = "/"
 )
 
 // Validate validates the entire configuration.
@@ -19,46 +23,75 @@ func (c *Config) Validate() error {
 	if len(c.Devices) == 0 {
 		return errors.New("at least one device required")
 	}
-	deviceNames, err := c.validateDevices()
+	devices, err := c.validateDevices()
 	if err != nil {
 		return err
 	}
 	if len(c.Outputs) == 0 {
 		return errors.New("at least one output required")
 	}
-	return c.validateOutputs(deviceNames)
+	return c.validateOutputs(devices)
 }
 
-// validateDevices validates every device and returns the set of device names.
-func (c *Config) validateDevices() (map[string]bool, error) {
-	deviceNames := make(map[string]bool)
+// validateDevices validates every device and returns the point names of each device.
+func (c *Config) validateDevices() (map[string]map[string]bool, error) {
+	devices := make(map[string]map[string]bool)
 	for _, d := range c.Devices {
 		if d.Name == "" {
 			return nil, errors.New("device name cannot be empty")
 		}
-		if deviceNames[d.Name] {
+		if devices[d.Name] != nil {
 			return nil, fmt.Errorf("duplicate device name: %s", d.Name)
 		}
-		deviceNames[d.Name] = true
+		// "/" separates device and point in exclude_points and MQTT topics.
+		if strings.Contains(d.Name, pathSeparator) {
+			return nil, fmt.Errorf("device name %q must not contain %q", d.Name, pathSeparator)
+		}
 
 		if err := d.Validate(); err != nil {
 			return nil, fmt.Errorf("device %s: %w", d.Name, err)
 		}
+		devices[d.Name] = make(map[string]bool, len(d.Points))
+		for _, p := range d.Points {
+			devices[d.Name][p.Name] = true
+		}
 	}
-	return deviceNames, nil
+	return devices, nil
 }
 
-// validateOutputs validates every output and checks that it only references known devices.
-func (c *Config) validateOutputs(deviceNames map[string]bool) error {
+// validateOutputs validates every output and checks that it only references known
+// devices and points.
+func (c *Config) validateOutputs(devices map[string]map[string]bool) error {
 	for _, o := range c.Outputs {
 		if err := o.Validate(); err != nil {
 			return fmt.Errorf("output %s: %w", o.Name, err)
 		}
 
 		for _, deviceName := range o.Devices {
-			if !deviceNames[deviceName] {
+			if devices[deviceName] == nil {
 				return fmt.Errorf("output %s references unknown device: %s", o.Name, deviceName)
 			}
+		}
+		if err := o.validateExcludePoints(devices); err != nil {
+			return fmt.Errorf("output %s: %w", o.Name, err)
+		}
+	}
+	return nil
+}
+
+// validateExcludePoints checks that every entry is "device/point" with a device of
+// this output and a point of that device.
+func (o *Output) validateExcludePoints(devices map[string]map[string]bool) error {
+	for _, entry := range o.ExcludePoints {
+		device, point, ok := strings.Cut(entry, pathSeparator)
+		if !ok {
+			return fmt.Errorf("exclude_points: %q must be device/point", entry)
+		}
+		if !slices.Contains(o.Devices, device) {
+			return fmt.Errorf("exclude_points: %q: device %s is not in devices", entry, device)
+		}
+		if !devices[device][point] {
+			return fmt.Errorf("exclude_points: %q: unknown point %s", entry, point)
 		}
 	}
 	return nil

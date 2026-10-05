@@ -9,6 +9,22 @@
 # Durations use Go syntax: 250ms, 1s, 30s, 5m, 1h.
 
 # =====================================================================================
+# Lookups (optional): named tables of integer code -> text for point expressions, used as
+# lookups.<name>[code]. Codes may be written in hex (0x1004) or decimal. Names are
+# lowercase (uppercase letters are lowercased when the file is read).
+# =====================================================================================
+lookups:
+  solis_status:
+    0x0000: Waiting
+    0x0001: OpenRun
+    0x0002: SoftRun
+    0x0003: Generating
+    0x0004: Standby
+    0x000F: Normal
+    0x1004: Grid Off
+    0x1015: NO-Grid
+
+# =====================================================================================
 # Devices: where data is read from. Every device needs a unique name and at least one
 # point. type is "modbus" or "http".
 #
@@ -18,6 +34,19 @@
 #                  (default: poll_interval, at most 10s)
 #   parallelism    1-100 concurrent Modbus reads within one poll (no effect for HTTP).
 #                  Most Modbus devices handle only one request at a time: use 1.
+#
+# Point names must be unique within a device and must not contain "/".
+#
+# Every point MAY have an expr (https://expr-lang.org/docs/language-definition) that
+# replaces its value after scale and offset. It sees:
+#   value             the value of this point
+#   points.<name>     the values of all points of the same poll (before any expr ran;
+#                     nil if that point could not be read in this poll)
+#   lookups.<name>    the lookup tables above
+# Numbers become float64; true/false and text are kept; nil skips the point for this
+# poll. Bit functions need integers: bitand(int(value), 0x0004). An expr that does not
+# compile or names an unknown point or lookup stops startup; one that fails while
+# running skips the point (warned once).
 # =====================================================================================
 devices:
   # ----- Modbus TCP, range mode --------------------------------------------------------
@@ -34,7 +63,7 @@ devices:
         address: "tcp://192.0.2.10:502"
         slave_id: 1
         register_mode: range
-        ranges: ["33049-33058", "33135-33150"]
+        ranges: ["33049-33058", "33095-33121", "33135-33150"]
     # Point options (Modbus):
     #   register       start register address
     #   count          number of registers: 1 for 16-bit types and bool,
@@ -61,6 +90,26 @@ devices:
         scale: 1
         offset: 0
         unit: "W"
+      # Expressions: the status code as text, one bit of a fault register, and a
+      # sign from another point of the same poll.
+      - name: status
+        register: 33095
+        type: uint16
+        function_code: 4
+      - name: status_text # same register, decoded with the lookup table
+        register: 33095
+        type: uint16
+        function_code: 4
+        expr: 'lookups.solis_status[int(value)] ?? "unknown"'
+      - name: fault_no_grid # bit 0 of the grid fault register
+        register: 33116
+        type: uint16
+        function_code: 4
+        expr: "bitand(int(value), 0x0001) != 0"
+      - name: battery_current_direction # 0 = charging, 1 = discharging
+        register: 33135
+        type: uint16
+        function_code: 4
       - name: battery_soc
         register: 33139
         count: 1
@@ -69,7 +118,7 @@ devices:
         scale: 1
         offset: 0
         unit: "%"
-      - name: battery_power
+      - name: battery_power # positive while discharging, negative while charging
         register: 33149
         count: 2
         type: uint32
@@ -77,6 +126,7 @@ devices:
         scale: 1
         offset: 0
         unit: "W"
+        expr: "points.battery_current_direction == 1 ? value : -value"
 
   # ----- Modbus RTU (serial), direct mode ----------------------------------------------
   # direct mode reads every point on its own. A failing point is skipped; the other points
@@ -176,6 +226,8 @@ devices:
 #   devices      the devices whose readings this output receives (must exist above)
 #   buffer_size  queued points for this output (default 1000). When the queue is full,
 #                new points are dropped for this output only and a warning is logged.
+#   exclude_points  "device/point" names this output does not receive (optional), e.g.
+#                text values for InfluxDB, where a field keeps one type per device.
 # =====================================================================================
 outputs:
   # ----- InfluxDB 3 --------------------------------------------------------------------
@@ -197,6 +249,10 @@ outputs:
     devices:
       - inverter
       - energy_meter
+    # status_text is text and fault_no_grid true/false; the numeric status is kept.
+    exclude_points:
+      - inverter/status_text
+      - inverter/fault_no_grid
 
   # ----- MQTT with authentication ------------------------------------------------------
   # Topic per point: <topic>/<device>/<point>

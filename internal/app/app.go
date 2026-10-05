@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -15,24 +17,38 @@ import (
 	"github.com/dombyte/datalogger/internal/config"
 	"github.com/dombyte/datalogger/internal/datasource"
 	"github.com/dombyte/datalogger/internal/output"
+	"github.com/dombyte/datalogger/internal/transform"
 )
 
-// defaultBufferSize is the output channel size when buffer_size is not set.
-const defaultBufferSize = 1000
+const (
+	// defaultBufferSize is the output channel size when buffer_size is not set.
+	defaultBufferSize = 1000
+
+	// pathSeparator separates device and point in exclude_points ("device/point").
+	pathSeparator = "/"
+)
 
 // ErrComponentStopped is returned by Run when a reader or writer stops on its own.
 var ErrComponentStopped = errors.New("app: component stopped unexpectedly")
 
-// outputRoute is a writer with the devices it accepts and its input buffer size.
+// source is a reader with the transformer that is applied to each of its polls.
+type source struct {
+	reader    datasource.DeviceReader
+	transform *transform.Transformer
+}
+
+// outputRoute is a writer with the devices it accepts, the points it skips
+// ("device/point") and its input buffer size.
 type outputRoute struct {
-	writer     output.Writer
-	devices    []string
-	bufferSize int
+	writer        output.Writer
+	devices       []string
+	excludePoints []string
+	bufferSize    int
 }
 
 // App runs all readers and writers of one config.
 type App struct {
-	readers []datasource.DeviceReader
+	sources []source
 	outputs []outputRoute
 	log     zerolog.Logger
 
@@ -51,13 +67,13 @@ type App struct {
 // (for example an address the client library rejects); devices and brokers that are
 // unreachable are not an error, the components connect in the background.
 func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) {
-	readers := make([]datasource.DeviceReader, 0, len(cfg.Devices))
+	sources := make([]source, 0, len(cfg.Devices))
 	for _, d := range cfg.Devices {
-		r, err := createReader(d, log, clk)
+		s, err := createSource(d, cfg.Lookups, log, clk)
 		if err != nil {
 			return nil, fmt.Errorf("device %s: %w", d.Name, err)
 		}
-		readers = append(readers, r)
+		sources = append(sources, s)
 	}
 
 	outputs := make([]outputRoute, 0, len(cfg.Outputs))
@@ -71,17 +87,17 @@ func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) 
 			bufferSize = defaultBufferSize
 		}
 		outputs = append(outputs, outputRoute{
-			writer: w, devices: o.Devices, bufferSize: bufferSize,
+			writer: w, devices: o.Devices, excludePoints: o.ExcludePoints, bufferSize: bufferSize,
 		})
 	}
 
-	return newApp(readers, outputs, log), nil
+	return newApp(sources, outputs, log), nil
 }
 
 // newApp wires already created components; tests use it with mocks.
-func newApp(readers []datasource.DeviceReader, outputs []outputRoute, log zerolog.Logger) *App {
+func newApp(sources []source, outputs []outputRoute, log zerolog.Logger) *App {
 	return &App{
-		readers: readers,
+		sources: sources,
 		outputs: outputs,
 		log:     log.With().Str("component", "app").Logger(),
 	}
@@ -94,10 +110,10 @@ func (a *App) Run(ctx context.Context) error {
 	outputCtx, cancelOutputs := context.WithCancel(context.Background())
 	a.cancelSources, a.cancelOutputs = cancelSources, cancelOutputs
 
-	failed := make(chan error, len(a.readers)+len(a.outputs))
+	failed := make(chan error, len(a.sources)+len(a.outputs))
 	inputs := a.startWriters(outputCtx, failed)
 	a.startReaders(sourceCtx, inputs, failed)
-	a.log.Info().Int("devices", len(a.readers)).Int("outputs", len(a.outputs)).
+	a.log.Info().Int("devices", len(a.sources)).Int("outputs", len(a.outputs)).
 		Msg("Datalogger started")
 
 	select {
@@ -168,39 +184,43 @@ func (a *App) watchWriter(name string, done <-chan error, failed chan<- error) {
 	}
 }
 
-// startReaders starts every reader with a router that copies its points to the
-// outputs that list the device.
+// startReaders starts every reader with a router that transforms its polls and copies
+// the points to the outputs that list the device.
 func (a *App) startReaders(
 	ctx context.Context,
 	inputs map[string]chan<- datasource.DataPoint,
 	failed chan<- error,
 ) {
-	for _, r := range a.readers {
-		targets := a.targets(r.Name(), inputs)
-		data := r.Start(ctx)
+	for _, s := range a.sources {
+		name := s.reader.Name()
+		targets := a.targets(name, inputs)
+		data := s.reader.Start(ctx)
 		a.routers.Add(1)
 		go func() {
 			defer a.routers.Done()
-			route(data, targets, a.log)
+			route(data, s.transform, targets, a.log)
 			if ctx.Err() == nil {
-				failed <- fmt.Errorf("%w: device %s", ErrComponentStopped, r.Name())
+				failed <- fmt.Errorf("%w: device %s", ErrComponentStopped, name)
 			}
 		}()
 	}
 }
 
-// targets returns the input channels of the outputs that accept the device.
-func (a *App) targets(
-	device string,
-	inputs map[string]chan<- datasource.DataPoint,
-) map[string]chan<- datasource.DataPoint {
-	targets := make(map[string]chan<- datasource.DataPoint)
+// targets returns the outputs that accept the device, each with the points of the
+// device it skips.
+func (a *App) targets(device string, inputs map[string]chan<- datasource.DataPoint) []target {
+	var targets []target
 	for _, o := range a.outputs {
-		for _, d := range o.devices {
-			if d == device {
-				targets[o.writer.Name()] = inputs[o.writer.Name()]
+		if !slices.Contains(o.devices, device) {
+			continue
+		}
+		t := target{name: o.writer.Name(), in: inputs[o.writer.Name()], exclude: map[string]bool{}}
+		for _, entry := range o.excludePoints {
+			if d, point, _ := strings.Cut(entry, pathSeparator); d == device {
+				t.exclude[point] = true
 			}
 		}
+		targets = append(targets, t)
 	}
 	return targets
 }
