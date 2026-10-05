@@ -60,13 +60,19 @@ func (c *Config) validateDevices() (map[string]map[string]bool, error) {
 	return devices, nil
 }
 
-// validateOutputs validates every output and checks that it only references known
-// devices and points.
+// validateOutputs validates every output, checks that names are unique and that it
+// only references known devices and points.
 func (c *Config) validateOutputs(devices map[string]map[string]bool) error {
+	seen := make(map[string]bool, len(c.Outputs))
 	for _, o := range c.Outputs {
 		if err := o.Validate(); err != nil {
 			return fmt.Errorf("output %s: %w", o.Name, err)
 		}
+		// app routes to the outputs by name.
+		if seen[o.Name] {
+			return fmt.Errorf("duplicate output name: %s", o.Name)
+		}
+		seen[o.Name] = true
 
 		for _, deviceName := range o.Devices {
 			if devices[deviceName] == nil {

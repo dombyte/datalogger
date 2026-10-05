@@ -1081,6 +1081,13 @@ func TestValidateErrors(t *testing.T) {
 			wantErr: "duplicate device name: meter",
 		},
 		{
+			// Regression: app keys output channels by name, so the first output got no
+			// data and the second every point twice.
+			name:    "duplicate output",
+			change:  func(c *Config) { c.Outputs = append(c.Outputs, c.Outputs[0]) },
+			wantErr: "duplicate output name: out",
+		},
+		{
 			name:    "invalid output",
 			change:  func(c *Config) { c.Outputs[0].Type = "kafka" },
 			wantErr: "output out: unknown output type: kafka",
