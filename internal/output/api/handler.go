@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"crypto/subtle"
 	"encoding/json"
-	"math"
 	"net/http"
 	"slices"
 	"time"
@@ -148,15 +147,10 @@ func (w *Writer) handlePoint(rw http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// newPointResponse converts a point; NaN and ±Inf (possible for float32 registers)
-// have no JSON form and become null.
+// newPointResponse converts a point; NaN and ±Inf become null.
 func newPointResponse(dp datasource.DataPoint, now time.Time) pointResponse {
-	value := dp.Value
-	if f, ok := value.(float64); ok && (math.IsNaN(f) || math.IsInf(f, 0)) {
-		value = nil
-	}
 	return pointResponse{
-		Value:     value,
+		Value:     dp.JSONValue(),
 		Unit:      dp.Unit,
 		Timestamp: dp.Timestamp,
 		AgeMS:     now.Sub(dp.Timestamp).Milliseconds(),

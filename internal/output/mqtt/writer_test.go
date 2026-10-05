@@ -187,7 +187,9 @@ func TestNameAndStopOnCancelWithoutSession(t *testing.T) {
 	assert.False(t, open, "the writer stops when ctx is cancelled")
 }
 
-func TestSkipsPointThatCannotBeEncoded(t *testing.T) {
+// Regression: NaN and ±Inf (float32 registers) made json.Marshal fail, so the point
+// was lost with an error on every poll; they are published as null like in the API.
+func TestPublishesNaNAsNull(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	p, _ := session(t)
@@ -195,12 +197,20 @@ func TestSkipsPointThatCannotBeEncoded(t *testing.T) {
 	pubs := published(p, nil)
 	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
 
-	h.input <- datasource.DataPoint{DeviceName: "meter", PointName: "nan", Value: math.NaN()}
-	h.send("power")
+	h.input <- datasource.DataPoint{
+		DeviceName: "meter", PointName: "nan", Value: math.NaN(), Timestamp: start,
+	}
+	h.input <- datasource.DataPoint{
+		DeviceName: "meter", PointName: "inf", Value: math.Inf(1), Timestamp: start,
+	}
 	h.stop()
 
-	assert.Equal(t, "logger/meter/power", (<-pubs).Topic, "NaN is skipped, the session stays")
-	assert.Empty(t, pubs)
+	for _, topic := range []string{"logger/meter/nan", "logger/meter/inf"} {
+		pub := <-pubs
+		assert.Equal(t, topic, pub.Topic)
+		assert.JSONEq(t, `{"value":null,"unit":"","timestamp":"2026-09-29T12:00:00Z"}`,
+			string(pub.Payload))
+	}
 }
 
 // Regression: a PUBACK with an error reason code (e.g. the ACL denies the topic) closed
@@ -251,4 +261,20 @@ func TestRepeatedPublishErrorsBackOff(t *testing.T) {
 	}
 	h.stop()
 	assert.Equal(t, 2, dials)
+}
+
+func TestSkipsPointThatCannotBeEncoded(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	p, _ := session(t)
+	h.dialer.EXPECT().Dial(mock.Anything).Return(p, nil).Once()
+	pubs := published(p, nil)
+	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
+
+	h.input <- datasource.DataPoint{DeviceName: "meter", PointName: "c", Value: complex(1, 2)}
+	h.send("power")
+	h.stop()
+
+	assert.Equal(t, "logger/meter/power", (<-pubs).Topic, "skipped, the session stays")
+	assert.Empty(t, pubs)
 }

@@ -116,7 +116,7 @@ func (w *Writer) publish(ctx context.Context, dp datasource.DataPoint) {
 
 	topic := fmt.Sprintf("%s/%s/%s", w.settings.Topic, dp.DeviceName, dp.PointName)
 	payload, err := json.Marshal(map[string]any{
-		"value":     dp.Value,
+		"value":     dp.JSONValue(), // NaN and ±Inf have no JSON form: null
 		"unit":      dp.Unit,
 		"timestamp": dp.Timestamp.Format(time.RFC3339Nano),
 	})

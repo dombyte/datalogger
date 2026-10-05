@@ -3,6 +3,7 @@ package datasource
 
 import (
 	"context"
+	"math"
 	"time"
 )
 
@@ -16,6 +17,15 @@ type DataPoint struct {
 	Value      interface{} `json:"value"` // float64, int64, uint64, bool, string
 	Timestamp  time.Time   `json:"timestamp"`
 	Unit       string      `json:"unit"`
+}
+
+// JSONValue returns the value for a JSON document: NaN and ±Inf (possible for float32
+// registers) have no JSON form and become nil (null); other values are unchanged.
+func (dp DataPoint) JSONValue() any {
+	if f, ok := dp.Value.(float64); ok && (math.IsNaN(f) || math.IsInf(f, 0)) {
+		return nil
+	}
+	return dp.Value
 }
 
 // DeviceReader polls one device.

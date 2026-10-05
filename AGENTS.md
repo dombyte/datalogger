@@ -261,7 +261,8 @@ writer that failed, or a missed deadline.
   that arrive while no connection is possible are **dropped**; the count is logged on
   the next successful connect.
 - Topic: `<topic>/<device>/<point>` (`topic` default `datalogger`); payload
-  `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}`; `qos` 0–2, `retain`.
+  `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}` (NaN/±Inf values are
+  `null`, as in the API); `qos` 0–2, `retain`.
 - `client_id` defaults to `logger-<8 random chars>`; username/password are optional.
 - Topic and payload format are a public interface; changing them is a breaking change (`!`).
 
