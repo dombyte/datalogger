@@ -37,3 +37,14 @@ func TestDialConnectsAndFailsWhenNothingListens(t *testing.T) {
 	_, err = d.Dial()
 	assert.Error(t, err)
 }
+
+func TestNewDialerAcceptsRTUParities(t *testing.T) {
+	t.Parallel()
+	for _, parity := range []string{"N", "E", "O"} {
+		_, err := modbus.NewDialer(modbus.ConnSettings{
+			Address: "rtu:///dev/ttyUSB0", SlaveID: 1, Speed: 9600, DataBits: 8,
+			Parity: parity, StopBits: 1, Timeout: time.Second,
+		}, zerolog.Nop())
+		assert.NoError(t, err, "parity %s; the serial port is only opened on Dial", parity)
+	}
+}

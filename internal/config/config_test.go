@@ -1019,3 +1019,68 @@ outputs:
 	assert.Equal(t, `lookups.status[int(value)] ?? "unknown"`, cfg.Devices[0].Points[0].Expr)
 	assert.Equal(t, []string{"meter/status"}, cfg.Outputs[0].ExcludePoints)
 }
+
+// TestValidateErrors checks error paths of Validate on an otherwise valid config.
+func TestValidateErrors(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		change  func(*Config)
+		wantErr string
+	}{
+		{name: "no outputs", change: func(c *Config) { c.Outputs = nil }, wantErr: "at least one output"},
+		{
+			name:    "duplicate device",
+			change:  func(c *Config) { c.Devices = append(c.Devices, c.Devices[0]) },
+			wantErr: "duplicate device name: meter",
+		},
+		{
+			name:    "invalid output",
+			change:  func(c *Config) { c.Outputs[0].Type = "kafka" },
+			wantErr: "output out: unknown output type: kafka",
+		},
+		{
+			name:    "unknown device in output",
+			change:  func(c *Config) { c.Outputs[0].Devices = []string{"meter", "nope"} },
+			wantErr: "references unknown device: nope",
+		},
+		{
+			name:    "unknown device type",
+			change:  func(c *Config) { c.Devices[0].Type = "snmp" },
+			wantErr: "unknown device type: snmp",
+		},
+		{
+			name:    "parallelism",
+			change:  func(c *Config) { c.Devices[0].Parallelism = 0 },
+			wantErr: "parallelism must be between 1 and 100",
+		},
+		{
+			name:    "no points",
+			change:  func(c *Config) { c.Devices[0].Points = nil },
+			wantErr: "at least one point",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.ErrorContains(t, namesConfig(tt.change).Validate(), tt.wantErr)
+		})
+	}
+}
+
+// TestLoadErrors checks that decode and validation errors are returned by Load.
+func TestLoadErrors(t *testing.T) {
+	t.Parallel()
+	for name, tt := range map[string]struct{ content, wantErr string }{
+		"decode":   {content: "devices:\n  - poll_interval: soon\n", wantErr: "config: parse"},
+		"validate": {content: "outputs: []\n", wantErr: "at least one device required"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o600))
+			_, err := Load(path)
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}

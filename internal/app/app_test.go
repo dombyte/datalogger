@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -271,4 +272,52 @@ func TestExampleConfigExpressionsCompile(t *testing.T) {
 		_, err := createSource(d, cfg.Lookups, zerolog.Nop(), clocktest.NewFake(time.Now()))
 		assert.NoError(t, err, "device %s", d.Name)
 	}
+}
+
+func TestNewCreatesEveryOutputType(t *testing.T) {
+	t.Parallel()
+	device := config.Device{
+		Name: "meter", Type: "http", PollInterval: time.Second, Timeout: time.Second,
+		DeviceSpecific: config.DeviceSpecific{HTTP: config.HTTPConfig{
+			Address: "http://localhost", Method: "GET", ResponseType: "json",
+		}},
+		Points: []config.Point{{Name: "p", JSONPath: "p", Scale: 1}},
+	}
+	csvOut := config.Output{Name: "csv", Type: "csv", Devices: []string{"meter"}}
+	csvOut.OutputSpecific.Csv.FilePath = filepath.Join(t.TempDir(), "data.csv")
+	influxOut := config.Output{Name: "influx", Type: "influxdb", BufferSize: 5}
+	influxOut.OutputSpecific.Influxdb = config.InfluxdbConfig{
+		Address: "http://db:8181", Token: "t", Database: "d",
+	}
+	mqttOut := config.Output{Name: "mqtt", Type: "mqtt"}
+	mqttOut.OutputSpecific.Mqtt = config.MqttConfig{Address: "tcp://broker:1883", ClientID: "c"}
+	clk := clocktest.NewFake(time.Now())
+
+	a, err := New(&config.Config{
+		Devices: []config.Device{device},
+		Outputs: []config.Output{csvOut, influxOut, mqttOut},
+	}, zerolog.Nop(), clk)
+	require.NoError(t, err, "constructors do not connect")
+	require.Len(t, a.outputs, 3)
+	assert.Equal(t, defaultBufferSize, a.outputs[0].bufferSize)
+	assert.Equal(t, 5, a.outputs[1].bufferSize)
+
+	for name, change := range map[string]func(*config.Output){
+		"unknown output type": func(o *config.Output) { o.Type = "kafka" },
+		"influxdb address":    func(o *config.Output) { *o = influxOut; o.OutputSpecific.Influxdb.Address = "" },
+		"mqtt scheme": func(o *config.Output) {
+			*o = mqttOut
+			o.OutputSpecific.Mqtt.Address = "http://broker"
+		},
+	} {
+		out := csvOut
+		change(&out)
+		_, err := New(&config.Config{Devices: []config.Device{device}, Outputs: []config.Output{out}},
+			zerolog.Nop(), clk)
+		assert.ErrorContains(t, err, "output "+out.Name, name)
+	}
+
+	device.Type = "snmp"
+	_, err = New(&config.Config{Devices: []config.Device{device}}, zerolog.Nop(), clk)
+	assert.ErrorContains(t, err, `unknown device type "snmp"`)
 }

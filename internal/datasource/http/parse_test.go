@@ -55,3 +55,42 @@ func TestExtractJSONValue(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertAndScaleAllTypes(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"n": 2, "on": "true", "obj": {"a": 1}, "u": 4}`)
+	tests := []struct {
+		name  string
+		point Point
+		want  any
+	}{
+		{name: "float type", point: Point{JSONPath: "n", Type: "float32", Scale: 1}, want: 2.0},
+		{name: "bool type from string", point: Point{JSONPath: "on", Type: "bool", Scale: 1}, want: true},
+		{
+			name:  "object without type keeps the JSON value",
+			point: Point{JSONPath: "obj", Scale: 1},
+			want:  map[string]any{"a": 1.0},
+		},
+		{
+			name:  "scaled uint",
+			point: Point{JSONPath: "u", Type: "uint16", Scale: 0.5, Offset: 1},
+			want:  3.0,
+		},
+		{name: "scaled float", point: Point{JSONPath: "n", Scale: 10}, want: 20.0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := extractJSONValue(body, tt.point)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestExtractValueUnknownResponseType(t *testing.T) {
+	t.Parallel()
+	r := &Reader{settings: Settings{ResponseType: "xml"}}
+	_, err := r.extractValue([]byte("<a/>"), Point{})
+	assert.ErrorContains(t, err, "unknown response type: xml")
+}

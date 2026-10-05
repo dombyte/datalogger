@@ -193,3 +193,17 @@ func TestFailingExpressionWarnsOnceUntilItWorks(t *testing.T) {
 	assert.Equal(t, []string{"warn", "info", "warn"}, levels(),
 		"back at info, then a new warning when it fails again")
 }
+
+func TestUnsignedResultAndDynamicPointName(t *testing.T) {
+	t.Parallel()
+	tr, err := New(solis(map[string]string{
+		"faults": "value",
+		// A key that is not a constant cannot be checked at startup; nil when unknown.
+		"status": `points[string(value)] ?? "none"`,
+	}), zerolog.Nop())
+	require.NoError(t, err)
+
+	got := byName(tr.Apply(poll(map[string]any{"faults": uint64(3), "status": "faults"})))
+
+	assert.Equal(t, map[string]any{"faults": 3.0, "status": 3.0}, got, "both normalised to float64")
+}
