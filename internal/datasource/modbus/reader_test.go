@@ -451,6 +451,35 @@ func TestRangeModeStopsAfterFailedChunk(t *testing.T) {
 		time.Second, time.Millisecond)
 }
 
+// A range poll cut short by shutdown reads no further chunk and delivers nothing: only
+// a complete poll is a consistent snapshot.
+func TestRangeModeShutdownSkipsRemainingChunks(t *testing.T) {
+	t.Parallel()
+	s := settings(
+		modbus.Point{Name: "a", Register: 0, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "b", Register: 200, Type: "uint16", Scale: 1},
+	)
+	s.RangeMode, s.Ranges = true, []string{"0-9", "200-209"}
+	h := newHarness(t, s)
+	reading, release := make(chan struct{}), make(chan struct{})
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(mock.Anything, uint16(10), lib.HOLDING_REGISTER).
+		RunAndReturn(func(uint16, uint16, lib.RegType) ([]uint16, error) {
+			close(reading)
+			<-release
+			return make([]uint16, 10), nil
+		}).Once() // the mock fails the test on a second chunk
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.start()
+	<-reading
+	h.cancel()
+	close(release)
+	for points := range h.data {
+		t.Fatalf("unexpected data points %v", points)
+	}
+}
+
 // Regression: a direct-mode poll that returned points with a connection error during
 // shutdown dropped them, although they had been read.
 func TestPointsReadBeforeShutdownErrorAreDelivered(t *testing.T) {
