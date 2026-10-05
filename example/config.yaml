@@ -32,8 +32,8 @@ lookups:
 #   poll_interval  how often the device is polled (required, > 0)
 #   timeout        maximum time to wait for one response
 #                  (default: poll_interval, at most 10s)
-#   parallelism    1-100 concurrent Modbus reads within one poll (no effect for HTTP).
-#                  Most Modbus devices handle only one request at a time: use 1.
+#   parallelism    1-100; Modbus requests share one connection and are sent one at a
+#                  time anyway, so 1 is the right value (no effect for HTTP).
 #
 # Point names must be unique within a device and must not contain "/".
 #

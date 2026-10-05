@@ -24,7 +24,8 @@ type Device struct {
 	Type         string        `mapstructure:"type"` // "modbus" or "http"
 	PollInterval time.Duration `mapstructure:"poll_interval"`
 	Timeout      time.Duration `mapstructure:"timeout"`
-	// Parallelism (1-100) limits the concurrent reads within one device poll.
+	// Parallelism (1-100) is the number of goroutines reading one Modbus poll; the
+	// requests share one connection and are sent one at a time.
 	Parallelism    int            `mapstructure:"parallelism"`
 	DeviceSpecific DeviceSpecific `mapstructure:"device_specific"`
 	Points         []Point        `mapstructure:"points"`

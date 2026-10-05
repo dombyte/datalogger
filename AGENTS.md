@@ -205,7 +205,7 @@ writer that failed, or a missed deadline.
   `function_code` 3 (holding) or 4 (input); default holding. Mixing 3 and 4 in one device
   is rejected by validation; use two devices.
 - **Direct mode:** one read per point (`register`, `count`, default 1). Points are read with
-  up to `parallelism` concurrent requests. A failed point is logged and skipped; the rest
+  up to `parallelism` goroutines. A failed point is logged and skipped; the rest
   of the poll is still delivered. Reads not started yet are skipped after a connection
   error and after two timeouts in a row (the device does not answer; one timeout may be a
   register it ignores), so a silent device does not hold a poll for points × timeout.
@@ -221,8 +221,9 @@ writer that failed, or a missed deadline.
   defaults to 1 (an explicit 0 is treated as unset). 32-bit types need `count: 2` (high
   word first); a smaller count is rejected by validation, as is a `count` above 125 or
   registers past 65535.
-- Most Modbus devices handle only one request at a time: use `parallelism: 1` unless the
-  device is known to support more.
+- `parallelism` does not make Modbus requests concurrent: they share the device's one
+  connection, on which the client library sends one request at a time, so `1` is the
+  right value.
 
 ### HTTP reader
 - `method` GET (default) or POST with `body`; `headers` are sent as given; `insecure`
