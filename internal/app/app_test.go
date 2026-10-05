@@ -1,10 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -185,6 +187,32 @@ func TestRouteDropsOnlyForFullOutput(t *testing.T) {
 		zerolog.Nop())
 
 	assert.Len(t, roomy, 3)
+}
+
+// Regression: a stalled output logged one warning per dropped point (hundreds per
+// second); now one warning per stall and one line with the count when it recovers.
+func TestRouteLogsDropsOncePerStall(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	in := make(chan datasource.DataPoint, 1)
+	targets := []target{{name: "slow", in: in}}
+	log := zerolog.New(&logs)
+
+	for range 5 {
+		send(point("dev1"), targets, log) // the first fills the buffer, four are dropped
+	}
+	<-in
+	send(point("dev1"), targets, log) // room again
+	for range 2 {
+		send(point("dev1"), targets, log) // a new stall
+	}
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	require.Len(t, lines, 3)
+	assert.Contains(t, lines[0], `"level":"warn"`)
+	assert.Contains(t, lines[1], `"dropped":4`)
+	assert.Contains(t, lines[1], `"level":"info"`)
+	assert.Contains(t, lines[2], `"level":"warn"`)
 }
 
 func TestNewFailsOnlyOnConfigurationErrors(t *testing.T) {

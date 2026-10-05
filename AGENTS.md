@@ -139,8 +139,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   its only user), then sends each point to every output whose `devices` list contains the
   device and whose `exclude_points` does not list the point.
   The send is **non-blocking**: if an output channel is full, the point is **dropped for
-  that output only** and a warning is logged. A slow output never blocks a device or the
-  other outputs.
+  that output only**; a warning is logged when an output channel becomes full, and the
+  count of dropped points when it takes points again (per device). A slow output never
+  blocks a device or the other outputs.
 - **`app` owns** the output input channels and closes them during shutdown, after all
   routers have finished.
 - **Writers own** their external resource (file, broker connection, InfluxDB client) and
