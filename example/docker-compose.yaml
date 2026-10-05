@@ -5,6 +5,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro
+    ports:
+      - "8080:8080" # only needed for an output of type api
     environment:
       - TZ=Europe/Berlin
     command: -config=/app/config.yaml

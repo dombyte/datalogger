@@ -600,6 +600,25 @@ func TestOutputValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "valid api output",
+			output: Output{
+				Name:           "api",
+				Type:           "api",
+				Devices:        []string{"test"},
+				OutputSpecific: OutputSpecific{API: APIConfig{Listen: ":8080"}},
+			},
+			wantErr: false,
+		},
+		{
+			name: "api missing listen",
+			output: Output{
+				Name:    "api",
+				Type:    "api",
+				Devices: []string{"test"},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -696,6 +715,33 @@ func TestCsvConfigValidate(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
+		})
+	}
+}
+
+// TestAPIConfigValidate tests APIConfig.Validate
+func TestAPIConfigValidate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		config  APIConfig
+		wantErr string
+	}{
+		{name: "all interfaces", config: APIConfig{Listen: ":8080"}},
+		{name: "host and token", config: APIConfig{Listen: "127.0.0.1:8080", Token: "t"}},
+		{name: "empty listen", config: APIConfig{}, wantErr: "listen required"},
+		{name: "no port", config: APIConfig{Listen: "8080"}, wantErr: "listen must be host:port"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.config.Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
 		})
 	}
 }

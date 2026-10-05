@@ -1,6 +1,6 @@
 # Datalogger
 
-A flexible data logging tool for collecting metrics from various sources (Modbus, HTTP) and writing to multiple outputs (InfluxDB, MQTT, CSV).
+A flexible data logging tool for collecting metrics from various sources (Modbus, HTTP) and writing to multiple outputs (InfluxDB, MQTT, CSV, HTTP API).
 
 ## Configuration
 
@@ -10,7 +10,36 @@ Configuration is done via YAML file (passed with `-config` flag). See [example/c
 - **Modbus:** TCP/RTU with range or direct register access
 - **HTTP:** JSON responses with [gjson path syntax](https://github.com/tidwall/gjson/blob/master/SYNTAX.md) for value extraction
 
-**Output types:** InfluxDB 3.x, MQTT, CSV
+**Output types:** InfluxDB 3.x, MQTT, CSV, HTTP API (latest values)
+
+### HTTP API
+
+An output of type `api` serves the latest value of every point of its devices as JSON:
+
+```yaml
+outputs:
+  - name: api
+    type: api
+    output_specific:
+      api:
+        listen: ":8080"
+        token: "" # optional: require "Authorization: Bearer <token>"
+    devices: [inverter]
+```
+
+| Request | Response |
+|---|---|
+| `GET /api/devices` | `{"devices": [{"device": "inverter", "points": 3, "age_ms": 820}]}` (`age_ms` of the newest point, `null` before the first reading) |
+| `GET /api/devices/{device}` | `{"device": "inverter", "points": {"power": {"value": 1234.5, "unit": "W", "timestamp": "2026-10-05T10:15:02.123Z", "age_ms": 820}}}` |
+| `GET /api/devices/{device}/{point}` | `{"device": "inverter", "point": "power", "value": 1234.5, "unit": "W", "timestamp": "…", "age_ms": 820}` |
+| `GET /healthz` | `200` (no token needed) |
+
+- `age_ms` is the time since the device answered, computed per request. A device that
+  stops answering keeps its last values while their age grows.
+- Unknown devices and points without a value are `404`; a device without any reading yet
+  has `"points": {}`. NaN and infinite values are `null`.
+- Values live in memory only: after a restart the API is empty until the first poll.
+- A port that is already in use stops the program at startup.
 
 ### Transforming values
 

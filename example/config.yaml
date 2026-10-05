@@ -294,3 +294,22 @@ outputs:
       - sensor_rtu
       - energy_meter
       - cloud_api
+
+  # ----- HTTP API (latest values) ------------------------------------------------------
+  # Read-only JSON API with the latest value of every point and its age in milliseconds:
+  #   GET /api/devices                   devices with point count and age of the newest point
+  #   GET /api/devices/<device>          {"device", "points": {<point>: {value, unit,
+  #                                       timestamp, age_ms}}}
+  #   GET /api/devices/<device>/<point>  one point
+  #   GET /healthz                       200 without token
+  # Values are kept in memory only (empty after a restart). In the container, publish the
+  # port (ports: ["8080:8080"]).
+  - name: api
+    type: api
+    output_specific:
+      api:
+        listen: ":8080" # host:port; "127.0.0.1:8080" for local access only
+        token: "" # optional: require "Authorization: Bearer <token>"
+    devices:
+      - inverter
+      - energy_meter

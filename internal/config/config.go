@@ -77,7 +77,7 @@ type HTTPConfig struct {
 // Output represents an output configuration.
 type Output struct {
 	Name       string `mapstructure:"name"`
-	Type       string `mapstructure:"type"` // influxdb, mqtt, csv
+	Type       string `mapstructure:"type"` // influxdb, mqtt, csv, api
 	BufferSize int    `mapstructure:"buffer_size"`
 	// BatchSize, BatchTimeout, MaxRetries and RetryDelay tune InfluxDB writes; 0 = default.
 	BatchSize    int           `mapstructure:"batch_size"`
@@ -95,6 +95,7 @@ type OutputSpecific struct {
 	Influxdb InfluxdbConfig `mapstructure:"influxdb"`
 	Mqtt     MqttConfig     `mapstructure:"mqtt"`
 	Csv      CsvConfig      `mapstructure:"csv"`
+	API      APIConfig      `mapstructure:"api"`
 }
 
 // InfluxdbConfig contains InfluxDB3-specific configuration.
@@ -123,6 +124,12 @@ type CsvConfig struct {
 	MaxAge   time.Duration `mapstructure:"max_age"` // Max age before rotation
 	// MaxBackups is the number of rotated files to keep (0 = keep none, < 0 = keep all).
 	MaxBackups int `mapstructure:"max_backups"`
+}
+
+// APIConfig contains the configuration of the HTTP API output.
+type APIConfig struct {
+	Listen string `mapstructure:"listen"` // host:port, ":8080" for all interfaces
+	Token  string `mapstructure:"token"`  // Optional: required bearer token
 }
 
 // Load reads the configuration from a YAML file, fills in defaults and validates it.

@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 )
@@ -221,15 +222,22 @@ func (o *Output) Validate() error {
 		return errors.New("devices required")
 	}
 
-	switch o.Type {
+	return o.OutputSpecific.validate(o.Type)
+}
+
+// validate validates the settings of the given output type.
+func (s *OutputSpecific) validate(outputType string) error {
+	switch outputType {
 	case "influxdb":
-		return o.OutputSpecific.Influxdb.Validate()
+		return s.Influxdb.Validate()
 	case "mqtt":
-		return o.OutputSpecific.Mqtt.Validate()
+		return s.Mqtt.Validate()
 	case "csv":
-		return o.OutputSpecific.Csv.Validate()
+		return s.Csv.Validate()
+	case "api":
+		return s.API.Validate()
 	default:
-		return fmt.Errorf("unknown output type: %s", o.Type)
+		return fmt.Errorf("unknown output type: %s", outputType)
 	}
 }
 
@@ -262,6 +270,17 @@ func (m *MqttConfig) Validate() error {
 func (c *CsvConfig) Validate() error {
 	if c.FilePath == "" {
 		return errors.New("file_path required")
+	}
+	return nil
+}
+
+// Validate validates the API configuration.
+func (a *APIConfig) Validate() error {
+	if a.Listen == "" {
+		return errors.New("listen required")
+	}
+	if _, _, err := net.SplitHostPort(a.Listen); err != nil {
+		return fmt.Errorf("listen must be host:port: %w", err)
 	}
 	return nil
 }

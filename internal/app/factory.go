@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/rs/zerolog"
@@ -11,6 +12,7 @@ import (
 	"github.com/dombyte/datalogger/internal/datasource/http"
 	"github.com/dombyte/datalogger/internal/datasource/modbus"
 	"github.com/dombyte/datalogger/internal/output"
+	"github.com/dombyte/datalogger/internal/output/api"
 	"github.com/dombyte/datalogger/internal/output/csv"
 	"github.com/dombyte/datalogger/internal/output/influxdb"
 	"github.com/dombyte/datalogger/internal/output/mqtt"
@@ -86,6 +88,8 @@ func createWriter(
 		return createInfluxDBWriter(o, log, clk)
 	case "mqtt":
 		return createMQTTWriter(o, log, clk)
+	case "api":
+		return createAPIWriter(o, log, clk)
 	default:
 		return nil, fmt.Errorf("unknown output type %q", o.Type)
 	}
@@ -239,4 +243,27 @@ func createMQTTWriter(
 		Clock:  clk,
 		Log:    log,
 	})
+}
+
+// createAPIWriter binds the API address and creates the API writer on it.
+func createAPIWriter(
+	o config.Output,
+	log zerolog.Logger,
+	clk clock.Clock,
+) (output.Writer, error) {
+	a := o.OutputSpecific.API
+	ln, err := api.Listen(a.Listen)
+	if err != nil {
+		return nil, err
+	}
+	w, err := api.New(api.Deps{
+		Settings: api.Settings{Name: o.Name, Devices: o.Devices, Token: a.Token},
+		Listener: ln,
+		Clock:    clk,
+		Log:      log,
+	})
+	if err != nil {
+		return nil, errors.Join(err, ln.Close())
+	}
+	return w, nil
 }
