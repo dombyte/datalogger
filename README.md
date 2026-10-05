@@ -1,3 +1,8 @@
+[![GitHub license](https://badgen.net/github/license/dombyte/datalogger)](https://github.com/dombyte/datalogger/blob/main/LICENSE)
+[![Checks](https://github.com/dombyte/datalogger/actions/workflows/checks.yml/badge.svg)](https://github.com/dombyte/datalogger/actions/workflows/checks.yml)
+[![GitHub go.mod Go version of a Go module](https://img.shields.io/github/go-mod/go-version/dombyte/datalogger.svg)](https://github.com/dombyte/datalogger)
+[![Github tag](https://badgen.net/github/release/dombyte/datalogger/latest)](https://github.com/dombyte/datalogger/tags/)
+
 # Datalogger
 
 Datalogger polls devices (Modbus TCP/RTU, HTTP APIs) and forwards every reading to one
