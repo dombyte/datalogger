@@ -1187,7 +1187,16 @@ func TestValidateErrors(t *testing.T) {
 func TestLoadErrors(t *testing.T) {
 	t.Parallel()
 	for name, tt := range map[string]struct{ content, wantErr string }{
-		"decode":   {content: "devices:\n  - poll_interval: soon\n", wantErr: "config: parse"},
+		"decode": {content: "devices:\n  - poll_interval: soon\n", wantErr: "config: parse"},
+		// Regression: unknown keys were ignored, so a typo fell back to the default.
+		"unknown key": {
+			content: "devices:\n  - name: m\n    poll_intervall: 1s\n",
+			wantErr: "poll_intervall",
+		},
+		"unknown nested key": {
+			content: "outputs:\n  - output_specific:\n      csv:\n        max_backup: 7\n",
+			wantErr: "max_backup",
+		},
 		"validate": {content: "outputs: []\n", wantErr: "at least one device required"},
 	} {
 		t.Run(name, func(t *testing.T) {

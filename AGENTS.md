@@ -319,6 +319,7 @@ writer that failed, or a missed deadline.
   device; device and point names must not contain `/`; the `topic`, devices and
   non-excluded points of an MQTT output must not contain `+` or `#` (wildcards: a broker
   closes the connection); `parallelism` 1–100; `poll_interval` > 0; `timeout` > 0.
+- Unknown keys are an error (a typo would otherwise fall back to a default silently).
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
   poll interval, at most 10 s; point `scale` 1; HTTP method GET and response type json;
   MQTT topic `datalogger` and client ID `logger-<random>`) and then

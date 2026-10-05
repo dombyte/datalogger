@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -145,7 +146,11 @@ func Load(path string) (*Config, error) {
 	}
 
 	var config Config
-	if err := v.Unmarshal(&config); err != nil {
+	// Unknown keys are an error: a typo such as max_backup would otherwise silently
+	// fall back to a default (for max_backups: delete every rotated file).
+	if err := v.Unmarshal(&config, func(dc *mapstructure.DecoderConfig) {
+		dc.ErrorUnused = true
+	}); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 
