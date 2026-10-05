@@ -29,7 +29,8 @@ lookups:
 # point. type is "modbus" or "http".
 #
 # Common device options:
-#   poll_interval  how often the device is polled (required, > 0)
+#   poll_interval  how often the device is polled (required, > 0); the first poll
+#                  runs at startup
 #   timeout        maximum time to wait for one response
 #                  (default: poll_interval, at most 10s)
 #   parallelism    1-100; Modbus requests share one connection and are sent one at a

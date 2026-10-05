@@ -187,7 +187,7 @@ func (r *Reader) Start(ctx context.Context) <-chan []datasource.DataPoint {
 	return dataCh
 }
 
-// pollLoop polls on every tick until ctx is cancelled, then disconnects.
+// pollLoop polls at once and on every tick until ctx is cancelled, then disconnects.
 func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
 	defer close(dataCh)
 	defer r.disconnect()
@@ -195,6 +195,11 @@ func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPo
 	ticker := r.clock.NewTicker(r.settings.PollInterval)
 	defer ticker.Stop()
 
+	// The first poll runs at once: with a long poll interval the first data would
+	// otherwise arrive one interval after the start.
+	if ctx.Err() == nil {
+		r.pollOnce(ctx, dataCh)
+	}
 	for {
 		select {
 		case <-ctx.Done():

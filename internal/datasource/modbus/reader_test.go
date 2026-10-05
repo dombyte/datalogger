@@ -34,6 +34,7 @@ type harness struct {
 	data   <-chan []datasource.DataPoint
 	// pending holds the rest of the last received poll; receive returns it point by point.
 	pending []datasource.DataPoint
+	reader  datasource.DeviceReader
 	cancel  context.CancelFunc
 }
 
@@ -53,12 +54,17 @@ func newHarness(t *testing.T, s modbus.Settings) *harness {
 		Settings: s, Dialer: h.dialer, Clock: h.clock, Log: zerolog.Nop(),
 	})
 	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	h.cancel = cancel
-	h.data = r.Start(ctx)
+	h.reader = r
 	t.Cleanup(h.stop)
 	return h
+}
+
+// start starts the reader, which polls at once; set the expectations of the first
+// poll before.
+func (h *harness) start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	h.data = h.reader.Start(ctx)
 }
 
 // advance waits until the reader blocks on n clock waiters, then moves time by d.
@@ -93,6 +99,9 @@ func (h *harness) receivePoll() []datasource.DataPoint {
 }
 
 func (h *harness) stop() {
+	if h.cancel == nil {
+		return // never started
+	}
 	h.cancel()
 	for range h.data { // drain until the reader closes the channel
 	}
@@ -172,17 +181,17 @@ func TestDirectModeReadsScaledPointsAndStaysConnected(t *testing.T) {
 		Return([]uint16{0xFF10}, nil).Twice() // -240
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	assert.Equal(t, datasource.DataPoint{
 		DeviceName: "inverter",
 		PointName:  "temp",
 		Value:      -24.0,
-		Timestamp:  start.Add(interval),
+		Timestamp:  start, // the first poll runs at once
 		Unit:       "C",
 	}, h.receive())
 
 	h.advance(1, interval)
-	assert.Equal(t, start.Add(2*interval), h.receive().Timestamp)
+	assert.Equal(t, start.Add(interval), h.receive().Timestamp)
 }
 
 func TestDirectModeSkipsFailedPoint(t *testing.T) {
@@ -198,7 +207,7 @@ func TestDirectModeSkipsFailedPoint(t *testing.T) {
 		Return([]uint16{7}, nil).Once()
 	h.client.EXPECT().Close().Return(nil).Once() // only on stop, not after the failure
 
-	h.advance(1, interval)
+	h.start()
 	dp := h.receive()
 	assert.Equal(t, "good", dp.PointName)
 	assert.InDelta(t, 7.0, dp.Value, 0)
@@ -215,7 +224,7 @@ func TestReconnectsAfterConnectionError(t *testing.T) {
 		Return(nil, io.EOF).Once()
 	closed := signal(h.client.EXPECT().Close().Return(nil).Once())
 
-	h.advance(1, interval)
+	h.start()
 	<-closed // the broken connection is dropped at once
 
 	h.dialer.EXPECT().Dial().Return(second, nil).Once()
@@ -235,7 +244,7 @@ func TestUnreachableDeviceRecovers(t *testing.T) {
 
 	refused := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
 	failed := signal(h.dialer.EXPECT().Dial().Return(nil, refused).Once())
-	h.advance(1, interval)
+	h.start()
 	<-failed
 
 	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
@@ -273,7 +282,7 @@ func TestRangeModeReadsInChunksAndDecodes(t *testing.T) {
 		Return(third, nil).Once()
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	got := map[string]any{}
 	for range 2 {
 		dp := h.receive()
@@ -296,7 +305,7 @@ func TestRangeModeFailedChunkFailsPoll(t *testing.T) {
 		Return(nil, lib.ErrRequestTimedOut).Once())
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	<-failed
 	select {
 	case points := <-h.data:
@@ -313,7 +322,7 @@ func TestStopClosesChannelsAndConnection(t *testing.T) {
 		Return([]uint16{1}, nil).Once()
 	h.client.EXPECT().Close().Return(errors.New("already closed")).Once()
 
-	h.advance(1, interval)
+	h.start()
 	h.receive()
 	h.stop()
 
@@ -340,7 +349,7 @@ func TestPollInProgressAtShutdownIsDelivered(t *testing.T) {
 		}).Once()
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	<-reading
 	h.cancel()
 	close(release)
@@ -371,7 +380,7 @@ func TestDirectModeSkipsRestAfterTimeoutsInRow(t *testing.T) {
 		Return(nil, lib.ErrRequestTimedOut).Twice()
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	<-read
 	<-read
 	// The failed poll makes the next tick wait out the backoff (ticker + backoff).
@@ -398,7 +407,7 @@ func TestDirectModeSingleTimeoutKeepsReading(t *testing.T) {
 		}).Times(3)
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	assert.ElementsMatch(t, []string{"b", "c"}, names(h.receivePoll()))
 }
 
@@ -416,7 +425,7 @@ func TestDirectModeSkipsRestAfterConnectionError(t *testing.T) {
 		Return(nil, io.EOF).Once()
 	closed := signal(h.client.EXPECT().Close().Return(nil).Once())
 
-	h.advance(1, interval)
+	h.start()
 	<-closed
 }
 
@@ -435,7 +444,7 @@ func TestRangeModeStopsAfterFailedChunk(t *testing.T) {
 		Return(nil, lib.ErrRequestTimedOut).Once()) // the mock fails on a second chunk
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	<-failed
 	h.advance(1, interval) // next tick: waits out the backoff, so the poll has ended
 	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 },
@@ -465,7 +474,7 @@ func TestPointsReadBeforeShutdownErrorAreDelivered(t *testing.T) {
 		}).Twice()
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	<-started
 	<-started
 	h.cancel()
@@ -490,9 +499,8 @@ func TestNameAndStopBeforeFirstPoll(t *testing.T) {
 	assert.Equal(t, "inverter", r.Name())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	data := r.Start(ctx)
-	cancel()
-	_, open := <-data
+	cancel() // before Start: the first poll would otherwise run at once
+	_, open := <-r.Start(ctx)
 	assert.False(t, open)
 }
 
@@ -508,7 +516,7 @@ func TestDirectModeAllPointsFailedBacksOff(t *testing.T) {
 	// A timeout keeps the connection: Close only on stop.
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	h.advance(1, interval)                                               // the next tick waits out the backoff: the poll failed
 	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 }, // ticker + backoff
 		time.Second, time.Millisecond)
@@ -529,7 +537,7 @@ func TestRangeModeSkipsPointThatCannotBeDecoded(t *testing.T) {
 		Return([]uint16{1, 2}, nil).Once()
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	assert.Equal(t, []string{"ok"}, names(h.receivePoll()))
 }
 
@@ -546,7 +554,7 @@ func TestShutdownDuringFailingReadIsNotAnError(t *testing.T) {
 		}).Once()
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	h.start()
 	<-reading
 	h.cancel()
 	close(release)
