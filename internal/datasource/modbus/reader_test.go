@@ -321,6 +321,8 @@ func TestStopClosesChannelsAndConnection(t *testing.T) {
 	assert.False(t, open, "data channel is closed")
 }
 
+// A read in flight at shutdown finishes and its point is delivered; reads not started
+// yet are skipped, so a slow device does not hold the shutdown for every point.
 func TestPollInProgressAtShutdownIsDelivered(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, settings(
@@ -329,14 +331,13 @@ func TestPollInProgressAtShutdownIsDelivered(t *testing.T) {
 	))
 	reading, release := make(chan struct{}), make(chan struct{})
 	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
-	h.client.EXPECT().ReadRegisters(uint16(1), uint16(1), lib.HOLDING_REGISTER).
-		RunAndReturn(func(uint16, uint16, lib.RegType) ([]uint16, error) {
+	// Parallelism 1: the first read blocks, the other one waits for it and is skipped.
+	h.client.EXPECT().ReadRegisters(mock.Anything, uint16(1), lib.HOLDING_REGISTER).
+		RunAndReturn(func(register, _ uint16, _ lib.RegType) ([]uint16, error) {
 			close(reading)
 			<-release // the read finishes only after shutdown started
-			return []uint16{1}, nil
+			return []uint16{register}, nil
 		}).Once()
-	h.client.EXPECT().ReadRegisters(uint16(2), uint16(1), lib.HOLDING_REGISTER).
-		Return([]uint16{2}, nil).Once()
 	h.client.EXPECT().Close().Return(nil).Once()
 
 	h.advance(1, interval)
@@ -346,14 +347,135 @@ func TestPollInProgressAtShutdownIsDelivered(t *testing.T) {
 
 	var got [][]string
 	for points := range h.data {
-		var names []string
-		for _, dp := range points {
-			names = append(names, dp.PointName)
-		}
-		got = append(got, names)
+		got = append(got, names(points))
 	}
 	require.Len(t, got, 1, "the running poll arrives as one batch")
-	assert.ElementsMatch(t, []string{"a", "b"}, got[0], "both points of the running poll arrive")
+	assert.Len(t, got[0], 1, "the point in flight arrives, the other read is skipped")
+}
+
+// Regression: a device that stopped answering held every poll for points × timeout,
+// longer than the shutdown deadline; after two timeouts in a row the rest is skipped.
+func TestDirectModeSkipsRestAfterTimeoutsInRow(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(
+		modbus.Point{Name: "a", Register: 1, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "b", Register: 2, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "c", Register: 3, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "d", Register: 4, Type: "uint16", Scale: 1},
+	))
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	read := make(chan struct{}, 2)
+	// Two reads only: the mock fails the test on a third.
+	h.client.EXPECT().ReadRegisters(mock.Anything, uint16(1), lib.HOLDING_REGISTER).
+		Run(func(uint16, uint16, lib.RegType) { read <- struct{}{} }).
+		Return(nil, lib.ErrRequestTimedOut).Twice()
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	<-read
+	<-read
+	// The failed poll makes the next tick wait out the backoff (ticker + backoff).
+	h.advance(1, interval)
+	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 },
+		time.Second, time.Millisecond)
+}
+
+// One timeout (a register the device ignores) does not cost the other points.
+func TestDirectModeSingleTimeoutKeepsReading(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(
+		modbus.Point{Name: "ignored", Register: 1, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "b", Register: 2, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "c", Register: 3, Type: "uint16", Scale: 1},
+	))
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(mock.Anything, uint16(1), lib.HOLDING_REGISTER).
+		RunAndReturn(func(register, _ uint16, _ lib.RegType) ([]uint16, error) {
+			if register == 1 {
+				return nil, lib.ErrRequestTimedOut
+			}
+			return []uint16{register}, nil
+		}).Times(3)
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	assert.ElementsMatch(t, []string{"b", "c"}, names(h.receivePoll()))
+}
+
+// Regression: after a connection error every further read of the poll failed the same
+// way; they are skipped now and the next poll reconnects.
+func TestDirectModeSkipsRestAfterConnectionError(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(
+		modbus.Point{Name: "a", Register: 1, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "b", Register: 2, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "c", Register: 3, Type: "uint16", Scale: 1},
+	))
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(mock.Anything, uint16(1), lib.HOLDING_REGISTER).
+		Return(nil, io.EOF).Once()
+	closed := signal(h.client.EXPECT().Close().Return(nil).Once())
+
+	h.advance(1, interval)
+	<-closed
+}
+
+// Regression: a failed chunk fails the whole range poll, but the other ranges were
+// still read; they are skipped now.
+func TestRangeModeStopsAfterFailedChunk(t *testing.T) {
+	t.Parallel()
+	s := settings(
+		modbus.Point{Name: "a", Register: 0, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "b", Register: 200, Type: "uint16", Scale: 1},
+	)
+	s.RangeMode, s.Ranges = true, []string{"0-9", "200-209"}
+	h := newHarness(t, s)
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	failed := signal(h.client.EXPECT().ReadRegisters(mock.Anything, uint16(10), lib.HOLDING_REGISTER).
+		Return(nil, lib.ErrRequestTimedOut).Once()) // the mock fails on a second chunk
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	<-failed
+	h.advance(1, interval) // next tick: waits out the backoff, so the poll has ended
+	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 },
+		time.Second, time.Millisecond)
+}
+
+// Regression: a direct-mode poll that returned points with a connection error during
+// shutdown dropped them, although they had been read.
+func TestPointsReadBeforeShutdownErrorAreDelivered(t *testing.T) {
+	t.Parallel()
+	s := settings(
+		modbus.Point{Name: "a", Register: 1, Type: "uint16", Scale: 1},
+		modbus.Point{Name: "b", Register: 2, Type: "uint16", Scale: 1},
+	)
+	s.Parallelism = 2
+	h := newHarness(t, s)
+	started, release := make(chan struct{}, 2), make(chan struct{})
+	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+	h.client.EXPECT().ReadRegisters(mock.Anything, uint16(1), lib.HOLDING_REGISTER).
+		RunAndReturn(func(register, _ uint16, _ lib.RegType) ([]uint16, error) {
+			started <- struct{}{}
+			<-release
+			if register == 2 {
+				return nil, io.EOF
+			}
+			return []uint16{1}, nil
+		}).Twice()
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(1, interval)
+	<-started
+	<-started
+	h.cancel()
+	close(release)
+
+	var got []string
+	for points := range h.data {
+		got = append(got, names(points)...)
+	}
+	assert.Equal(t, []string{"a"}, got)
 }
 
 func TestNameAndStopBeforeFirstPoll(t *testing.T) {

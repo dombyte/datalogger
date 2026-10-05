@@ -180,8 +180,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
 ### Shutdown (producers first)
 1. SIGINT/SIGTERM cancels the signal context (`signal.NotifyContext`); `Run` returns.
 2. `Shutdown` cancels the readers: no new poll starts and a backoff wait ends at once.
-   A poll that is already running finishes and its points are still delivered (an HTTP
-   request in flight is aborted, so it has no data yet). Each reader then closes its
+   A Modbus read that is in flight finishes and starts no further read of its poll;
+   the points read so far are still delivered (range mode: only a complete poll is; an
+   HTTP request in flight is aborted, so it has no data yet). Each reader then closes its
    data channel and the routers finish.
 3. `app` closes the output input channels; each writer writes what is queued, flushes
    (CSV flush/close, InfluxDB final batch, MQTT disconnect, API server shutdown) and
@@ -205,11 +206,14 @@ writer that failed, or a missed deadline.
   is rejected by validation; use two devices.
 - **Direct mode:** one read per point (`register`, `count`, default 1). Points are read with
   up to `parallelism` concurrent requests. A failed point is logged and skipped; the rest
-  of the poll is still delivered.
+  of the poll is still delivered. Reads not started yet are skipped after a connection
+  error and after two timeouts in a row (the device does not answer; one timeout may be a
+  register it ignores), so a silent device does not hold a poll for points × timeout.
 - **Range mode:** the `ranges` (`"start-end"`, inclusive) are read in chunks of at most
   **125 registers** (Modbus protocol limit), then points are decoded from the collected
   registers. Every point address must be covered by a range (checked at construction).
-  **Any failed chunk fails the whole poll** (no partial data).
+  **Any failed chunk fails the whole poll** (no partial data); no further chunk is read
+  after it.
 - Each point's timestamp is the receive time of its data (direct: its own read; range: the
   chunk that holds its first register).
 - Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool` (others are rejected by
