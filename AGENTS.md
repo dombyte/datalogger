@@ -514,8 +514,4 @@ The required CI checks MUST be green before a PR is merged.
 
 Known gaps to the rules above, one branch each; update this list when an item is done.
 
-- `.github/dependabot.yml` still exists next to `renovate.json` (section 10: Renovate
-  only). Remove it (`ci/…`).
-- `renovate.json` has no `customManagers` for the pinned `go run` tools (mockery,
-  deadcode, govulncheck) in the workflows, the pre-commit script and this file
-  (section 10).
+None. Add new gaps here as they are found.
