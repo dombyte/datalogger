@@ -109,6 +109,7 @@ func (w *Writer) handlePoint(dp datasource.DataPoint) {
 	if err := w.write(dp); err != nil {
 		log.Error().Err(err).Msg("Failed to write CSV row")
 		w.failed = true
+		w.reopen()
 		return
 	}
 	if w.failed {
@@ -137,6 +138,19 @@ func (w *Writer) open() error {
 		return w.writeRow([]string{"timestamp", "device", "point", "value", "unit"})
 	}
 	return nil
+}
+
+// reopen replaces the file and its CSV writer after a failed write: the buffered writer
+// keeps its first error, so without a new one every later row would fail too. If the
+// file cannot be opened, the next point tries again.
+func (w *Writer) reopen() {
+	// The write error is already logged and the file may be closed (failed rotation).
+	if err := w.file.Close(); err != nil {
+		w.logger.Debug().Err(err).Msg("Closing CSV file after a failed write")
+	}
+	if err := w.open(); err != nil {
+		w.logger.Error().Err(err).Msg("Failed to reopen CSV file")
+	}
 }
 
 // close flushes and closes the current file.
