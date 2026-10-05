@@ -187,6 +187,82 @@ func TestNameAndStopOnCancelWithoutSession(t *testing.T) {
 	assert.False(t, open, "the writer stops when ctx is cancelled")
 }
 
+// Regression: NaN and ±Inf (float32 registers) made json.Marshal fail, so the point
+// was lost with an error on every poll; they are published as null like in the API.
+func TestPublishesNaNAsNull(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	p, _ := session(t)
+	h.dialer.EXPECT().Dial(mock.Anything).Return(p, nil).Once()
+	pubs := published(p, nil)
+	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
+
+	h.input <- datasource.DataPoint{
+		DeviceName: "meter", PointName: "nan", Value: math.NaN(), Timestamp: start,
+	}
+	h.input <- datasource.DataPoint{
+		DeviceName: "meter", PointName: "inf", Value: math.Inf(1), Timestamp: start,
+	}
+	h.stop()
+
+	for _, topic := range []string{"logger/meter/nan", "logger/meter/inf"} {
+		pub := <-pubs
+		assert.Equal(t, topic, pub.Topic)
+		assert.JSONEq(t, `{"value":null,"unit":"","timestamp":"2026-09-29T12:00:00Z"}`,
+			string(pub.Payload))
+	}
+}
+
+// Regression: a PUBACK with an error reason code (e.g. the ACL denies the topic) closed
+// the session, so every further point of that topic dialed a new connection.
+func TestRejectedPublishKeepsSession(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	p, _ := session(t)
+	h.dialer.EXPECT().Dial(mock.Anything).Return(p, nil).Once()
+	pubs := make(chan *paho.Publish, 10)
+	p.EXPECT().Publish(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+			pubs <- pub
+			if pub.Topic == "logger/meter/denied" {
+				return &paho.PublishResponse{ReasonCode: 0x87}, errors.New("not authorized")
+			}
+			return &paho.PublishResponse{}, nil
+		})
+	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
+
+	h.send("denied")
+	h.send("denied")
+	h.send("power")
+	h.stop()
+	close(pubs)
+
+	assert.Len(t, pubs, 3, "all published on the one session")
+}
+
+// Regression: a broker that closes the connection on every publish was redialed for
+// every point; repeated publish failures now back off like failed dials.
+func TestRepeatedPublishErrorsBackOff(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	dials := 0
+	h.dialer.EXPECT().Dial(mock.Anything).RunAndReturn(func(context.Context) (mqtt.Publisher, error) {
+		dials++
+		p, _ := session(t)
+		published(p, errors.New("broken pipe"))
+		p.EXPECT().Disconnect(mock.Anything).Return(nil).Maybe()
+		return p, nil
+	})
+
+	h.send("a") // publish fails: first redial is immediate
+	h.send("b") // redialed, fails again: next dial in 1 s
+	for range 5 {
+		h.send("c") // within the backoff: dropped without dialing
+	}
+	h.stop()
+	assert.Equal(t, 2, dials)
+}
+
 func TestSkipsPointThatCannotBeEncoded(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -195,10 +271,10 @@ func TestSkipsPointThatCannotBeEncoded(t *testing.T) {
 	pubs := published(p, nil)
 	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
 
-	h.input <- datasource.DataPoint{DeviceName: "meter", PointName: "nan", Value: math.NaN()}
+	h.input <- datasource.DataPoint{DeviceName: "meter", PointName: "c", Value: complex(1, 2)}
 	h.send("power")
 	h.stop()
 
-	assert.Equal(t, "logger/meter/power", (<-pubs).Topic, "NaN is skipped, the session stays")
+	assert.Equal(t, "logger/meter/power", (<-pubs).Topic, "skipped, the session stays")
 	assert.Empty(t, pubs)
 }

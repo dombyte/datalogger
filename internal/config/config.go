@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 )
 
@@ -23,7 +24,8 @@ type Device struct {
 	Type         string        `mapstructure:"type"` // "modbus" or "http"
 	PollInterval time.Duration `mapstructure:"poll_interval"`
 	Timeout      time.Duration `mapstructure:"timeout"`
-	// Parallelism (1-100) limits the concurrent reads within one device poll.
+	// Parallelism (1-100) is the number of goroutines reading one Modbus poll; the
+	// requests share one connection and are sent one at a time.
 	Parallelism    int            `mapstructure:"parallelism"`
 	DeviceSpecific DeviceSpecific `mapstructure:"device_specific"`
 	Points         []Point        `mapstructure:"points"`
@@ -145,7 +147,11 @@ func Load(path string) (*Config, error) {
 	}
 
 	var config Config
-	if err := v.Unmarshal(&config); err != nil {
+	// Unknown keys are an error: a typo such as max_backup would otherwise silently
+	// fall back to a default (for max_backups: delete every rotated file).
+	if err := v.Unmarshal(&config, func(dc *mapstructure.DecoderConfig) {
+		dc.ErrorUnused = true
+	}); err != nil {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 

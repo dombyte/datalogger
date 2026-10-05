@@ -34,6 +34,7 @@ type harness struct {
 	data  <-chan []datasource.DataPoint
 	// pending holds the rest of the last received poll; receive returns it point by point.
 	pending []datasource.DataPoint
+	reader  datasource.DeviceReader
 	cancel  context.CancelFunc
 }
 
@@ -49,15 +50,23 @@ func newHarness(t *testing.T, s http.Settings, client http.Client) *harness {
 	h := &harness{t: t, clock: clocktest.NewFake(start)}
 	r, err := http.New(http.Deps{Settings: s, Client: client, Clock: h.clock, Log: zerolog.Nop()})
 	require.NoError(t, err)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	h.cancel = cancel
-	h.data = r.Start(ctx)
+	h.reader = r
 	t.Cleanup(h.stop)
 	return h
 }
 
+// start starts the reader, which polls at once; set the expectations of the first
+// poll before.
+func (h *harness) start() {
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
+	h.data = h.reader.Start(ctx)
+}
+
 func (h *harness) stop() {
+	if h.cancel == nil {
+		return // never started
+	}
 	h.cancel()
 	for range h.data { // drain until the reader closes the channel
 	}
@@ -154,10 +163,10 @@ func TestPollsJSONWithHeadersAndBody(t *testing.T) {
 	s.Headers = map[string]string{"Authorization": "Bearer x"}
 	h := newHarness(t, s, http.NewClient(time.Second, false))
 
-	h.advance(1, interval)
+	h.start()
 	assert.Equal(t, datasource.DataPoint{
 		DeviceName: "meter", PointName: "power", Value: 1.5,
-		Timestamp: start.Add(interval), Unit: "kW",
+		Timestamp: start, Unit: "kW", // the first poll runs at once
 	}, h.receive())
 	h.expectNothing()
 }
@@ -171,7 +180,7 @@ func TestTextResponse(t *testing.T) {
 	s.ResponseType = "text"
 	h := newHarness(t, s, http.NewClient(time.Second, false))
 
-	h.advance(1, interval)
+	h.start()
 	assert.Equal(t, "OK 42", h.receive().Value)
 }
 
@@ -190,7 +199,7 @@ func TestStatusErrorBacksOffAndRecovers(t *testing.T) {
 	h := newHarness(t, settings(srv.URL, http.Point{Name: "v", JSONPath: "v", Scale: 1}),
 		http.NewClient(time.Second, false))
 
-	h.advance(1, interval)
+	h.start()
 	assert.Equal(t, nethttp.StatusInternalServerError, <-calls)
 	h.expectNothing()
 
@@ -209,7 +218,7 @@ func TestTransportErrorClosesIdleConnections(t *testing.T) {
 
 	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
 		client)
-	h.advance(1, interval)
+	h.start()
 	<-closed
 	h.stop()
 }
@@ -230,7 +239,7 @@ func TestStatusErrorKeepsConnections(t *testing.T) {
 
 	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
 		client)
-	h.advance(1, interval)
+	h.start()
 	<-done
 	h.stop()
 }
@@ -238,9 +247,10 @@ func TestStatusErrorKeepsConnections(t *testing.T) {
 func TestStopClosesChannels(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
-		mocks.NewMockClient(t))
-	h.stop()
-	_, open := <-h.data
+		mocks.NewMockClient(t)) // no request: the context ends before the first poll
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, open := <-h.reader.Start(ctx)
 	assert.False(t, open)
 }
 
@@ -266,7 +276,7 @@ func TestTruncatedBodyClosesIdleConnections(t *testing.T) {
 
 	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
 		client)
-	h.advance(1, interval)
+	h.start()
 	<-closed
 	h.stop()
 }
@@ -281,7 +291,7 @@ func TestShutdownEndsBackoffWait(t *testing.T) {
 
 	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
 		client)
-	h.advance(1, interval)                                               // fails: backoff
+	h.start()                                                            // fails: backoff
 	h.advance(1, interval)                                               // next tick waits out the backoff
 	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 }, // ticker + backoff
 		time.Second, time.Millisecond)
@@ -302,7 +312,7 @@ func TestShutdownAbortsRequestInFlight(t *testing.T) {
 
 	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
 		client)
-	h.advance(1, interval)
+	h.start()
 	<-inFlight
 	h.stop()
 }

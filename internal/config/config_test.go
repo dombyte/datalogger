@@ -880,6 +880,23 @@ func TestValidatePoints(t *testing.T) {
 			),
 			wantErr: "points[2] c: function_code 4 mixed with 3",
 		},
+		// Regression: register + count past 65535 wrapped around to register 0, and a
+		// count above the protocol limit failed every poll instead of startup.
+		{
+			name:   "modbus last register",
+			device: modbus(Point{Name: "p", Type: "float32", Register: 65534, Count: 2}),
+		},
+		{
+			name:    "modbus past the last register",
+			device:  modbus(Point{Name: "p", Type: "float32", Register: 65535, Count: 2}),
+			wantErr: "registers 65535-65536 exceed the last register 65535",
+		},
+		{name: "modbus count 125", device: modbus(Point{Name: "p", Type: "uint16", Count: 125})},
+		{
+			name:    "modbus count above 125",
+			device:  modbus(Point{Name: "p", Type: "uint16", Count: 126}),
+			wantErr: "count must be at most 125",
+		},
 		{name: "http json with path", device: http("json", Point{Name: "p", JSONPath: "a.b"})},
 		{name: "http text without path", device: http("text", Point{Name: "p"})},
 		{
@@ -1025,6 +1042,68 @@ func TestValidateNamesAndExcludePoints(t *testing.T) {
 	}
 }
 
+// toMQTT turns the output of namesConfig into an MQTT output.
+func toMQTT(c *Config) {
+	c.Outputs[0].Type = "mqtt"
+	c.Outputs[0].OutputSpecific = OutputSpecific{Mqtt: MqttConfig{
+		Address: "tcp://localhost:1883", Topic: "logger",
+	}}
+}
+
+// Regression: + and # are wildcards, not allowed in a published topic; the broker
+// closed the connection and the writer reconnected for every such point.
+func TestValidateMQTTTopicNames(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		change  func(*Config)
+		wantErr string
+	}{
+		{name: "valid", change: toMQTT},
+		{
+			name:   "wildcards are fine for other outputs",
+			change: func(c *Config) { c.Devices[0].Name, c.Outputs[0].Devices = "m+1", []string{"m+1"} },
+		},
+		{
+			name: "excluded point is never published",
+			change: func(c *Config) {
+				toMQTT(c)
+				c.Devices[0].Points[1].Name = "l1+l2"
+				c.Outputs[0].ExcludePoints = []string{"meter/l1+l2"}
+			},
+		},
+		{
+			name: "device name",
+			change: func(c *Config) {
+				toMQTT(c)
+				c.Devices[0].Name, c.Outputs[0].Devices = "m#1", []string{"m#1"}
+			},
+			wantErr: `device name "m#1" must not contain + or # for MQTT`,
+		},
+		{
+			name:    "point name",
+			change:  func(c *Config) { toMQTT(c); c.Devices[0].Points[1].Name = "l1+l2" },
+			wantErr: "point meter/l1+l2 must not contain + or # for MQTT",
+		},
+		{
+			name:    "topic prefix",
+			change:  func(c *Config) { toMQTT(c); c.Outputs[0].OutputSpecific.Mqtt.Topic = "home/#" },
+			wantErr: `topic "home/#" must not contain + or #`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := namesConfig(tt.change).Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 // TestLoadExprAndLookups checks that expressions, hex lookup codes and exclude_points
 // are read from YAML.
 func TestLoadExprAndLookups(t *testing.T) {
@@ -1081,6 +1160,13 @@ func TestValidateErrors(t *testing.T) {
 			wantErr: "duplicate device name: meter",
 		},
 		{
+			// Regression: app keys output channels by name, so the first output got no
+			// data and the second every point twice.
+			name:    "duplicate output",
+			change:  func(c *Config) { c.Outputs = append(c.Outputs, c.Outputs[0]) },
+			wantErr: "duplicate output name: out",
+		},
+		{
 			name:    "invalid output",
 			change:  func(c *Config) { c.Outputs[0].Type = "kafka" },
 			wantErr: "output out: unknown output type: kafka",
@@ -1118,7 +1204,16 @@ func TestValidateErrors(t *testing.T) {
 func TestLoadErrors(t *testing.T) {
 	t.Parallel()
 	for name, tt := range map[string]struct{ content, wantErr string }{
-		"decode":   {content: "devices:\n  - poll_interval: soon\n", wantErr: "config: parse"},
+		"decode": {content: "devices:\n  - poll_interval: soon\n", wantErr: "config: parse"},
+		// Regression: unknown keys were ignored, so a typo fell back to the default.
+		"unknown key": {
+			content: "devices:\n  - name: m\n    poll_intervall: 1s\n",
+			wantErr: "poll_intervall",
+		},
+		"unknown nested key": {
+			content: "outputs:\n  - output_specific:\n      csv:\n        max_backup: 7\n",
+			wantErr: "max_backup",
+		},
 		"validate": {content: "outputs: []\n", wantErr: "at least one device required"},
 	} {
 		t.Run(name, func(t *testing.T) {

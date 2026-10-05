@@ -139,8 +139,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   its only user), then sends each point to every output whose `devices` list contains the
   device and whose `exclude_points` does not list the point.
   The send is **non-blocking**: if an output channel is full, the point is **dropped for
-  that output only** and a warning is logged. A slow output never blocks a device or the
-  other outputs.
+  that output only**; a warning is logged when an output channel becomes full, and the
+  count of dropped points when it takes points again (per device). A slow output never
+  blocks a device or the other outputs.
 - **`app` owns** the output input channels and closes them during shutdown, after all
   routers have finished.
 - **Writers own** their external resource (file, broker connection, InfluxDB client) and
@@ -161,7 +162,8 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    does not compile or names an unknown point or lookup, an API port that cannot be
    bound) ends the process with exit 1. **Connecting is not construction:** readers connect on their first poll, so a
    device that is down at startup does not stop the others and recovers on its own.
-3. `app.Run` starts the writers, then the readers with one router each.
+3. `app.Run` starts the writers, then the readers with one router each. Each reader
+   polls at once, then every `poll_interval`.
 
 ### Failure handling
 - Poll errors are handled inside the reader: exponential backoff (100 ms doubling, max
@@ -180,8 +182,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
 ### Shutdown (producers first)
 1. SIGINT/SIGTERM cancels the signal context (`signal.NotifyContext`); `Run` returns.
 2. `Shutdown` cancels the readers: no new poll starts and a backoff wait ends at once.
-   A poll that is already running finishes and its points are still delivered (an HTTP
-   request in flight is aborted, so it has no data yet). Each reader then closes its
+   A Modbus read that is in flight finishes and starts no further read of its poll;
+   the points read so far are still delivered (range mode: only a complete poll is; an
+   HTTP request in flight is aborted, so it has no data yet). Each reader then closes its
    data channel and the routers finish.
 3. `app` closes the output input channels; each writer writes what is queued, flushes
    (CSV flush/close, InfluxDB final batch, MQTT disconnect, API server shutdown) and
@@ -204,35 +207,44 @@ writer that failed, or a missed deadline.
   `function_code` 3 (holding) or 4 (input); default holding. Mixing 3 and 4 in one device
   is rejected by validation; use two devices.
 - **Direct mode:** one read per point (`register`, `count`, default 1). Points are read with
-  up to `parallelism` concurrent requests. A failed point is logged and skipped; the rest
-  of the poll is still delivered.
+  up to `parallelism` goroutines. A failed point is logged and skipped; the rest
+  of the poll is still delivered. Reads not started yet are skipped after a connection
+  error and after two timeouts in a row (the device does not answer; one timeout may be a
+  register it ignores), so a silent device does not hold a poll for points × timeout.
 - **Range mode:** the `ranges` (`"start-end"`, inclusive) are read in chunks of at most
   **125 registers** (Modbus protocol limit), then points are decoded from the collected
   registers. Every point address must be covered by a range (checked at construction).
-  **Any failed chunk fails the whole poll** (no partial data).
+  **Any failed chunk fails the whole poll** (no partial data); no further chunk is read
+  after it.
 - Each point's timestamp is the receive time of its data (direct: its own read; range: the
   chunk that holds its first register).
 - Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool` (others are rejected by
   validation); value = raw × `scale` + `offset`, always delivered as float64. `scale`
   defaults to 1 (an explicit 0 is treated as unset). 32-bit types need `count: 2` (high
-  word first); a smaller count is rejected by validation.
-- Most Modbus devices handle only one request at a time: use `parallelism: 1` unless the
-  device is known to support more.
+  word first); a smaller count is rejected by validation, as is a `count` above 125 or
+  registers past 65535.
+- `parallelism` does not make Modbus requests concurrent: they share the device's one
+  connection, on which the client library sends one request at a time, so `1` is the
+  right value.
 
 ### HTTP reader
 - `method` GET (default) or POST with `body`; `headers` are sent as given; `insecure`
   disables certificate verification for this device.
 - `response_type`: `json` (default; values via gjson `json_path`; `type` float*/int*/uint*/
-  bool/string converts, otherwise numbers become float64 and bools stay bool) or `text`
-  (the whole body as one string); anything else is rejected by validation. JSON points
-  need a `json_path`.
+  bool/string converts, numbers sent as strings included; otherwise numbers become
+  float64 and bools and strings stay) or `text` (the whole body as one string); anything
+  else is rejected by validation. JSON points need a `json_path`.
 - `scale`/`offset` apply to numeric JSON values: value × scale + offset as float64. With
   the defaults (1, 0) the value keeps its parsed type, so existing InfluxDB field types do
   not change; bools and strings are never scaled.
-- Non-200 responses are errors. All points of one response share its receive timestamp.
-- A point that cannot be extracted (e.g. its `json_path` is not in the response) is
-  skipped; it is warned about once, further failures are logged at debug, and an info
-  line follows when it can be read again.
+- Non-200 responses are errors (up to 64 KiB of their body is read so the connection
+  is reused); a body above 10 MiB is an error. All points of one response share its
+  receive timestamp.
+- A point that cannot be extracted is skipped: its `json_path` is not in the response,
+  the value is `null`, an object or array without `type: string`, or does not fit its
+  `type` (`"N/A"` for `int64`, a negative number for `uint*`); gjson would deliver 0 or
+  false, which looks like a reading. Such a point is warned about once, further failures
+  are logged at debug, and an info line follows when it can be read again.
 - `parallelism` has no effect: one request per poll, points are parsed in order.
 - A request that cannot be built (bad URL, method) fails startup; an unreachable endpoint
   does not.
@@ -243,9 +255,14 @@ writer that failed, or a missed deadline.
   schema; changing it is a breaking change (`!`).
 - Batching: a full `batch_size` (default 10000) is written at once, a partial batch every
   `batch_timeout` (default 1 s). Retries: `max_retries` (default 3) with `retry_delay`
-  (default 1 s); after that the batch is dropped and logged. The last batch is written
-  when the input is closed on shutdown. The client does not connect at startup.
-- Uses the v3 write API; gzip above 1000 bytes; `insecure` skips certificate checks.
+  (default 1 s), only for network errors, 5xx and 429; after that, or at once for other
+  HTTP errors (bad token, unknown database, rejected lines), the batch is dropped and
+  logged. The last batch is written when the input is closed on shutdown. The client
+  does not connect at startup.
+- A value line protocol cannot store (anything but float64, int64, uint64, bool,
+  string) is skipped with a warning, so it cannot fail the batch of every device.
+- Uses the v3 write API; gzip above 1000 bytes; 10 s timeout per write request (also
+  with `insecure`, which skips certificate checks).
 
 ### MQTT writer
 - Broker `address` `tcp://`/`mqtt://` or `tls://`/`ssl://`/`mqtts://` (no scheme = tcp;
@@ -253,18 +270,24 @@ writer that failed, or a missed deadline.
   name; `insecure` uses TLS without verification (also for `tcp://`). MQTT v5, keep-alive
   30 s, clean start, 10 s connect timeout.
 - Connects on the first point and reconnects after a publish error or a lost connection,
-  with backoff (1 s doubling to 30 s). Points that arrive while no connection is possible
-  are **dropped**; the count is logged on the next successful connect.
+  with backoff (1 s doubling to 30 s; the first redial after a publish error is
+  immediate, the backoff is reset by the next successful publish). A message the broker
+  rejects with an error reason code (e.g. ACL) is logged and the session kept. Points
+  that arrive while no connection is possible are **dropped**; the count is logged on
+  the next successful connect.
 - Topic: `<topic>/<device>/<point>` (`topic` default `datalogger`); payload
-  `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}`; `qos` 0–2, `retain`.
+  `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}` (NaN/±Inf values are
+  `null`, as in the API); `qos` 0–2, `retain`.
 - `client_id` defaults to `logger-<8 random chars>`; username/password are optional.
 - Topic and payload format are a public interface; changing them is a breaking change (`!`).
 
 ### CSV writer
 - Columns: `timestamp` (RFC3339Nano), `device`, `point`, `value`, `unit`; header written
   when the file is empty. Every point is flushed immediately.
-- Rotation: when the file is older than `max_age` (checked after each row), it is renamed
-  to `<file>.<YYYYMMDD-HHMMSS>` and a new file is started. `max_backups`: 0 = keep none,
+- Rotation: when the file is older than `max_age` (checked after each row; the age of an
+  existing file counts from the timestamp of its first row, so restarts do not reset it),
+  it is renamed to `<file>.<YYYYMMDD-HHMMSS>` (one second later if that backup exists)
+  and a new file is started. `max_backups`: 0 = keep none,
   > 0 = keep that many, < 0 = keep all; only files with exactly that name pattern are
   ever deleted.
 - A path that cannot be opened fails startup.
@@ -310,10 +333,11 @@ writer that failed, or a missed deadline.
 - At least one device and one output are required; device and output names must be
   unique; outputs may only reference existing devices; `exclude_points` entries must be
   `device/point` with a device of that output and an existing point; API `listen` must be
-  `host:port`;
-  every device needs at least one point; point names are unique per device; device and
-  point names must not contain `/`; `parallelism` 1–100; `poll_interval` > 0;
-  `timeout` > 0.
+  `host:port`; every device needs at least one point; point names are unique per
+  device; device and point names must not contain `/`; the `topic`, devices and
+  non-excluded points of an MQTT output must not contain `+` or `#` (wildcards: a broker
+  closes the connection); `parallelism` 1–100; `poll_interval` > 0; `timeout` > 0.
+- Unknown keys are an error (a typo would otherwise fall back to a default silently).
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
   poll interval, at most 10 s; point `scale` 1; HTTP method GET and response type json;
   MQTT topic `datalogger` and client ID `logger-<random>`) and then
@@ -589,8 +613,8 @@ The required CI checks MUST be green before a PR is merged.
 
 Known gaps to the rules above, one branch each; update this list when an item is done.
 
-- **Coverage below 100 %:** `datasource/http` 99.2 %, `datasource/modbus` 98.3 %,
-  `output/mqtt` 99.0 %, `output/csv` 95.6 %, `output/api` 97.8 %. The open blocks are
+- **Coverage below 100 %:** `datasource/http` 99.4 %, `datasource/modbus` 98.4 %,
+  `output/mqtt` 99.1 %, `output/csv` 96.2 %, `output/api` 97.7 %. The open blocks are
   defensive branches that tests cannot reach: errors already ruled out at construction
   (HTTP request build, Modbus client creation and range coverage), a library call that
   never fails (`SetUnitId`), the TLS server name fallback for an address without port

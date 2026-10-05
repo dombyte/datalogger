@@ -1,6 +1,7 @@
 package datasource
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -223,6 +224,25 @@ func TestDataPointWithDifferentTypes(t *testing.T) {
 			// For comparable types only
 			if dp.Value != tt.value {
 				t.Errorf("Value = %v, want %v", dp.Value, tt.value)
+			}
+		})
+	}
+}
+
+func TestJSONValue(t *testing.T) {
+	t.Parallel()
+	for name, tt := range map[string]struct{ value, want any }{
+		"float":  {value: 1.5, want: 1.5},
+		"NaN":    {value: math.NaN(), want: nil},
+		"+Inf":   {value: math.Inf(1), want: nil},
+		"-Inf":   {value: math.Inf(-1), want: nil},
+		"string": {value: "on", want: "on"},
+		"nil":    {value: nil, want: nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := (DataPoint{Value: tt.value}).JSONValue(); got != tt.want {
+				t.Errorf("JSONValue() = %v, want %v", got, tt.want)
 			}
 		})
 	}

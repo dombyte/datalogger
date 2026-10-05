@@ -5,6 +5,7 @@ A flexible data logging tool for collecting metrics from various sources (Modbus
 ## Configuration
 
 Configuration is done via YAML file (passed with `-config` flag). See [example/config.yaml](example/config.yaml) for a complete reference.
+Unknown keys (for example a misspelled option) stop the program at startup.
 
 **Input types:**
 - **Modbus:** TCP/RTU with range or direct register access

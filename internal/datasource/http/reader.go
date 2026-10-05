@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -18,11 +19,18 @@ import (
 	"github.com/dombyte/datalogger/internal/datasource"
 )
 
-// Backoff after failed polls: starts at initialBackoff and doubles up to maxBackoff.
 const (
+	// Backoff after failed polls: starts at initialBackoff and doubles up to maxBackoff.
 	initialBackoff = 100 * time.Millisecond
 	maxBackoff     = 30 * time.Second
 	backoffFactor  = 2
+
+	// maxBodySize bounds the response body; device APIs answer with a few KiB.
+	maxBodySize = 10 << 20
+
+	// maxDrainSize is how much of an error response is read so the connection can be
+	// reused; a longer body is not worth it.
+	maxDrainSize = 64 << 10
 )
 
 var (
@@ -119,13 +127,18 @@ func (r *Reader) Start(ctx context.Context) <-chan []datasource.DataPoint {
 	return dataCh
 }
 
-// pollLoop polls on every tick until ctx is cancelled.
+// pollLoop polls at once and on every tick until ctx is cancelled.
 func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
 	defer close(dataCh)
 
 	ticker := r.clock.NewTicker(r.settings.PollInterval)
 	defer ticker.Stop()
 
+	// The first poll runs at once: with a long poll interval the first data would
+	// otherwise arrive one interval after the start.
+	if ctx.Err() == nil {
+		r.pollOnce(ctx, dataCh)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -177,17 +190,24 @@ func (r *Reader) poll(ctx context.Context) ([]datasource.DataPoint, error) {
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, redactURLError(err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		// Reading the rest lets the transport reuse the connection; if that fails it
+		// opens a new one, so there is nothing to handle.
+		rest := io.LimitReader(resp.Body, maxDrainSize)
+		_, _ = io.Copy(io.Discard, rest) //nolint:errcheck // only lets the connection be reused
 		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if len(body) > maxBodySize {
+		return nil, fmt.Errorf("response larger than %d bytes", maxBodySize)
 	}
 
 	return r.parsePoints(body, r.clock.Now().UTC()), nil
@@ -204,7 +224,7 @@ func (r *Reader) newRequest(ctx context.Context) (*http.Request, error) {
 
 	req, err := http.NewRequestWithContext(ctx, method, r.settings.Address, body)
 	if err != nil {
-		return nil, err
+		return nil, redactURLError(err)
 	}
 	for k, v := range r.settings.Headers {
 		req.Header.Set(k, v)
@@ -288,4 +308,27 @@ func isTransportError(err error) bool {
 	return errors.As(err, &netErr) ||
 		errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// redactURLError returns err with the URL of a *url.Error reduced to scheme, host and
+// path. net/http only hides the password; API keys in the query (?appid=…) or user
+// info would otherwise be logged with every failed poll.
+func redactURLError(err error) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return err
+	}
+	redacted := *urlErr
+	redacted.URL = redactURL(urlErr.URL)
+	return &redacted
+}
+
+// redactURL returns scheme, host and path of raw; an address that cannot be parsed is
+// not shown at all.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid address>"
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
 }

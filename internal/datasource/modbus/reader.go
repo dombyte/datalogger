@@ -187,7 +187,7 @@ func (r *Reader) Start(ctx context.Context) <-chan []datasource.DataPoint {
 	return dataCh
 }
 
-// pollLoop polls on every tick until ctx is cancelled, then disconnects.
+// pollLoop polls at once and on every tick until ctx is cancelled, then disconnects.
 func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
 	defer close(dataCh)
 	defer r.disconnect()
@@ -195,6 +195,11 @@ func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPo
 	ticker := r.clock.NewTicker(r.settings.PollInterval)
 	defer ticker.Stop()
 
+	// The first poll runs at once: with a long poll interval the first data would
+	// otherwise arrive one interval after the start.
+	if ctx.Err() == nil {
+		r.pollOnce(ctx, dataCh)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -215,15 +220,15 @@ func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- []datasource.DataPo
 	}
 
 	r.logger.Debug().Msg("Starting Modbus poll")
-	points, err := r.poll()
-	if err != nil {
-		if ctx.Err() != nil {
-			r.logger.Debug().Err(err).Msg("Modbus poll cancelled during shutdown")
-			return
-		}
-		r.handlePollError(err)
-	} else {
+	points, err := r.poll(ctx)
+	switch {
+	case err == nil:
 		r.handlePollSuccess(len(points))
+	case ctx.Err() != nil:
+		// Points read before the shutdown are still delivered below.
+		r.logger.Debug().Err(err).Msg("Modbus poll cancelled during shutdown")
+	default:
+		r.handlePollError(err)
 	}
 	send(dataCh, points)
 }
@@ -239,7 +244,7 @@ func send(dataCh chan<- []datasource.DataPoint, points []datasource.DataPoint) {
 
 // poll connects if needed and reads all points in the configured mode. Points that
 // were read are returned even when err is set (direct mode).
-func (r *Reader) poll() ([]datasource.DataPoint, error) {
+func (r *Reader) poll(ctx context.Context) ([]datasource.DataPoint, error) {
 	if r.client == nil {
 		client, err := r.dialer.Dial()
 		if err != nil {
@@ -250,9 +255,9 @@ func (r *Reader) poll() ([]datasource.DataPoint, error) {
 	}
 
 	if r.settings.RangeMode {
-		return r.readRangeMode()
+		return r.readRangeMode(ctx)
 	}
-	return r.readDirectMode()
+	return r.readDirectMode(ctx)
 }
 
 // handlePollError logs the error, grows the backoff and drops a broken connection, so

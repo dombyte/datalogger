@@ -6,6 +6,7 @@ require (
 	github.com/InfluxCommunity/influxdb3-go/v2 v2.17.0
 	github.com/eclipse/paho.golang v0.23.0
 	github.com/expr-lang/expr v1.17.8
+	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/rs/zerolog v1.35.1
 	github.com/simonvetter/modbus v1.6.4
 	github.com/spf13/viper v1.21.0
@@ -19,7 +20,6 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/fatih/structs v1.1.0 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/goburrow/serial v0.1.0 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect

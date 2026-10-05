@@ -29,11 +29,12 @@ lookups:
 # point. type is "modbus" or "http".
 #
 # Common device options:
-#   poll_interval  how often the device is polled (required, > 0)
+#   poll_interval  how often the device is polled (required, > 0); the first poll
+#                  runs at startup
 #   timeout        maximum time to wait for one response
 #                  (default: poll_interval, at most 10s)
-#   parallelism    1-100 concurrent Modbus reads within one poll (no effect for HTTP).
-#                  Most Modbus devices handle only one request at a time: use 1.
+#   parallelism    1-100; Modbus requests share one connection and are sent one at a
+#                  time anyway, so 1 is the right value (no effect for HTTP).
 #
 # Point names must be unique within a device and must not contain "/".
 #
@@ -165,8 +166,10 @@ devices:
 
   # ----- HTTP GET, JSON response -------------------------------------------------------
   # Values are read with gjson paths: https://github.com/tidwall/gjson/blob/master/SYNTAX.md
-  # Without type, numbers become float64 and booleans stay booleans; set type
-  # (float64, int64, uint64, bool, string) to convert explicitly. scale and offset apply to
+  # Without type, numbers become float64 and booleans and strings stay; set type
+  # (float64, int64, uint64, bool, string) to convert explicitly (numbers sent as strings
+  # included). null, objects/arrays (without type: string) and values that do not fit the
+  # type are skipped and logged. scale and offset apply to
   # numbers (value * scale + offset, delivered as float64); with the defaults (1, 0) values
   # keep their type.
   - name: energy_meter
@@ -255,7 +258,8 @@ outputs:
       - inverter/fault_no_grid
 
   # ----- MQTT with authentication ------------------------------------------------------
-  # Topic per point: <topic>/<device>/<point>
+  # Topic per point: <topic>/<device>/<point>; topic, device and point names must not
+  # contain + or # (list such points in exclude_points).
   # Payload: {"value": ..., "unit": "...", "timestamp": "<RFC3339 with nanoseconds>"}
   # address schemes: tcp:// (default when omitted), tls:// or ssl:// (verified TLS).
   # While the broker is unreachable, points for this output are dropped (and counted).

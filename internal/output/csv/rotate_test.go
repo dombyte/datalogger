@@ -95,3 +95,62 @@ func TestMaxBackupsZeroAndNegative(t *testing.T) {
 		assert.Len(t, files(t, dir), tt.wantFiles, "max_backups %d", tt.maxBackups)
 	}
 }
+
+// Regression: the age of an existing file was counted from the start of the process,
+// so a process restarted more often than max_age never rotated.
+func TestRestartKeepsRotationAge(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.csv")
+	require.NoError(t, os.WriteFile(path, []byte("timestamp,device,point,value,unit\n"+
+		"2026-09-29T12:00:00Z,meter,power,1,\n"), 0o644))
+
+	clk := clocktest.NewFake(start.Add(2 * time.Hour)) // restarted two hours later
+	w, err := New(Deps{
+		Settings: Settings{FilePath: path, MaxAge: time.Hour, MaxBackups: -1},
+		Clock:    clk, Log: zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.write(datasource.DataPoint{
+		DeviceName: "meter", PointName: "power",
+		Value: 2.0, Timestamp: clk.Now(),
+	}))
+	w.close()
+
+	assert.Equal(t, []string{"data.csv", "data.csv.20260929-140000"}, files(t, dir))
+}
+
+func TestRestartWithoutReadableFirstRowCountsFromStart(t *testing.T) {
+	t.Parallel()
+	for name, content := range map[string]string{
+		"header only":   "timestamp,device,point,value,unit\n",
+		"bad timestamp": "timestamp,device,point,value,unit\nyesterday,meter,power,1,\n",
+		"broken header": "\"timestamp\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "data.csv")
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+			writeEvery(t, Settings{FilePath: path, MaxAge: time.Hour}, 1, time.Minute)
+			assert.Equal(t, []string{"data.csv"}, files(t, dir))
+		})
+	}
+}
+
+// Regression: two rotations within one second used the same backup name, and Rename
+// replaced the first backup with the second.
+func TestRotationsInOneSecondKeepEveryBackup(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeEvery(t, Settings{
+		FilePath: filepath.Join(dir, "data.csv"), MaxAge: time.Nanosecond, MaxBackups: -1,
+	}, 3, time.Nanosecond)
+
+	assert.Equal(t, []string{
+		"data.csv",
+		"data.csv.20260929-120000",
+		"data.csv.20260929-120001",
+		"data.csv.20260929-120002",
+	}, files(t, dir))
+}
