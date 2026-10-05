@@ -895,3 +895,127 @@ func TestApplyDefaultsTimeout(t *testing.T) {
 	assert.Equal(t, 10*time.Second, cfg.Devices[1].Timeout)
 	assert.Equal(t, 2*time.Second, cfg.Devices[2].Timeout)
 }
+
+// namesConfig returns a valid config with one HTTP device "meter" (points a and b) and
+// one CSV output, changed by change.
+func namesConfig(change func(*Config)) *Config {
+	cfg := &Config{
+		Devices: []Device{{
+			Name: "meter", Type: "http", PollInterval: time.Second, Timeout: time.Second,
+			Parallelism: 1,
+			DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{
+				Address: "http://localhost", Method: "GET", ResponseType: "json",
+			}},
+			Points: []Point{{Name: "a", JSONPath: "a"}, {Name: "b", JSONPath: "b"}},
+		}},
+		Outputs: []Output{{
+			Name: "out", Type: "csv", Devices: []string{"meter"},
+			OutputSpecific: OutputSpecific{Csv: CsvConfig{FilePath: "x.csv"}},
+		}},
+	}
+	change(cfg)
+	return cfg
+}
+
+// TestValidateNamesAndExcludePoints checks point names and exclude_points references.
+func TestValidateNamesAndExcludePoints(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		change  func(*Config)
+		wantErr string
+	}{
+		{name: "valid", change: func(*Config) {}},
+		{
+			name:   "valid exclude",
+			change: func(c *Config) { c.Outputs[0].ExcludePoints = []string{"meter/b"} },
+		},
+		{
+			name:    "device name with slash",
+			change:  func(c *Config) { c.Devices[0].Name = "a/b" },
+			wantErr: `device name "a/b" must not contain "/"`,
+		},
+		{
+			name:    "point name with slash",
+			change:  func(c *Config) { c.Devices[0].Points[1].Name = "x/y" },
+			wantErr: `name must not contain "/"`,
+		},
+		{
+			name:    "empty point name",
+			change:  func(c *Config) { c.Devices[0].Points[1].Name = "" },
+			wantErr: "points[1]: name required",
+		},
+		{
+			name:    "duplicate point name",
+			change:  func(c *Config) { c.Devices[0].Points[1].Name = "a" },
+			wantErr: "duplicate point name: a",
+		},
+		{
+			name:    "exclude without device",
+			change:  func(c *Config) { c.Outputs[0].ExcludePoints = []string{"b"} },
+			wantErr: `"b" must be device/point`,
+		},
+		{
+			name:    "exclude device not routed to the output",
+			change:  func(c *Config) { c.Outputs[0].ExcludePoints = []string{"other/b"} },
+			wantErr: "device other is not in devices",
+		},
+		{
+			name:    "exclude unknown point",
+			change:  func(c *Config) { c.Outputs[0].ExcludePoints = []string{"meter/c"} },
+			wantErr: "unknown point c",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := namesConfig(tt.change).Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+// TestLoadExprAndLookups checks that expressions, hex lookup codes and exclude_points
+// are read from YAML.
+func TestLoadExprAndLookups(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+lookups:
+  status:
+    0x0003: Generating
+    0x1004: Grid Off
+devices:
+  - name: meter
+    type: http
+    poll_interval: 1s
+    parallelism: 1
+    device_specific:
+      http:
+        address: "http://localhost"
+    points:
+      - name: status
+        json_path: status
+        expr: 'lookups.status[int(value)] ?? "unknown"'
+outputs:
+  - name: out
+    type: csv
+    devices: [meter]
+    exclude_points: [meter/status]
+    output_specific:
+      csv:
+        file_path: x.csv
+`), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, map[string]map[int]string{"status": {3: "Generating", 0x1004: "Grid Off"}},
+		cfg.Lookups)
+	assert.Equal(t, `lookups.status[int(value)] ?? "unknown"`, cfg.Devices[0].Points[0].Expr)
+	assert.Equal(t, []string{"meter/status"}, cfg.Outputs[0].ExcludePoints)
+}

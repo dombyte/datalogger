@@ -50,6 +50,7 @@ const startupConfig = `devices:
       - name: power
         json_path: "power"
         unit: "W"
+        expr: "-value"
 outputs:
   - name: out
     type: %s
@@ -86,9 +87,10 @@ func readRows(path string) [][]string {
 	return rows
 }
 
-// TestRunCleanShutdown starts the datalogger with an HTTP device and a CSV output, waits
-// for rows, sends SIGINT and expects exit code 0. It sends a real signal to the test
-// process, so it must not run in parallel.
+// TestRunCleanShutdown starts the datalogger with an HTTP device (whose point negates
+// its value with an expression) and a CSV output, waits for rows, sends SIGINT and
+// expects exit code 0. It sends a real signal to the test process, so it must not run
+// in parallel.
 func TestRunCleanShutdown(t *testing.T) {
 	device := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, `{"power": 42.5}`)
@@ -122,7 +124,7 @@ func TestRunCleanShutdown(t *testing.T) {
 	for _, row := range rows[1:] {
 		_, err := time.Parse(time.RFC3339Nano, row[0])
 		require.NoError(t, err)
-		assert.Equal(t, []string{"meter", "power", "42.5", "W"}, row[1:])
+		assert.Equal(t, []string{"meter", "power", "-42.5", "W"}, row[1:], "expr applied")
 	}
 	assert.Contains(t, stderr.String(), "Shutdown complete")
 }

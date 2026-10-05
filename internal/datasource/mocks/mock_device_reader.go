@@ -92,19 +92,19 @@ func (_c *MockDeviceReader_Name_Call) RunAndReturn(run func() string) *MockDevic
 }
 
 // Start provides a mock function for the type MockDeviceReader
-func (_mock *MockDeviceReader) Start(ctx context.Context) <-chan datasource.DataPoint {
+func (_mock *MockDeviceReader) Start(ctx context.Context) <-chan []datasource.DataPoint {
 	ret := _mock.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Start")
 	}
 
-	var r0 <-chan datasource.DataPoint
-	if returnFunc, ok := ret.Get(0).(func(context.Context) <-chan datasource.DataPoint); ok {
+	var r0 <-chan []datasource.DataPoint
+	if returnFunc, ok := ret.Get(0).(func(context.Context) <-chan []datasource.DataPoint); ok {
 		r0 = returnFunc(ctx)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(<-chan datasource.DataPoint)
+			r0 = ret.Get(0).(<-chan []datasource.DataPoint)
 		}
 	}
 	return r0
@@ -134,12 +134,12 @@ func (_c *MockDeviceReader_Start_Call) Run(run func(ctx context.Context)) *MockD
 	return _c
 }
 
-func (_c *MockDeviceReader_Start_Call) Return(dataPointCh <-chan datasource.DataPoint) *MockDeviceReader_Start_Call {
-	_c.Call.Return(dataPointCh)
+func (_c *MockDeviceReader_Start_Call) Return(dataPointsCh <-chan []datasource.DataPoint) *MockDeviceReader_Start_Call {
+	_c.Call.Return(dataPointsCh)
 	return _c
 }
 
-func (_c *MockDeviceReader_Start_Call) RunAndReturn(run func(ctx context.Context) <-chan datasource.DataPoint) *MockDeviceReader_Start_Call {
+func (_c *MockDeviceReader_Start_Call) RunAndReturn(run func(ctx context.Context) <-chan []datasource.DataPoint) *MockDeviceReader_Start_Call {
 	_c.Call.Return(run)
 	return _c
 }

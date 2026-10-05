@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Modbus function codes: 3 reads holding registers, 4 reads input registers.
@@ -14,8 +15,30 @@ const (
 	registersPer32Bit = 2
 )
 
-// validatePoints checks the points against the rules of the device type.
+// validatePointNames checks that every point has a unique name without "/", so
+// expressions and exclude_points can name it.
+func validatePointNames(points []Point) error {
+	seen := make(map[string]bool, len(points))
+	for i, p := range points {
+		switch {
+		case p.Name == "":
+			return fmt.Errorf("points[%d]: name required", i)
+		case strings.Contains(p.Name, pathSeparator):
+			return fmt.Errorf("points[%d] %s: name must not contain %q", i, p.Name, pathSeparator)
+		case seen[p.Name]:
+			return fmt.Errorf("points[%d]: duplicate point name: %s", i, p.Name)
+		}
+		seen[p.Name] = true
+	}
+	return nil
+}
+
+// validatePoints checks the point names and the points against the rules of the device
+// type.
 func (d *Device) validatePoints() error {
+	if err := validatePointNames(d.Points); err != nil {
+		return err
+	}
 	switch d.Type {
 	case "modbus":
 		return validateModbusPoints(d.Points)

@@ -17,20 +17,35 @@ import (
 	"github.com/dombyte/datalogger/internal/datasource"
 	dsmocks "github.com/dombyte/datalogger/internal/datasource/mocks"
 	outmocks "github.com/dombyte/datalogger/internal/output/mocks"
+	"github.com/dombyte/datalogger/internal/transform"
 )
+
+// fakeSource returns a source whose reader sends points as one poll, then waits for
+// ctx and closes; exprs maps point names to expressions.
+func fakeSource(
+	t *testing.T, name string, exprs map[string]string, points ...datasource.DataPoint,
+) source {
+	t.Helper()
+	names := make([]string, 0, len(points))
+	for _, dp := range points {
+		names = append(names, dp.PointName)
+	}
+	tr, err := transform.New(transform.Settings{Device: name, Points: names, Exprs: exprs},
+		zerolog.Nop())
+	require.NoError(t, err)
+	return source{reader: fakeReader(t, name, points...), transform: tr}
+}
 
 // fakeReader returns a reader mock that sends points, then waits for ctx and closes.
 func fakeReader(t *testing.T, name string, points ...datasource.DataPoint) *dsmocks.MockDeviceReader {
 	t.Helper()
 	r := dsmocks.NewMockDeviceReader(t)
 	r.EXPECT().Name().Return(name).Maybe()
-	r.EXPECT().Start(mock.Anything).RunAndReturn(func(ctx context.Context) <-chan datasource.DataPoint {
-		ch := make(chan datasource.DataPoint)
+	r.EXPECT().Start(mock.Anything).RunAndReturn(func(ctx context.Context) <-chan []datasource.DataPoint {
+		ch := make(chan []datasource.DataPoint)
 		go func() {
 			defer close(ch)
-			for _, dp := range points {
-				ch <- dp
-			}
+			ch <- points
 			<-ctx.Done()
 		}()
 		return ch
@@ -74,6 +89,14 @@ func fakeWriter(t *testing.T, name string, rec *recorder) *outmocks.MockWriter {
 	return w
 }
 
+// noTransform returns a transformer without expressions.
+func noTransform(t *testing.T) *transform.Transformer {
+	t.Helper()
+	tr, err := transform.New(transform.Settings{}, zerolog.Nop())
+	require.NoError(t, err)
+	return tr
+}
+
 func point(device string) datasource.DataPoint {
 	return datasource.DataPoint{DeviceName: device, PointName: "p", Value: 1.0}
 }
@@ -90,9 +113,9 @@ func TestRoutesToListedOutputsAndDrainsOnShutdown(t *testing.T) {
 	t.Parallel()
 	all, onlyDev1 := &recorder{}, &recorder{}
 	a := newApp(
-		[]datasource.DeviceReader{
-			fakeReader(t, "dev1", point("dev1"), point("dev1")),
-			fakeReader(t, "dev2", point("dev2")),
+		[]source{
+			fakeSource(t, "dev1", nil, point("dev1"), point("dev1")),
+			fakeSource(t, "dev2", nil, point("dev2")),
 		},
 		[]outputRoute{
 			{writer: fakeWriter(t, "all", all), devices: []string{"dev1", "dev2"}, bufferSize: 10},
@@ -115,12 +138,12 @@ func TestReaderThatStopsFailsRun(t *testing.T) {
 	t.Parallel()
 	r := dsmocks.NewMockDeviceReader(t)
 	r.EXPECT().Name().Return("dev1").Maybe()
-	r.EXPECT().Start(mock.Anything).RunAndReturn(func(context.Context) <-chan datasource.DataPoint {
-		ch := make(chan datasource.DataPoint)
+	r.EXPECT().Start(mock.Anything).RunAndReturn(func(context.Context) <-chan []datasource.DataPoint {
+		ch := make(chan []datasource.DataPoint)
 		close(ch)
 		return ch
 	}).Once()
-	a := newApp([]datasource.DeviceReader{r}, nil, zerolog.Nop())
+	a := newApp([]source{{reader: r, transform: noTransform(t)}}, nil, zerolog.Nop())
 
 	_, runErr := runApp(a)
 	err := <-runErr
@@ -149,15 +172,14 @@ func TestWriterThatStopsFailsRunAndShutdown(t *testing.T) {
 
 func TestRouteDropsOnlyForFullOutput(t *testing.T) {
 	t.Parallel()
-	data := make(chan datasource.DataPoint, 3)
-	for range 3 {
-		data <- point("dev1")
-	}
+	data := make(chan []datasource.DataPoint, 1)
+	data <- []datasource.DataPoint{point("dev1"), point("dev1"), point("dev1")}
 	close(data)
 	full := make(chan datasource.DataPoint) // nobody reads
 	roomy := make(chan datasource.DataPoint, 3)
 
-	route(data, map[string]chan<- datasource.DataPoint{"full": full, "roomy": roomy}, zerolog.Nop())
+	route(data, noTransform(t), []target{{name: "full", in: full}, {name: "roomy", in: roomy}},
+		zerolog.Nop())
 
 	assert.Len(t, roomy, 3)
 }
@@ -182,5 +204,71 @@ func TestNewFailsOnlyOnConfigurationErrors(t *testing.T) {
 	a, err := New(&config.Config{Devices: []config.Device{device("tcp://127.0.0.1:1")}},
 		zerolog.Nop(), clk)
 	require.NoError(t, err)
-	assert.Len(t, a.readers, 1)
+	assert.Len(t, a.sources, 1)
+}
+
+func TestRouteTransformsAndExcludesPerOutput(t *testing.T) {
+	t.Parallel()
+	dp := func(name string, v any) datasource.DataPoint {
+		return datasource.DataPoint{DeviceName: "solis", PointName: name, Value: v}
+	}
+	all, noText := &recorder{}, &recorder{}
+	a := newApp(
+		[]source{fakeSource(t, "solis",
+			map[string]string{
+				"power":  "points.dir == 1 ? value : -value",
+				"status": `value == 3 ? "Generating" : "other"`,
+			},
+			dp("dir", 0.0), dp("power", 1200.0), dp("status", 3.0),
+		)},
+		[]outputRoute{
+			{writer: fakeWriter(t, "all", all), devices: []string{"solis"}, bufferSize: 10},
+			{
+				writer: fakeWriter(t, "no_text", noText), devices: []string{"solis"},
+				excludePoints: []string{"solis/status", "other/power"}, bufferSize: 10,
+			},
+		},
+		zerolog.Nop(),
+	)
+
+	cancel, runErr := runApp(a)
+	require.Eventually(t, func() bool { return len(all.got()) == 3 && len(noText.got()) == 2 },
+		time.Second, time.Millisecond)
+	cancel()
+	require.NoError(t, <-runErr)
+	require.NoError(t, a.Shutdown())
+
+	assert.Equal(t, []datasource.DataPoint{
+		dp("dir", 0.0), dp("power", -1200.0), dp("status", "Generating"),
+	}, all.got())
+	assert.Equal(t, []datasource.DataPoint{dp("dir", 0.0), dp("power", -1200.0)}, noText.got(),
+		"solis/status is excluded; other/power belongs to another device")
+}
+
+func TestNewFailsOnInvalidExpression(t *testing.T) {
+	t.Parallel()
+	d := config.Device{
+		Name: "meter", Type: "http", PollInterval: time.Second, Timeout: time.Second,
+		DeviceSpecific: config.DeviceSpecific{HTTP: config.HTTPConfig{
+			Address: "http://localhost", Method: "GET", ResponseType: "json",
+		}},
+		Points: []config.Point{{Name: "p", JSONPath: "p", Scale: 1, Expr: "points.q"}},
+	}
+
+	_, err := New(&config.Config{Devices: []config.Device{d}}, zerolog.Nop(),
+		clocktest.NewFake(time.Now()))
+
+	require.ErrorIs(t, err, transform.ErrInvalidExpression)
+	assert.ErrorContains(t, err, "device meter")
+}
+
+func TestExampleConfigExpressionsCompile(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.Load("../../example/config.yaml")
+	require.NoError(t, err)
+
+	for _, d := range cfg.Devices {
+		_, err := createSource(d, cfg.Lookups, zerolog.Nop(), clocktest.NewFake(time.Now()))
+		assert.NoError(t, err, "device %s", d.Name)
+	}
 }

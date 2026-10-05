@@ -12,6 +12,9 @@ import (
 type Config struct {
 	Devices []Device `mapstructure:"devices"`
 	Outputs []Output `mapstructure:"outputs"`
+	// Lookups are named tables (integer code → text) that point expressions use as
+	// `lookups.<name>[code]`. Viper lowercases the names.
+	Lookups map[string]map[int]string `mapstructure:"lookups"`
 }
 
 // Device represents a device configuration.
@@ -37,6 +40,9 @@ type Point struct {
 	Scale        float64 `mapstructure:"scale"`
 	Offset       float64 `mapstructure:"offset"`
 	Unit         string  `mapstructure:"unit"`
+	// Expr is an optional expr-lang expression that replaces the value after scale and
+	// offset; compiled at startup (internal/transform).
+	Expr string `mapstructure:"expr"`
 }
 
 // DeviceSpecific contains device-type-specific configuration.
@@ -74,11 +80,13 @@ type Output struct {
 	Type       string `mapstructure:"type"` // influxdb, mqtt, csv
 	BufferSize int    `mapstructure:"buffer_size"`
 	// BatchSize, BatchTimeout, MaxRetries and RetryDelay tune InfluxDB writes; 0 = default.
-	BatchSize      int            `mapstructure:"batch_size"`
-	BatchTimeout   time.Duration  `mapstructure:"batch_timeout"`
-	MaxRetries     int            `mapstructure:"max_retries"`
-	RetryDelay     time.Duration  `mapstructure:"retry_delay"`
-	Devices        []string       `mapstructure:"devices"`
+	BatchSize    int           `mapstructure:"batch_size"`
+	BatchTimeout time.Duration `mapstructure:"batch_timeout"`
+	MaxRetries   int           `mapstructure:"max_retries"`
+	RetryDelay   time.Duration `mapstructure:"retry_delay"`
+	Devices      []string      `mapstructure:"devices"`
+	// ExcludePoints lists "device/point" names this output does not receive.
+	ExcludePoints  []string       `mapstructure:"exclude_points"`
 	OutputSpecific OutputSpecific `mapstructure:"output_specific"`
 }
 

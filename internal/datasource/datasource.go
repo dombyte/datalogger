@@ -23,8 +23,10 @@ type DeviceReader interface {
 	// Name returns the device name.
 	Name() string
 
-	// Start starts polling in the background and returns the data channel. The reader
-	// owns the channel and closes it when it stops, which happens after ctx is
-	// cancelled; it never stops on its own because of read errors.
-	Start(ctx context.Context) <-chan DataPoint
+	// Start starts polling in the background and returns the data channel, which
+	// carries the points of one poll per send (never an empty slice), so a consumer
+	// sees a consistent snapshot of the device. The reader owns the channel and closes
+	// it when it stops, which happens after ctx is cancelled; it never stops on its own
+	// because of read errors.
+	Start(ctx context.Context) <-chan []DataPoint
 }

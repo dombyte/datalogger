@@ -12,6 +12,53 @@ Configuration is done via YAML file (passed with `-config` flag). See [example/c
 
 **Output types:** InfluxDB 3.x, MQTT, CSV
 
+### Transforming values
+
+Every point may have an `expr` ([expr-lang](https://expr-lang.org/docs/language-definition))
+that replaces its value after `scale`/`offset`. It can use `value`, the other points of
+the same poll (`points.<name>`) and named lookup tables (`lookups.<name>[code]`):
+
+```yaml
+lookups:
+  solis_status:
+    0x0003: Generating
+    0x1004: Grid Off
+
+devices:
+  - name: inverter
+    # ...
+    points:
+      - name: status_text
+        register: 33095
+        type: uint16
+        expr: 'lookups.solis_status[int(value)] ?? "unknown"'
+      - name: fault_no_grid
+        register: 33116
+        type: uint16
+        expr: "bitand(int(value), 0x0001) != 0"
+      - name: battery_power
+        register: 33149
+        count: 2
+        type: uint32
+        expr: "points.battery_current_direction == 1 ? value : -value"
+
+outputs:
+  - name: influxdb
+    # ...
+    devices: [inverter]
+    exclude_points: [inverter/status_text, inverter/fault_no_grid]
+```
+
+- Expressions see the values of the poll before any expression ran. A point of another
+  device is not available; read both registers in one device instead.
+- A point that could not be read in this poll is `nil` in `points`. Guard against that
+  where it matters: `points.dir == nil ? nil : (points.dir == 1 ? value : -value)`. A
+  result of `nil` skips the point for this poll.
+- Numbers become float64; true/false and text are kept. InfluxDB stores one type per
+  field and device, so keep text and true/false values out of it with `exclude_points`.
+- An expression that does not compile, or names an unknown point or lookup, stops the
+  program at startup. One that fails while running skips the point and is logged.
+
 ## Running
 
 ```bash

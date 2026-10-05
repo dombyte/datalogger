@@ -19,8 +19,10 @@ Datalogger polls **devices** and forwards every reading to one or more **outputs
 - **Inputs:** Modbus TCP/RTU (direct or range register reads), HTTP APIs (JSON via gjson
   paths, or the whole body as text).
 - **Outputs:** InfluxDB 3.x, MQTT, CSV files (with age-based rotation).
+- **Transforms:** a point may have an `expr` (expr-lang) that changes its value after a
+  poll, using the other points of that poll and named lookup tables.
 - **Routing:** each output lists the devices it accepts; every reading of such a device is
-  copied to that output.
+  copied to that output, except the points it lists in `exclude_points`.
 - **Timestamps** are taken when the data is received from the device (not when the poll
   starts), in UTC.
 - **Runtime:** a single binary configured by one YAML file (`-config`), no HTTP server, no
@@ -68,6 +70,7 @@ internal/clock/          Clock interface (Now, tickers, After) + Sleep; clocktes
 internal/datasource/     DataPoint type, DeviceReader interface
   modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, reconnect
   http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text
+internal/transform/      point expressions (expr-lang): compile at startup, Apply per poll
 internal/output/         Writer interface
   csv/                   CSV writer: flush per row, rotation by max_age, backup cleanup
   influxdb/              InfluxDB 3 writer: batching, retries, v3 write API
@@ -90,7 +93,9 @@ Imports (paths below `internal/`):
 
 ```
 cmd/datalogger    → app, clock, config
-app               → clock, config, datasource{,/modbus,/http}, output{,/csv,/influxdb,/mqtt}
+app               → clock, config, datasource{,/modbus,/http}, output{,/csv,/influxdb,/mqtt},
+                    transform
+transform         → datasource, expr-lang/expr
 datasource/modbus → clock, datasource, simonvetter/modbus
 datasource/http   → clock, datasource, gjson
 output            → datasource
@@ -114,7 +119,9 @@ Rules:
 ## 5. Data Flow and Ownership
 
 ```
-DeviceReader.Start ──data channel (unbuffered)──▶ router goroutine (one per device, in app)
+DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)──▶ router goroutine
+                                                    │ (one per device, in app)
+                                                    │ transform.Apply on the poll
                                                     │ non-blocking send, copy per output
                                                     ▼
                                   per-output input channel (buffer_size, default 1000)
@@ -123,8 +130,11 @@ DeviceReader.Start ──data channel (unbuffered)──▶ router goroutine (on
 ```
 
 - **Readers own** their data channel: they are the only senders and close it when they
-  stop. A poll sends all its points after the reads are done.
-- **The router** sends each point to every output whose `devices` list contains the device.
+  stop. A poll sends all its points as one batch after the reads are done (a poll
+  without points sends nothing), so the router sees one consistent snapshot per poll.
+- **The router** applies the device's `transform.Transformer` to each poll (the router is
+  its only user), then sends each point to every output whose `devices` list contains the
+  device and whose `exclude_points` does not list the point.
   The send is **non-blocking**: if an output channel is full, the point is **dropped for
   that output only** and a warning is logged. A slow output never blocks a device or the
   other outputs.
@@ -144,8 +154,8 @@ DeviceReader.Start ──data channel (unbuffered)──▶ router goroutine (on
    level), log the build info, `config.Load` (defaults + validation).
 2. `app.New` creates every reader and writer (`Create*` factories in `app/factory.go`).
    A **construction error** (an address or setting the client library rejects, a point
-   outside the Modbus ranges, an HTTP request that cannot be built) ends the process with
-   exit 1. **Connecting is not construction:** readers connect on their first poll, so a
+   outside the Modbus ranges, an HTTP request that cannot be built, an expression that
+   does not compile or names an unknown point or lookup) ends the process with exit 1. **Connecting is not construction:** readers connect on their first poll, so a
    device that is down at startup does not stop the others and recovers on its own.
 3. `app.Run` starts the writers, then the readers with one router each.
 
@@ -256,11 +266,29 @@ writer that failed, or a missed deadline.
 - The directory is created if missing. In the container, write below `/app/data`
   (mounted from `./data`).
 
+### Transforms (`expr`, `lookups`, `exclude_points`)
+- A point's `expr` ([expr-lang](https://expr-lang.org)) replaces its value after
+  `scale`/`offset`. The environment: `value` (this point), `points.<name>` (every point
+  of the same poll, before any expression ran; nil if not read in this poll) and
+  `lookups.<name>[code]` (top-level `lookups`: integer code → text; nil for an unknown
+  code, so `?? "unknown"` works).
+- Only points of the same device are visible: other devices poll on their own schedule
+  and share no snapshot.
+- Results: numbers are delivered as float64 (like the readers), bools and strings stay,
+  nil skips the point for this poll, anything else is a runtime error.
+- Compiled once in `transform.New`; syntax errors, unknown variables and unknown
+  `points.x`/`lookups.x` names (checked by walking the AST) fail startup. A runtime
+  error skips the point: warned once per point, then debug, info when it works again.
+- `exclude_points` on an output lists `device/point` names that output does not
+  receive; e.g. text values for InfluxDB, whose `value` field has one type per table.
+
 ### Configuration
 - One YAML file (`-config`, required); template with every option: `example/config.yaml`.
 - At least one device and one output are required; device and output names must be
-  unique; outputs may only reference existing devices;
-  every device needs at least one point; `parallelism` 1–100; `poll_interval` > 0;
+  unique; outputs may only reference existing devices; `exclude_points` entries must be
+  `device/point` with a device of that output and an existing point;
+  every device needs at least one point; point names are unique per device; device and
+  point names must not contain `/`; `parallelism` 1–100; `poll_interval` > 0;
   `timeout` > 0.
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
   poll interval, at most 10 s; point `scale` 1; HTTP method GET and response type json;
@@ -293,6 +321,14 @@ writer that failed, or a missed deadline.
   snapshot; a partial snapshot would mix old gaps with new values.
 - **One register type per Modbus device:** keeps range planning simple; devices that need
   both are configured twice.
+- **Transforms with expr-lang, not config keys:** sign changes, status codes, bit fields
+  and values that depend on another point need more than a fixed set of keys (`invert`,
+  `bit`, …); expr compiles at startup, runs without side effects and is cheap per point.
+  Expressions run in the router on one poll at a time, so `points` is a consistent
+  snapshot and no state is shared between devices.
+- **Exclude instead of per-output transforms:** a decoded value is a separate point (e.g.
+  `status` and `status_text` on the same register); outputs that cannot store it skip it
+  with `exclude_points`, so every point has one value for all outputs.
 - **InfluxDB schema with `point` as tag:** one table per device with a fixed column set,
   queryable by point without schema changes when points are added.
 - **Config only from the YAML file, no env overrides:** the config is mostly lists of
@@ -377,7 +413,7 @@ writer that failed, or a missed deadline.
   tests behind `//go:build integration` and are not part of `go test ./...`.
 - Always run with `-race`. New code comes with tests; a bug fix comes with a regression
   test that fails before the fix.
-- Coverage (SHOULD): ≥ 70 % per package with logic, ≥ 80 % for packages with five or more
+- Coverage (SHOULD): ≥ 90 % per package with logic, ≥ 100 % for packages with five or more
   complex functions; `cmd/datalogger` and `app` are covered by the startup test instead.
 
 ---
@@ -469,7 +505,7 @@ writer that failed, or a missed deadline.
   commits, PR descriptions or release notes.
 
 Scopes used here: `config`, `modbus`, `http`, `csv`, `influxdb`, `mqtt`, `routing`,
-`shutdown`, `release`, `docker`, `ci`, `deps`
+`shutdown`, `transform`, `release`, `docker`, `ci`, `deps`
 
 ```
 feat(mqtt): support TLS client certificates
@@ -524,4 +560,12 @@ The required CI checks MUST be green before a PR is merged.
 
 Known gaps to the rules above, one branch each; update this list when an item is done.
 
-None. Add new gaps here as they are found.
+- **Coverage below the targets in 9.5:** `output/csv` 77.9 %, `output/influxdb` 84.1 %,
+  `output/mqtt` 85.4 % (target 90 %); no package with five or more complex functions
+  reaches 100 % (`config` 92.5 %, `datasource/http` 91.1 %, `datasource/modbus` 93.0 %,
+  `transform` 97.5 %).
+- **Mixed value types in InfluxDB:** all points of a device share the `value` field, but
+  HTTP points can deliver bool, int64 or string next to float64, and InfluxDB 3 keeps one
+  type per column, so such a device's writes can be rejected. Today: keep such points
+  out with `exclude_points` or in a separate device. A fix (e.g. typed fields
+  `value`/`value_str`/`value_bool`) changes the schema and is a breaking change (`!`).
