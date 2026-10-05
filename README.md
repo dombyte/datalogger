@@ -1,21 +1,94 @@
 # Datalogger
 
-A flexible data logging tool for collecting metrics from various sources (Modbus, HTTP) and writing to multiple outputs (InfluxDB, MQTT, CSV, HTTP API).
+Datalogger polls devices (Modbus TCP/RTU, HTTP APIs) and forwards every reading to one
+or more outputs (InfluxDB 3.x, MQTT, CSV files, a read-only HTTP API). It is a single
+binary configured by one YAML file.
+
+## Installation
+
+**Docker Compose** (images for linux/amd64, arm64 and arm/v7 on
+`ghcr.io/dombyte/datalogger`):
+
+```bash
+mkdir datalogger && cd datalogger
+curl -LO https://raw.githubusercontent.com/dombyte/datalogger/main/example/docker-compose.yaml
+curl -L -o config.yaml https://raw.githubusercontent.com/dombyte/datalogger/main/example/config.yaml
+# edit config.yaml, then:
+docker compose up -d
+```
+
+The compose file mounts `./config.yaml` read-only and `./data` to `/app/data` (write CSV
+files below `/app/data`). Publish a port only if you use the `api` output. Pin a version
+tag (`vX.Y.Z`, `vX.Y`, `vX`) instead of `latest` if you want controlled upgrades.
+
+**Binary:** download the archive for Linux or macOS (amd64, arm64, armv7) from the
+[releases](https://github.com/dombyte/datalogger/releases) and run:
+
+```bash
+datalogger -config config.yaml [-debug]   # -version prints the build info
+```
+
+**From source** (Go, see `go.mod` for the version): `make build`.
 
 ## Configuration
 
-Configuration is done via YAML file (passed with `-config` flag). See [example/config.yaml](example/config.yaml) for a complete reference.
-Unknown keys (for example a misspelled option) stop the program at startup.
+One YAML file, passed with `-config`. [example/config.yaml](example/config.yaml) is the
+complete reference with every option explained. Unknown keys (for example a typo) stop
+the program at startup. Keep tokens and passwords only in your local `config.yaml`.
 
-**Input types:**
-- **Modbus:** TCP/RTU with range or direct register access
-- **HTTP:** JSON responses with [gjson path syntax](https://github.com/tidwall/gjson/blob/master/SYNTAX.md) for value extraction
+A minimal config: one device, one output.
 
-**Output types:** InfluxDB 3.x, MQTT, CSV, HTTP API (latest values)
+```yaml
+devices:
+  - name: meter
+    type: http
+    poll_interval: 5s
+    device_specific:
+      http:
+        address: "http://192.0.2.20/rpc/EM.GetStatus"
+    points:
+      - name: power
+        json_path: "total_act_power"
+        unit: "W"
+
+outputs:
+  - name: csv
+    type: csv
+    output_specific:
+      csv:
+        file_path: "./data/data.csv"
+        max_age: 24h
+        max_backups: 7
+    devices: [meter]
+```
+
+### How data flows
+
+- Every **device** is polled at once on startup, then every `poll_interval`. Each reading
+  is stamped with the time the device answered, in UTC.
+- Every **output** lists the `devices` it receives. All their points are copied to it,
+  except those listed in `exclude_points` (`device/point`).
+- Each output has its own queue (`buffer_size`, default 1000). If an output is too slow
+  and its queue is full, new points are dropped for that output only and a warning is
+  logged; devices and other outputs are not affected.
+
+### Devices
+
+| Type | Notes |
+|---|---|
+| `modbus` | `tcp://host:port` or `rtu:///dev/ttyUSB0`. **direct** mode reads each point on its own (a failing point is skipped). **range** mode reads register ranges and decodes all points from them (a failing range skips the whole poll). Types `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool`; value = raw × `scale` + `offset`. One register type (3 holding / 4 input) per device. |
+| `http` | GET or POST with optional headers and body. `response_type: json` extracts values with [gjson paths](https://github.com/tidwall/gjson/blob/master/SYNTAX.md); `text` delivers the whole body as one string. A path that is missing or `null` skips the point (no fake `0`). |
+
+### Outputs
+
+| Type | Notes |
+|---|---|
+| `influxdb` | InfluxDB 3.x, batched, with retries. Schema [below](#influxdb-schema). |
+| `mqtt` | MQTT v5, one topic per point: `<topic>/<device>/<point>` (default topic `datalogger`), payload `{"value": 230.5, "unit": "V", "timestamp": "2026-10-05T10:15:02.123Z"}`. `tcp://` or TLS via `tls://`, `ssl://`, `mqtts://`. Points are dropped (and counted) while the broker is unreachable. |
+| `csv` | Columns `timestamp, device, point, value, unit`, flushed per row. Rotated after `max_age` to `<file>.<YYYYMMDD-HHMMSS>`; `max_backups` 0 = keep none, > 0 = keep that many, < 0 = keep all. |
+| `api` | Read-only JSON API with the latest value of every point, see [below](#http-api). |
 
 ### HTTP API
-
-An output of type `api` serves the latest value of every point of its devices as JSON:
 
 ```yaml
 outputs:
@@ -35,12 +108,11 @@ outputs:
 | `GET /api/devices/{device}/{point}` | `{"device": "inverter", "point": "power", "value": 1234.5, "unit": "W", "timestamp": "…", "age_ms": 820}` |
 | `GET /healthz` | `200` (no token needed) |
 
-- `age_ms` is the time since the device answered, computed per request. A device that
-  stops answering keeps its last values while their age grows.
-- Unknown devices and points without a value are `404`; a device without any reading yet
-  has `"points": {}`. NaN and infinite values are `null`.
+- `age_ms` is the time since the device answered. A device that stops answering keeps
+  its last values while their age grows.
+- Unknown devices and points without a value are `404`. NaN and infinite values are
+  `null`.
 - Values live in memory only: after a restart the API is empty until the first poll.
-- A port that is already in use stops the program at startup.
 
 ### Transforming values
 
@@ -79,11 +151,11 @@ outputs:
     exclude_points: [inverter/status_text, inverter/fault_no_grid]
 ```
 
-- Expressions see the values of the poll before any expression ran. A point of another
-  device is not available; read both registers in one device instead.
-- A point that could not be read in this poll is `nil` in `points`. Guard against that
-  where it matters: `points.dir == nil ? nil : (points.dir == 1 ? value : -value)`. A
-  result of `nil` skips the point for this poll.
+- Expressions see the values of the poll before any expression ran, and only points of
+  the same device.
+- A point that could not be read in this poll is `nil` in `points`; guard where it
+  matters: `points.dir == nil ? nil : (points.dir == 1 ? value : -value)`. A result of
+  `nil` skips the point for this poll.
 - Numbers become float64; true/false and text are kept. InfluxDB stores one type per
   field and device, so keep text and true/false values out of it with `exclude_points`.
 - An expression that does not compile, or names an unknown point or lookup, stops the
@@ -91,154 +163,67 @@ outputs:
 
 ## Running
 
-```bash
-datalogger -config config.yaml [-debug]   # -version prints the build info
-```
-
 - Devices and outputs connect in the background: one that is unreachable at startup (or
   later) is retried with backoff and does not stop the others. Settings that cannot work
-  at all (for example an unsupported address scheme) stop the program at startup.
+  at all (an invalid address, a port in use, a bad expression) stop the program at
+  startup.
 - SIGINT/SIGTERM stop the devices first, then every output writes what is queued; this
   is bounded by 8 seconds.
 - Exit code 0 after a clean stop, 1 on configuration or startup errors, when a component
   stops unexpectedly, or when the shutdown takes too long. Run it with a restart policy
-  (for example `restart: unless-stopped` in Docker Compose).
+  (`restart: unless-stopped` in the compose file).
 
-## InfluxDB 3.x Schema Design
+## InfluxDB schema
 
-### Schema Structure
+| Element | Content | Example |
+|---|---|---|
+| Measurement (table) | device name | `spine` |
+| Tag `point` | point name | `a_voltage` |
+| Tag `unit` | unit (omitted when empty) | `V` |
+| Field `value` | the reading | `230.5` |
+| Time | when the device answered | |
 
-| Element | Type | Description | Example |
-|---------|------|-------------|---------|
-| Measurement | Table name | Device name | `spine` |
-| Tag: `point` | Metadata | Identifies the measurement point | `a_voltage`, `temperature` |
-| Tag: `unit` | Metadata | Unit of measurement (optional) | `V`, `C`, `%` |
-| Field: `value` | Measured data | The actual reading value | `230.5`, `45.2` |
-| Timestamp | Time | When the reading was taken | Unix nanoseconds |
-
-**Line Protocol format:**
 ```
 spine,point=a_voltage,unit=V value=230.5 1712345678901234567
 ```
 
-## InfluxDB 3.x Query Examples
+### Query examples (SQL, Grafana FlightSQL)
 
-**Basic time series query for a single point:**
-```sql
-SELECT time AS "Time", value AS "A Phase Voltage"
-FROM spine
-WHERE point = 'a_voltage'
-```
-
-**With Grafana time range filter (FlightSQL):**
+One point in the dashboard time range:
 ```sql
 SELECT time AS "Time", value AS "A Phase Voltage"
 FROM spine
 WHERE point = 'a_voltage' AND time >= $__timeFrom() AND time <= $__timeTo()
 ```
 
-**Multiple points in one query:**
+Several points, or all points of a device:
 ```sql
-SELECT time AS "Time", value AS "Voltage"
+SELECT time AS "Time", point, value
 FROM spine
 WHERE point IN ('a_voltage', 'b_voltage', 'c_voltage')
   AND time >= $__timeFrom() AND time <= $__timeTo()
 ```
 
-**Query all points from a device:**
-```sql
-SELECT time AS "Time", point, value
-FROM spine
-WHERE time >= $__timeFrom() AND time <= $__timeTo()
-```
-
-**Query with unit filter:**
-```sql
-SELECT time AS "Time", point, value, unit
-FROM spine
-WHERE unit = 'V' AND time >= $__timeFrom() AND time <= $__timeTo()
-```
-
-**Aggregate by point (average voltage):**
-```sql
-SELECT point, AVG(value) AS "Average Value"
-FROM spine
-WHERE point LIKE '%voltage%' AND time >= $__timeFrom() AND time <= $__timeTo()
-GROUP BY point
-```
-
-**Latest value for each point:**
-```sql
-SELECT point, value AS "Latest Value", time AS "Time"
-FROM spine
-WHERE time >= $__timeFrom() AND time <= $__timeTo()
-GROUP BY point
-ORDER BY time DESC
-LIMIT 10
-```
-
-**With Grafana time range filter and interval:**
+Averaged to the Grafana interval:
 ```sql
 SELECT
-  date_bin(INTERVAL ${__interval_ms} milliseconds, time) AS "Time",
+  date_bin(INTERVAL '${__interval_ms} milliseconds', time) AS "Time",
   avg(value) AS "A Phase Voltage"
 FROM spine
-WHERE
-  point = 'a_voltage'
-  AND time >= $__timeFrom()
-  AND time <= $__timeTo()
-GROUP BY date_bin(INTERVAL ${__interval_ms} milliseconds, time)
+WHERE point = 'a_voltage' AND time >= $__timeFrom() AND time <= $__timeTo()
+GROUP BY 1
+ORDER BY 1
 ```
 
-**With Grafana time range filter and custom variable:**
+Latest value of every point:
 ```sql
-SELECT
-  time_bucket AS "Time",
-  avg(value) AS "A Phase Voltage"
+SELECT point, value, unit, time
 FROM (
-  SELECT
-    CASE
-      WHEN '${group_interval:raw}' = 'raw' THEN time
-      ELSE date_bin(INTERVAL '${group_interval:raw}', time)
-    END AS time_bucket,
-    value
+  SELECT point, value, unit, time,
+         row_number() OVER (PARTITION BY point ORDER BY time DESC) AS rn
   FROM spine
-  WHERE
-    point = 'a_voltage'
-    AND time >= $__timeFrom()
-    AND time <= $__timeTo()
+  WHERE time >= now() - INTERVAL '1 hour'
 )
-GROUP BY time_bucket
-```
-
-**With Grafana time range filter and custom raw-variable:**
-```sql
-SELECT
-  time_bucket AS "Time",
-  avg(value) AS "A Phase Voltage"
-FROM (
-  SELECT
-    CASE
-      WHEN '${group_interval:raw}' = 'raw' THEN time
-      WHEN '${group_interval:raw}' = '100ms' THEN date_bin(INTERVAL 100 milliseconds, time)
-      WHEN '${group_interval:raw}' = '250ms' THEN date_bin(INTERVAL 250 milliseconds, time)
-      WHEN '${group_interval:raw}' = '500ms' THEN date_bin(INTERVAL 500 milliseconds, time)
-      WHEN '${group_interval:raw}' = '1s' THEN date_bin(INTERVAL 1000 milliseconds, time)
-      WHEN '${group_interval:raw}' = '5s' THEN date_bin(INTERVAL 5000 milliseconds, time)
-      WHEN '${group_interval:raw}' = '10s' THEN date_bin(INTERVAL 10000 milliseconds, time)
-      WHEN '${group_interval:raw}' = '30s' THEN date_bin(INTERVAL 30000 milliseconds, time)
-      WHEN '${group_interval:raw}' = '1m' THEN date_bin(INTERVAL 60000 milliseconds, time)
-      WHEN '${group_interval:raw}' = '5m' THEN date_bin(INTERVAL 300000 milliseconds, time)
-      WHEN '${group_interval:raw}' = '10m' THEN date_bin(INTERVAL 600000 milliseconds, time)
-      WHEN '${group_interval:raw}' = '30m' THEN date_bin(INTERVAL 1800000 milliseconds, time)
-      WHEN '${group_interval:raw}' = '1h' THEN date_bin(INTERVAL 3600000 milliseconds, time)
-    END AS time_bucket,
-    value
-  FROM spine
-  WHERE
-    point = 'a_voltage'
-    AND time >= $__timeFrom()
-    AND time <= $__timeTo()
-)
-GROUP BY time_bucket
+WHERE rn = 1
+ORDER BY point
 ```
