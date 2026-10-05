@@ -255,8 +255,11 @@ writer that failed, or a missed deadline.
   name; `insecure` uses TLS without verification (also for `tcp://`). MQTT v5, keep-alive
   30 s, clean start, 10 s connect timeout.
 - Connects on the first point and reconnects after a publish error or a lost connection,
-  with backoff (1 s doubling to 30 s). Points that arrive while no connection is possible
-  are **dropped**; the count is logged on the next successful connect.
+  with backoff (1 s doubling to 30 s; the first redial after a publish error is
+  immediate, the backoff is reset by the next successful publish). A message the broker
+  rejects with an error reason code (e.g. ACL) is logged and the session kept. Points
+  that arrive while no connection is possible are **dropped**; the count is logged on
+  the next successful connect.
 - Topic: `<topic>/<device>/<point>` (`topic` default `datalogger`); payload
   `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}`; `qos` 0–2, `retain`.
 - `client_id` defaults to `logger-<8 random chars>`; username/password are optional.
@@ -312,10 +315,10 @@ writer that failed, or a missed deadline.
 - At least one device and one output are required; device and output names must be
   unique; outputs may only reference existing devices; `exclude_points` entries must be
   `device/point` with a device of that output and an existing point; API `listen` must be
-  `host:port`;
-  every device needs at least one point; point names are unique per device; device and
-  point names must not contain `/`; `parallelism` 1–100; `poll_interval` > 0;
-  `timeout` > 0.
+  `host:port`; every device needs at least one point; point names are unique per
+  device; device and point names must not contain `/`; the `topic`, devices and
+  non-excluded points of an MQTT output must not contain `+` or `#` (wildcards: a broker
+  closes the connection); `parallelism` 1–100; `poll_interval` > 0; `timeout` > 0.
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
   poll interval, at most 10 s; point `scale` 1; HTTP method GET and response type json;
   MQTT topic `datalogger` and client ID `logger-<random>`) and then

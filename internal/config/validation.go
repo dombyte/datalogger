@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"slices"
 	"strings"
@@ -17,6 +18,9 @@ const (
 
 	// pathSeparator separates device and point in exclude_points ("device/point").
 	pathSeparator = "/"
+
+	// mqttWildcards are not allowed in the topic names an MQTT client publishes to.
+	mqttWildcards = "+#\x00"
 )
 
 // Validate validates the entire configuration.
@@ -73,14 +77,47 @@ func (c *Config) validateOutputs(devices map[string]map[string]bool) error {
 			return fmt.Errorf("duplicate output name: %s", o.Name)
 		}
 		seen[o.Name] = true
-
-		for _, deviceName := range o.Devices {
-			if devices[deviceName] == nil {
-				return fmt.Errorf("output %s references unknown device: %s", o.Name, deviceName)
-			}
+		if err := o.validateReferences(devices); err != nil {
+			return err
 		}
-		if err := o.validateExcludePoints(devices); err != nil {
+	}
+	return nil
+}
+
+// validateReferences checks the devices, exclude_points and, for MQTT, the topic names
+// of an output.
+func (o *Output) validateReferences(devices map[string]map[string]bool) error {
+	for _, deviceName := range o.Devices {
+		if devices[deviceName] == nil {
+			return fmt.Errorf("output %s references unknown device: %s", o.Name, deviceName)
+		}
+	}
+	if err := o.validateExcludePoints(devices); err != nil {
+		return fmt.Errorf("output %s: %w", o.Name, err)
+	}
+	if o.Type == "mqtt" {
+		if err := o.validateTopicNames(devices); err != nil {
 			return fmt.Errorf("output %s: %w", o.Name, err)
+		}
+	}
+	return nil
+}
+
+// validateTopicNames checks that the device and point names published by an MQTT output
+// are valid in a topic name: a broker closes the connection on + or #. Excluded points
+// are never published.
+func (o *Output) validateTopicNames(devices map[string]map[string]bool) error {
+	for _, device := range o.Devices {
+		if strings.ContainsAny(device, mqttWildcards) {
+			return fmt.Errorf("device name %q must not contain + or # for MQTT", device)
+		}
+		for _, point := range slices.Sorted(maps.Keys(devices[device])) {
+			entry := device + pathSeparator + point
+			excluded := slices.Contains(o.ExcludePoints, entry)
+			if strings.ContainsAny(point, mqttWildcards) && !excluded {
+				return fmt.Errorf("point %s must not contain + or # for MQTT; rename it or "+
+					"list it in exclude_points", entry)
+			}
 		}
 	}
 	return nil
@@ -268,6 +305,9 @@ func (m *MqttConfig) Validate() error {
 	}
 	if m.QoS < 0 || m.QoS > maxQoS {
 		return errors.New("qos must be 0, 1, or 2")
+	}
+	if strings.ContainsAny(m.Topic, mqttWildcards) {
+		return fmt.Errorf("topic %q must not contain + or #", m.Topic)
 	}
 	return nil
 }

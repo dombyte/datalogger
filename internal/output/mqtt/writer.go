@@ -21,6 +21,9 @@ const (
 	initialBackoff = 1 * time.Second
 	maxBackoff     = 30 * time.Second
 	backoffFactor  = 2
+
+	// reasonCodeFailure is the first MQTT v5 reason code that reports an error.
+	reasonCodeFailure = 0x80
 )
 
 // ErrMissingDependency is returned by New when a required dependency is missing.
@@ -122,18 +125,40 @@ func (w *Writer) publish(ctx context.Context, dp datasource.DataPoint) {
 		return
 	}
 
-	_, err = w.session.Publish(ctx, &paho.Publish{
+	resp, err := w.session.Publish(ctx, &paho.Publish{
 		Topic:   topic,
 		Payload: payload,
 		QoS:     w.settings.QoS,
 		Retain:  w.settings.Retain,
 	})
 	if err != nil {
-		w.logger.Error().Err(err).Str("topic", topic).Msg("Failed to publish, reconnecting")
-		w.disconnect()
+		w.publishFailed(topic, resp, err)
 		return
 	}
+	w.backoff = 0
 	w.logger.Debug().Str("topic", topic).Msg("Published MQTT message")
+}
+
+// publishFailed handles a failed publish. A broker that rejected the message (PUBACK or
+// PUBREC with an error reason code, e.g. the ACL denies the topic) keeps the session;
+// any other error drops it. The first redial is immediate, repeated failures without a
+// successful publish back off like failed dials, so a broker that closes the
+// connection on every publish is not redialed for every point.
+func (w *Writer) publishFailed(topic string, resp *paho.PublishResponse, err error) {
+	if resp != nil && resp.ReasonCode >= reasonCodeFailure {
+		w.logger.Error().Err(err).Str("topic", topic).Uint8("reason_code", resp.ReasonCode).
+			Msg("Broker rejected MQTT message")
+		return
+	}
+	w.logger.Error().Err(err).Str("topic", topic).Msg("Failed to publish, reconnecting")
+	w.disconnect()
+	w.nextDial = w.clock.Now().Add(w.backoff)
+	w.backoff = nextBackoff(w.backoff)
+}
+
+// nextBackoff doubles the backoff, from initialBackoff up to maxBackoff.
+func nextBackoff(backoff time.Duration) time.Duration {
+	return min(max(backoff*backoffFactor, initialBackoff), maxBackoff)
 }
 
 // connected returns true with an open session; it dials when the backoff allows.
@@ -153,13 +178,15 @@ func (w *Writer) connected(ctx context.Context) bool {
 
 	session, err := w.dialer.Dial(ctx)
 	if err != nil {
-		w.backoff = min(max(w.backoff*backoffFactor, initialBackoff), maxBackoff)
+		w.backoff = nextBackoff(w.backoff)
 		w.nextDial = w.clock.Now().Add(w.backoff)
 		w.logger.Error().Err(err).Dur("retry_in", w.backoff).Msg("MQTT connect failed")
 		return false
 	}
 
-	w.session, w.backoff = session, 0
+	// The backoff is reset by the first successful publish, not here: a broker that
+	// accepts the connection but drops it on publish must not be redialed per point.
+	w.session = session
 	log := w.logger.Info()
 	if w.dropped > 0 {
 		log = log.Int("dropped", w.dropped)

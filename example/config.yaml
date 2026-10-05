@@ -257,7 +257,8 @@ outputs:
       - inverter/fault_no_grid
 
   # ----- MQTT with authentication ------------------------------------------------------
-  # Topic per point: <topic>/<device>/<point>
+  # Topic per point: <topic>/<device>/<point>; topic, device and point names must not
+  # contain + or # (list such points in exclude_points).
   # Payload: {"value": ..., "unit": "...", "timestamp": "<RFC3339 with nanoseconds>"}
   # address schemes: tcp:// (default when omitted), tls:// or ssl:// (verified TLS).
   # While the broker is unreachable, points for this output are dropped (and counted).

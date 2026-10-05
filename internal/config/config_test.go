@@ -1025,6 +1025,68 @@ func TestValidateNamesAndExcludePoints(t *testing.T) {
 	}
 }
 
+// toMQTT turns the output of namesConfig into an MQTT output.
+func toMQTT(c *Config) {
+	c.Outputs[0].Type = "mqtt"
+	c.Outputs[0].OutputSpecific = OutputSpecific{Mqtt: MqttConfig{
+		Address: "tcp://localhost:1883", Topic: "logger",
+	}}
+}
+
+// Regression: + and # are wildcards, not allowed in a published topic; the broker
+// closed the connection and the writer reconnected for every such point.
+func TestValidateMQTTTopicNames(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		change  func(*Config)
+		wantErr string
+	}{
+		{name: "valid", change: toMQTT},
+		{
+			name:   "wildcards are fine for other outputs",
+			change: func(c *Config) { c.Devices[0].Name, c.Outputs[0].Devices = "m+1", []string{"m+1"} },
+		},
+		{
+			name: "excluded point is never published",
+			change: func(c *Config) {
+				toMQTT(c)
+				c.Devices[0].Points[1].Name = "l1+l2"
+				c.Outputs[0].ExcludePoints = []string{"meter/l1+l2"}
+			},
+		},
+		{
+			name: "device name",
+			change: func(c *Config) {
+				toMQTT(c)
+				c.Devices[0].Name, c.Outputs[0].Devices = "m#1", []string{"m#1"}
+			},
+			wantErr: `device name "m#1" must not contain + or # for MQTT`,
+		},
+		{
+			name:    "point name",
+			change:  func(c *Config) { toMQTT(c); c.Devices[0].Points[1].Name = "l1+l2" },
+			wantErr: "point meter/l1+l2 must not contain + or # for MQTT",
+		},
+		{
+			name:    "topic prefix",
+			change:  func(c *Config) { toMQTT(c); c.Outputs[0].OutputSpecific.Mqtt.Topic = "home/#" },
+			wantErr: `topic "home/#" must not contain + or #`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := namesConfig(tt.change).Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 // TestLoadExprAndLookups checks that expressions, hex lookup codes and exclude_points
 // are read from YAML.
 func TestLoadExprAndLookups(t *testing.T) {
