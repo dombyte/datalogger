@@ -613,8 +613,8 @@ The required CI checks MUST be green before a PR is merged.
 
 Known gaps to the rules above, one branch each; update this list when an item is done.
 
-- **Coverage below 100 %:** `datasource/http` 99.2 %, `datasource/modbus` 98.3 %,
-  `output/mqtt` 99.0 %, `output/csv` 95.6 %, `output/api` 97.8 %. The open blocks are
+- **Coverage below 100 %:** `datasource/http` 99.4 %, `datasource/modbus` 98.4 %,
+  `output/mqtt` 99.1 %, `output/csv` 96.2 %, `output/api` 97.7 %. The open blocks are
   defensive branches that tests cannot reach: errors already ruled out at construction
   (HTTP request build, Modbus client creation and range coverage), a library call that
   never fails (`SetUnitId`), the TLS server name fallback for an address without port
