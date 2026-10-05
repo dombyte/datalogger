@@ -114,7 +114,8 @@ Rules:
 ## 5. Data Flow and Ownership
 
 ```
-DeviceReader.Start ──data channel (unbuffered)──▶ router goroutine (one per device, in app)
+DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)──▶ router goroutine
+                                                    │ (one per device, in app)
                                                     │ non-blocking send, copy per output
                                                     ▼
                                   per-output input channel (buffer_size, default 1000)
@@ -123,7 +124,8 @@ DeviceReader.Start ──data channel (unbuffered)──▶ router goroutine (on
 ```
 
 - **Readers own** their data channel: they are the only senders and close it when they
-  stop. A poll sends all its points after the reads are done.
+  stop. A poll sends all its points as one batch after the reads are done (a poll
+  without points sends nothing), so the router sees one consistent snapshot per poll.
 - **The router** sends each point to every output whose `devices` list contains the device.
   The send is **non-blocking**: if an output channel is full, the point is **dropped for
   that output only** and a warning is logged. A slow output never blocks a device or the

@@ -24,13 +24,11 @@ func fakeReader(t *testing.T, name string, points ...datasource.DataPoint) *dsmo
 	t.Helper()
 	r := dsmocks.NewMockDeviceReader(t)
 	r.EXPECT().Name().Return(name).Maybe()
-	r.EXPECT().Start(mock.Anything).RunAndReturn(func(ctx context.Context) <-chan datasource.DataPoint {
-		ch := make(chan datasource.DataPoint)
+	r.EXPECT().Start(mock.Anything).RunAndReturn(func(ctx context.Context) <-chan []datasource.DataPoint {
+		ch := make(chan []datasource.DataPoint)
 		go func() {
 			defer close(ch)
-			for _, dp := range points {
-				ch <- dp
-			}
+			ch <- points
 			<-ctx.Done()
 		}()
 		return ch
@@ -115,8 +113,8 @@ func TestReaderThatStopsFailsRun(t *testing.T) {
 	t.Parallel()
 	r := dsmocks.NewMockDeviceReader(t)
 	r.EXPECT().Name().Return("dev1").Maybe()
-	r.EXPECT().Start(mock.Anything).RunAndReturn(func(context.Context) <-chan datasource.DataPoint {
-		ch := make(chan datasource.DataPoint)
+	r.EXPECT().Start(mock.Anything).RunAndReturn(func(context.Context) <-chan []datasource.DataPoint {
+		ch := make(chan []datasource.DataPoint)
 		close(ch)
 		return ch
 	}).Once()
@@ -149,10 +147,8 @@ func TestWriterThatStopsFailsRunAndShutdown(t *testing.T) {
 
 func TestRouteDropsOnlyForFullOutput(t *testing.T) {
 	t.Parallel()
-	data := make(chan datasource.DataPoint, 3)
-	for range 3 {
-		data <- point("dev1")
-	}
+	data := make(chan []datasource.DataPoint, 1)
+	data <- []datasource.DataPoint{point("dev1"), point("dev1"), point("dev1")}
 	close(data)
 	full := make(chan datasource.DataPoint) // nobody reads
 	roomy := make(chan datasource.DataPoint, 3)

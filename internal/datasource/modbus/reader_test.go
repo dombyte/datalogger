@@ -31,8 +31,10 @@ type harness struct {
 	clock  *clocktest.Fake
 	dialer *mocks.MockDialer
 	client *mocks.MockClient
-	data   <-chan datasource.DataPoint
-	cancel context.CancelFunc
+	data   <-chan []datasource.DataPoint
+	// pending holds the rest of the last received poll; receive returns it point by point.
+	pending []datasource.DataPoint
+	cancel  context.CancelFunc
 }
 
 func settings(points ...modbus.Point) modbus.Settings {
@@ -70,12 +72,23 @@ func (h *harness) advance(n int, d time.Duration) {
 // receive returns the next data point.
 func (h *harness) receive() datasource.DataPoint {
 	h.t.Helper()
+	if len(h.pending) == 0 {
+		h.pending = h.receivePoll()
+	}
+	dp := h.pending[0]
+	h.pending = h.pending[1:]
+	return dp
+}
+
+// receivePoll returns the points of the next poll.
+func (h *harness) receivePoll() []datasource.DataPoint {
+	h.t.Helper()
 	select {
-	case dp := <-h.data:
-		return dp
+	case points := <-h.data:
+		return points
 	case <-time.After(time.Second):
 		h.t.Fatal("no data point")
-		return datasource.DataPoint{}
+		return nil
 	}
 }
 
@@ -286,8 +299,8 @@ func TestRangeModeFailedChunkFailsPoll(t *testing.T) {
 	h.advance(1, interval)
 	<-failed
 	select {
-	case dp := <-h.data:
-		t.Fatalf("unexpected data point %v", dp)
+	case points := <-h.data:
+		t.Fatalf("unexpected data points %v", points)
 	case <-time.After(50 * time.Millisecond):
 	}
 }
@@ -331,9 +344,14 @@ func TestPollInProgressAtShutdownIsDelivered(t *testing.T) {
 	h.cancel()
 	close(release)
 
-	var got []string
-	for dp := range h.data {
-		got = append(got, dp.PointName)
+	var got [][]string
+	for points := range h.data {
+		var names []string
+		for _, dp := range points {
+			names = append(names, dp.PointName)
+		}
+		got = append(got, names)
 	}
-	assert.ElementsMatch(t, []string{"a", "b"}, got, "both points of the running poll arrive")
+	require.Len(t, got, 1, "the running poll arrives as one batch")
+	assert.ElementsMatch(t, []string{"a", "b"}, got[0], "both points of the running poll arrive")
 }

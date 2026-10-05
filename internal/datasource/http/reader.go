@@ -113,14 +113,14 @@ func (r *Reader) Name() string {
 
 // Start starts the poll loop; the data channel is closed when the loop ends after ctx
 // is cancelled.
-func (r *Reader) Start(ctx context.Context) <-chan datasource.DataPoint {
-	dataCh := make(chan datasource.DataPoint)
+func (r *Reader) Start(ctx context.Context) <-chan []datasource.DataPoint {
+	dataCh := make(chan []datasource.DataPoint)
 	go r.pollLoop(ctx, dataCh)
 	return dataCh
 }
 
 // pollLoop polls on every tick until ctx is cancelled.
-func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- datasource.DataPoint) {
+func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
 	defer close(dataCh)
 
 	ticker := r.clock.NewTicker(r.settings.PollInterval)
@@ -137,7 +137,7 @@ func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- datasource.DataPoin
 }
 
 // pollOnce waits out the backoff, requests the endpoint and sends the parsed points.
-func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- datasource.DataPoint) {
+func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
 	if r.backoff > 0 {
 		r.logger.Warn().Dur("wait", r.backoff).Msg("Waiting before retry after a failure")
 		if !clock.Sleep(ctx, r.clock, r.backoff) {
@@ -159,11 +159,12 @@ func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- datasource.DataPoin
 	send(dataCh, points)
 }
 
-// send delivers the points of a finished poll, also during shutdown: the router reads
-// until the reader closes the channel, so data that was already read is never lost.
-func send(dataCh chan<- datasource.DataPoint, points []datasource.DataPoint) {
-	for _, dp := range points {
-		dataCh <- dp
+// send delivers the points of a finished poll as one batch, also during shutdown: the
+// router reads until the reader closes the channel, so data that was already read is
+// never lost. A poll without points sends nothing.
+func send(dataCh chan<- []datasource.DataPoint, points []datasource.DataPoint) {
+	if len(points) > 0 {
+		dataCh <- points
 	}
 }
 

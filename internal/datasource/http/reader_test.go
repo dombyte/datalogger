@@ -28,10 +28,12 @@ const interval = time.Second
 var start = time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 
 type harness struct {
-	t      *testing.T
-	clock  *clocktest.Fake
-	data   <-chan datasource.DataPoint
-	cancel context.CancelFunc
+	t     *testing.T
+	clock *clocktest.Fake
+	data  <-chan []datasource.DataPoint
+	// pending holds the rest of the last received poll; receive returns it point by point.
+	pending []datasource.DataPoint
+	cancel  context.CancelFunc
 }
 
 func settings(address string, points ...http.Point) http.Settings {
@@ -69,20 +71,34 @@ func (h *harness) advance(n int, d time.Duration) {
 
 func (h *harness) receive() datasource.DataPoint {
 	h.t.Helper()
+	if len(h.pending) == 0 {
+		h.pending = h.receivePoll()
+	}
+	dp := h.pending[0]
+	h.pending = h.pending[1:]
+	return dp
+}
+
+// receivePoll returns the points of the next poll.
+func (h *harness) receivePoll() []datasource.DataPoint {
+	h.t.Helper()
 	select {
-	case dp := <-h.data:
-		return dp
+	case points := <-h.data:
+		return points
 	case <-time.After(time.Second):
 		h.t.Fatal("no data point")
-		return datasource.DataPoint{}
+		return nil
 	}
 }
 
 func (h *harness) expectNothing() {
 	h.t.Helper()
+	if len(h.pending) > 0 {
+		h.t.Fatalf("unexpected data points %v", h.pending)
+	}
 	select {
-	case dp := <-h.data:
-		h.t.Fatalf("unexpected data point %v", dp)
+	case points := <-h.data:
+		h.t.Fatalf("unexpected data points %v", points)
 	case <-time.After(50 * time.Millisecond):
 	}
 }
