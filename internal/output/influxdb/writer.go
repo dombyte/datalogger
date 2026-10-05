@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -122,13 +123,26 @@ func (w *Writer) loop(ctx context.Context, input <-chan datasource.DataPoint) {
 				w.flush(ctx)
 				return
 			}
-			w.batch = append(w.batch, newPoint(dp))
+			w.add(dp)
 			if len(w.batch) >= w.settings.BatchSize {
 				w.flush(ctx)
 			}
 		case <-ticker.C():
 			w.flush(ctx)
 		}
+	}
+}
+
+// add appends dp to the batch. A value line protocol cannot encode is skipped: the
+// client would fail the whole batch, which holds the points of every device.
+func (w *Writer) add(dp datasource.DataPoint) {
+	switch dp.Value.(type) {
+	case float64, int64, uint64, bool, string, nil:
+		w.batch = append(w.batch, newPoint(dp))
+	default:
+		w.logger.Warn().Str("device", dp.DeviceName).Str("point", dp.PointName).
+			Str("type", fmt.Sprintf("%T", dp.Value)).
+			Msg("Skipping point with a value InfluxDB cannot store")
 	}
 }
 
@@ -175,8 +189,23 @@ func (w *Writer) writeWithRetry(ctx context.Context) error {
 		if err = w.client.WritePoints(ctx, w.batch); err == nil {
 			return nil
 		}
+		if !retryable(err) {
+			return fmt.Errorf("not retried: %w", err)
+		}
 	}
 	return fmt.Errorf("after %d retries: %w", w.settings.MaxRetries, err)
+}
+
+// retryable reports whether a write may succeed when repeated: network errors, server
+// errors (5xx) and 429. Other HTTP errors (bad token, unknown database, rejected lines
+// of a partial write) fail the same way again.
+func retryable(err error) bool {
+	var serverErr *influxdb3.ServerError
+	if !errors.As(err, &serverErr) {
+		return true
+	}
+	return serverErr.StatusCode >= http.StatusInternalServerError ||
+		serverErr.StatusCode == http.StatusTooManyRequests
 }
 
 // closeClient releases the client.

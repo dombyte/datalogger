@@ -206,3 +206,49 @@ func TestCancelEndsRetries(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+// Regression: a 4xx answer (bad token, rejected lines) was retried MaxRetries times,
+// blocking the writer for nothing; it is now dropped at once.
+func TestDoesNotRetryClientErrors(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 3, RetryDelay: time.Hour})
+	h.expectWrites(&influxdb3.ServerError{StatusCode: 401, Message: "unauthorized"}, nil)
+
+	h.input <- point("lost", 1.0, "")
+	h.write()
+	h.input <- point("next", 2.0, "") // no retry delay in between
+	assert.Contains(t, h.write()[0], "point=next")
+	h.stop()
+}
+
+func TestRetriesServerErrorsAndRateLimits(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 2, RetryDelay: time.Second})
+	h.expectWrites(&influxdb3.ServerError{StatusCode: 503}, &influxdb3.ServerError{StatusCode: 429}, nil)
+
+	h.input <- point("power", 1.0, "")
+	h.write()
+	h.advance(2, time.Second) // ticker + retry delay
+	h.write()
+	h.advance(2, time.Second)
+	assert.Contains(t, h.write()[0], "point=power")
+	h.stop()
+}
+
+// Regression: a value the client cannot encode (e.g. a JSON object from an HTTP
+// device) failed WritePoints for the whole batch, with the points of every device.
+func TestSkipsValuesLineProtocolCannotEncode(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 2})
+	h.expectWrites(nil)
+
+	h.input <- point("object", map[string]any{"a": 1.0}, "")
+	h.input <- point("list", []any{1.0}, "")
+	h.input <- point("power", 1.5, "W")
+	h.input <- point("count", int64(3), "")
+	assert.Equal(t, []string{
+		"meter,point=power,unit=W value=1.5 1790683200000000000\n",
+		"meter,point=count value=3i 1790683200000000000\n",
+	}, h.write())
+	h.stop()
+}
