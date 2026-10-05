@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -177,7 +178,7 @@ func (r *Reader) poll(ctx context.Context) ([]datasource.DataPoint, error) {
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, redactURLError(err)
 	}
 	defer resp.Body.Close()
 
@@ -204,7 +205,7 @@ func (r *Reader) newRequest(ctx context.Context) (*http.Request, error) {
 
 	req, err := http.NewRequestWithContext(ctx, method, r.settings.Address, body)
 	if err != nil {
-		return nil, err
+		return nil, redactURLError(err)
 	}
 	for k, v := range r.settings.Headers {
 		req.Header.Set(k, v)
@@ -288,4 +289,27 @@ func isTransportError(err error) bool {
 	return errors.As(err, &netErr) ||
 		errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// redactURLError returns err with the URL of a *url.Error reduced to scheme, host and
+// path. net/http only hides the password; API keys in the query (?appid=…) or user
+// info would otherwise be logged with every failed poll.
+func redactURLError(err error) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return err
+	}
+	redacted := *urlErr
+	redacted.URL = redactURL(urlErr.URL)
+	return &redacted
+}
+
+// redactURL returns scheme, host and path of raw; an address that cannot be parsed is
+// not shown at all.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid address>"
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
 }
