@@ -165,8 +165,10 @@ devices:
 
   # ----- HTTP GET, JSON response -------------------------------------------------------
   # Values are read with gjson paths: https://github.com/tidwall/gjson/blob/master/SYNTAX.md
-  # Without type, numbers become float64 and booleans stay booleans; set type
-  # (float64, int64, uint64, bool, string) to convert explicitly. scale and offset apply to
+  # Without type, numbers become float64 and booleans and strings stay; set type
+  # (float64, int64, uint64, bool, string) to convert explicitly (numbers sent as strings
+  # included). null, objects/arrays (without type: string) and values that do not fit the
+  # type are skipped and logged. scale and offset apply to
   # numbers (value * scale + offset, delivered as float64); with the defaults (1, 0) values
   # keep their type.
   - name: energy_meter

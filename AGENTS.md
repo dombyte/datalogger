@@ -223,16 +223,18 @@ writer that failed, or a missed deadline.
 - `method` GET (default) or POST with `body`; `headers` are sent as given; `insecure`
   disables certificate verification for this device.
 - `response_type`: `json` (default; values via gjson `json_path`; `type` float*/int*/uint*/
-  bool/string converts, otherwise numbers become float64 and bools stay bool) or `text`
-  (the whole body as one string); anything else is rejected by validation. JSON points
-  need a `json_path`.
+  bool/string converts, numbers sent as strings included; otherwise numbers become
+  float64 and bools and strings stay) or `text` (the whole body as one string); anything
+  else is rejected by validation. JSON points need a `json_path`.
 - `scale`/`offset` apply to numeric JSON values: value × scale + offset as float64. With
   the defaults (1, 0) the value keeps its parsed type, so existing InfluxDB field types do
   not change; bools and strings are never scaled.
 - Non-200 responses are errors. All points of one response share its receive timestamp.
-- A point that cannot be extracted (e.g. its `json_path` is not in the response) is
-  skipped; it is warned about once, further failures are logged at debug, and an info
-  line follows when it can be read again.
+- A point that cannot be extracted is skipped: its `json_path` is not in the response,
+  the value is `null`, an object or array without `type: string`, or does not fit its
+  `type` (`"N/A"` for `int64`, a negative number for `uint*`); gjson would deliver 0 or
+  false, which looks like a reading. Such a point is warned about once, further failures
+  are logged at debug, and an info line follows when it can be read again.
 - `parallelism` has no effect: one request per poll, points are parsed in order.
 - A request that cannot be built (bad URL, method) fails startup; an unreachable endpoint
   does not.
