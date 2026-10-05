@@ -413,7 +413,7 @@ writer that failed, or a missed deadline.
   tests behind `//go:build integration` and are not part of `go test ./...`.
 - Always run with `-race`. New code comes with tests; a bug fix comes with a regression
   test that fails before the fix.
-- Coverage (SHOULD): ≥ 70 % per package with logic, ≥ 80 % for packages with five or more
+- Coverage (SHOULD): ≥ 90 % per package with logic, ≥ 100 % for packages with five or more
   complex functions; `cmd/datalogger` and `app` are covered by the startup test instead.
 
 ---
@@ -560,6 +560,10 @@ The required CI checks MUST be green before a PR is merged.
 
 Known gaps to the rules above, one branch each; update this list when an item is done.
 
+- **Coverage below the targets in 9.5:** `output/csv` 77.9 %, `output/influxdb` 84.1 %,
+  `output/mqtt` 85.4 % (target 90 %); no package with five or more complex functions
+  reaches 100 % (`config` 92.5 %, `datasource/http` 91.1 %, `datasource/modbus` 93.0 %,
+  `transform` 97.5 %).
 - **Mixed value types in InfluxDB:** all points of a device share the `value` field, but
   HTTP points can deliver bool, int64 or string next to float64, and InfluxDB 3 keeps one
   type per column, so such a device's writes can be rejected. Today: keep such points
