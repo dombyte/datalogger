@@ -768,7 +768,7 @@ func TestApplyDefaults(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, cfg.applyDefaults())
+	cfg.applyDefaults()
 
 	assert.Equal(t, "GET", cfg.Devices[0].DeviceSpecific.HTTP.Method)
 	assert.Equal(t, "json", cfg.Devices[0].DeviceSpecific.HTTP.ResponseType)
@@ -776,7 +776,7 @@ func TestApplyDefaults(t *testing.T) {
 	assert.Equal(t, "text", cfg.Devices[1].DeviceSpecific.HTTP.ResponseType)
 
 	assert.Equal(t, "datalogger", cfg.Outputs[0].OutputSpecific.Mqtt.Topic)
-	assert.Regexp(t, `^logger-[a-zA-Z0-9]{8}$`, cfg.Outputs[0].OutputSpecific.Mqtt.ClientID)
+	assert.Regexp(t, `^logger-[a-z2-7]{8}$`, cfg.Outputs[0].OutputSpecific.Mqtt.ClientID)
 	assert.Equal(t, "custom", cfg.Outputs[1].OutputSpecific.Mqtt.Topic)
 	assert.Equal(t, "fixed", cfg.Outputs[1].OutputSpecific.Mqtt.ClientID)
 }
@@ -876,7 +876,7 @@ func TestApplyDefaultsScale(t *testing.T) {
 		Type:   "modbus",
 		Points: []Point{{Name: "unset"}, {Name: "set", Scale: 0.1}},
 	}}}
-	require.NoError(t, cfg.applyDefaults())
+	cfg.applyDefaults()
 	assert.InDelta(t, 1.0, cfg.Devices[0].Points[0].Scale, 0)
 	assert.InDelta(t, 0.1, cfg.Devices[0].Points[1].Scale, 0)
 }
@@ -890,7 +890,7 @@ func TestApplyDefaultsTimeout(t *testing.T) {
 		{Name: "slow", PollInterval: time.Minute},
 		{Name: "set", PollInterval: time.Minute, Timeout: 2 * time.Second},
 	}}
-	require.NoError(t, cfg.applyDefaults())
+	cfg.applyDefaults()
 	assert.Equal(t, 5*time.Second, cfg.Devices[0].Timeout)
 	assert.Equal(t, 10*time.Second, cfg.Devices[1].Timeout)
 	assert.Equal(t, 2*time.Second, cfg.Devices[2].Timeout)

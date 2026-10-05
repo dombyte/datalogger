@@ -2,8 +2,7 @@ package config
 
 import (
 	"crypto/rand"
-	"fmt"
-	"math/big"
+	"strings"
 	"time"
 )
 
@@ -21,16 +20,13 @@ const (
 
 // applyDefaults fills in optional settings that were omitted. Load runs it before
 // Validate, so Validate only checks and never changes the config.
-func (c *Config) applyDefaults() error {
+func (c *Config) applyDefaults() {
 	for i := range c.Devices {
 		c.Devices[i].applyDefaults()
 	}
 	for i := range c.Outputs {
-		if err := c.Outputs[i].applyDefaults(); err != nil {
-			return fmt.Errorf("output %s: %w", c.Outputs[i].Name, err)
-		}
+		c.Outputs[i].applyDefaults()
 	}
-	return nil
 }
 
 // applyDefaults fills in the timeout, the point scale, the HTTP method and the response
@@ -58,31 +54,13 @@ func (d *Device) applyDefaults() {
 }
 
 // applyDefaults fills in the MQTT topic and a random client ID.
-func (o *Output) applyDefaults() error {
+func (o *Output) applyDefaults() {
 	m := &o.OutputSpecific.Mqtt
 	if m.Topic == "" {
 		m.Topic = defaultMQTTTopic
 	}
 	if m.ClientID == "" {
-		suffix, err := generateRandomString(clientIDSuffixLen)
-		if err != nil {
-			return fmt.Errorf("client_id: %w", err)
-		}
-		m.ClientID = "logger-" + suffix
+		// rand.Text is base32 (A-Z, 2-7) and never fails.
+		m.ClientID = "logger-" + strings.ToLower(rand.Text()[:clientIDSuffixLen])
 	}
-	return nil
-}
-
-// generateRandomString generates a random alphanumeric string of the given length.
-func generateRandomString(n int) (string, error) {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
-		if err != nil {
-			return "", fmt.Errorf("generate random string: %w", err)
-		}
-		b[i] = letters[num.Int64()]
-	}
-	return string(b), nil
 }
