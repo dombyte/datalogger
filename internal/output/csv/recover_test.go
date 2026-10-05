@@ -100,3 +100,43 @@ func read(t *testing.T, path string) string {
 }
 
 const header = "timestamp,device,point,value,unit\n"
+
+func TestReopenFailureIsLoggedAndRetried(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "data.csv")
+	var logs bytes.Buffer
+	w, err := New(Deps{
+		Settings: Settings{FilePath: path},
+		Clock:    clocktest.NewFake(start),
+		Log:      zerolog.New(&logs).Level(zerolog.InfoLevel),
+	})
+	require.NoError(t, err)
+
+	// A directory in place of the file: writes and reopening fail.
+	require.NoError(t, w.file.Close())
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0o755))
+	w.handlePoint(row(1))
+	assert.Equal(t, []string{"error", "error"}, levels(&logs), "write and reopen failed")
+
+	require.NoError(t, os.Remove(path))
+	w.handlePoint(row(2)) // fails on the old file, reopens
+	w.handlePoint(row(3))
+	assert.Equal(t, header+"2026-09-29T12:00:00Z,meter,power,3,\n", read(t, path))
+}
+
+func TestCloseErrorIsLogged(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	w, err := New(Deps{
+		Settings: Settings{FilePath: filepath.Join(t.TempDir(), "data.csv")},
+		Clock:    clocktest.NewFake(start),
+		Log:      zerolog.New(&logs),
+	})
+	require.NoError(t, err)
+
+	w.close()
+	w.close() // the file is already closed
+
+	assert.Equal(t, []string{"error"}, levels(&logs))
+}

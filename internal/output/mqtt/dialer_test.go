@@ -2,7 +2,9 @@ package mqtt_test
 
 import (
 	"context"
+	"crypto/tls"
 	"net"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/eclipse/paho.golang/packets"
@@ -108,4 +110,73 @@ func TestDialFailsWhenNothingListens(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.Dial(context.Background())
 	assert.Error(t, err)
+}
+
+// tlsBroker is fakeBroker behind TLS with a self-signed certificate for 127.0.0.1.
+func tlsBroker(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(nil) // only for its test certificate
+	srv.StartTLS()
+	certs := srv.TLS.Certificates
+	srv.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	listener = tls.NewListener(listener, &tls.Config{Certificates: certs, MinVersion: tls.VersionTLS12})
+	t.Cleanup(func() { listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				for {
+					cp, err := packets.ReadPacket(conn)
+					if err != nil || answer(conn, cp) != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return listener.Addr().String()
+}
+
+func TestDialTLS(t *testing.T) {
+	t.Parallel()
+	addr := tlsBroker(t)
+
+	insecure, err := mqtt.NewDialer(mqtt.ConnSettings{Address: "tls://" + addr, Insecure: true})
+	require.NoError(t, err)
+	session, err := insecure.Dial(context.Background())
+	require.NoError(t, err, "insecure skips the certificate check")
+	require.NoError(t, session.Disconnect(&paho.Disconnect{}))
+
+	verified, err := mqtt.NewDialer(mqtt.ConnSettings{Address: "tls://" + addr})
+	require.NoError(t, err)
+	_, err = verified.Dial(context.Background())
+	assert.ErrorContains(t, err, "tls handshake", "the self-signed certificate is rejected")
+}
+
+func TestDialFailsWhenBrokerRejectsConnect(t *testing.T) {
+	t.Parallel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { listener.Close() })
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = packets.ReadPacket(conn)
+		_, _ = (&packets.Connack{ReasonCode: packets.ConnackNotAuthorized}).WriteTo(conn)
+		conn.Close()
+	}()
+
+	d, err := mqtt.NewDialer(mqtt.ConnSettings{Address: listener.Addr().String()})
+	require.NoError(t, err)
+	_, err = d.Dial(context.Background())
+	assert.ErrorContains(t, err, "connect:")
 }

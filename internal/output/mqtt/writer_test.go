@@ -3,6 +3,7 @@ package mqtt_test
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -166,4 +167,38 @@ func TestReconnectsAfterPublishErrorAndLostConnection(t *testing.T) {
 	h.send("c")   // noticed before publishing: redial
 	h.stop()
 	assert.Equal(t, "logger/meter/c", (<-goodPubs).Topic)
+}
+
+func TestNameAndStopOnCancelWithoutSession(t *testing.T) {
+	t.Parallel()
+	w, err := mqtt.New(mqtt.Deps{
+		Settings: mqtt.Settings{Name: "broker"},
+		Dialer:   mocks.NewMockDialer(t), // never dialed: no point arrives
+		Clock:    clocktest.NewFake(start),
+		Log:      zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "broker", w.Name())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := w.Start(ctx, make(chan datasource.DataPoint))
+	cancel()
+	_, open := <-done
+	assert.False(t, open, "the writer stops when ctx is cancelled")
+}
+
+func TestSkipsPointThatCannotBeEncoded(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	p, _ := session(t)
+	h.dialer.EXPECT().Dial(mock.Anything).Return(p, nil).Once()
+	pubs := published(p, nil)
+	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
+
+	h.input <- datasource.DataPoint{DeviceName: "meter", PointName: "nan", Value: math.NaN()}
+	h.send("power")
+	h.stop()
+
+	assert.Equal(t, "logger/meter/power", (<-pubs).Topic, "NaN is skipped, the session stays")
+	assert.Empty(t, pubs)
 }
