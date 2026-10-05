@@ -19,11 +19,18 @@ import (
 	"github.com/dombyte/datalogger/internal/datasource"
 )
 
-// Backoff after failed polls: starts at initialBackoff and doubles up to maxBackoff.
 const (
+	// Backoff after failed polls: starts at initialBackoff and doubles up to maxBackoff.
 	initialBackoff = 100 * time.Millisecond
 	maxBackoff     = 30 * time.Second
 	backoffFactor  = 2
+
+	// maxBodySize bounds the response body; device APIs answer with a few KiB.
+	maxBodySize = 10 << 20
+
+	// maxDrainSize is how much of an error response is read so the connection can be
+	// reused; a longer body is not worth it.
+	maxDrainSize = 64 << 10
 )
 
 var (
@@ -183,12 +190,19 @@ func (r *Reader) poll(ctx context.Context) ([]datasource.DataPoint, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		// Reading the rest lets the transport reuse the connection; if that fails it
+		// opens a new one, so there is nothing to handle.
+		rest := io.LimitReader(resp.Body, maxDrainSize)
+		_, _ = io.Copy(io.Discard, rest) //nolint:errcheck // only lets the connection be reused
 		return nil, fmt.Errorf("HTTP error: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if len(body) > maxBodySize {
+		return nil, fmt.Errorf("response larger than %d bytes", maxBodySize)
 	}
 
 	return r.parsePoints(body, r.clock.Now().UTC()), nil

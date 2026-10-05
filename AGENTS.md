@@ -235,7 +235,9 @@ writer that failed, or a missed deadline.
 - `scale`/`offset` apply to numeric JSON values: value × scale + offset as float64. With
   the defaults (1, 0) the value keeps its parsed type, so existing InfluxDB field types do
   not change; bools and strings are never scaled.
-- Non-200 responses are errors. All points of one response share its receive timestamp.
+- Non-200 responses are errors (up to 64 KiB of their body is read so the connection
+  is reused); a body above 10 MiB is an error. All points of one response share its
+  receive timestamp.
 - A point that cannot be extracted is skipped: its `json_path` is not in the response,
   the value is `null`, an object or array without `type: string`, or does not fit its
   `type` (`"N/A"` for `int64`, a negative number for `uint*`); gjson would deliver 0 or

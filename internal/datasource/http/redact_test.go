@@ -17,10 +17,13 @@ import (
 	"github.com/dombyte/datalogger/internal/clock/clocktest"
 )
 
-// stubClient returns err for every request.
-type stubClient struct{ err error }
+// stubClient returns resp and err for every request.
+type stubClient struct {
+	resp *http.Response
+	err  error
+}
 
-func (s stubClient) Do(*http.Request) (*http.Response, error) { return nil, s.err }
+func (s stubClient) Do(*http.Request) (*http.Response, error) { return s.resp, s.err }
 func (stubClient) CloseIdleConnections()                      {}
 
 // Regression: a failed poll logged the URL of the *url.Error, so an API key in the
