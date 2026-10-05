@@ -13,6 +13,12 @@ const (
 
 	// registersPer32Bit is the register count of int32, uint32 and float32.
 	registersPer32Bit = 2
+
+	// maxRegistersPerRead is the Modbus protocol limit for one read request.
+	maxRegistersPerRead = 125
+
+	// lastRegister is the highest Modbus register address.
+	lastRegister = 65535
 )
 
 // validatePointNames checks that every point has a unique name without "/", so
@@ -75,12 +81,30 @@ func validateModbusPoint(p Point) error {
 		return fmt.Errorf("type must be int16, uint16, int32, uint32, float32 or bool, got %q",
 			p.Type)
 	}
-	if max(p.Count, 1) < need {
-		return fmt.Errorf("type %s needs count: %d", p.Type, need)
+	if err := validateRegisters(p, need); err != nil {
+		return err
 	}
 	if p.FunctionCode != 0 && p.FunctionCode != functionCodeHolding &&
 		p.FunctionCode != functionCodeInput {
 		return fmt.Errorf("function_code must be 3 or 4, got %d", p.FunctionCode)
+	}
+	return nil
+}
+
+// validateRegisters checks that the count fits the type and one request, and that the
+// registers end at the last register address at the latest.
+func validateRegisters(p Point, need uint16) error {
+	count := max(p.Count, 1)
+	if count < need {
+		return fmt.Errorf("type %s needs count: %d", p.Type, need)
+	}
+	if count > maxRegistersPerRead {
+		return fmt.Errorf("count must be at most %d, got %d", maxRegistersPerRead, count)
+	}
+	// int arithmetic: in uint16 the end would wrap around to register 0.
+	if end := int(p.Register) + int(count) - 1; end > lastRegister {
+		return fmt.Errorf("registers %d-%d exceed the last register %d",
+			p.Register, end, lastRegister)
 	}
 	return nil
 }

@@ -880,6 +880,23 @@ func TestValidatePoints(t *testing.T) {
 			),
 			wantErr: "points[2] c: function_code 4 mixed with 3",
 		},
+		// Regression: register + count past 65535 wrapped around to register 0, and a
+		// count above the protocol limit failed every poll instead of startup.
+		{
+			name:   "modbus last register",
+			device: modbus(Point{Name: "p", Type: "float32", Register: 65534, Count: 2}),
+		},
+		{
+			name:    "modbus past the last register",
+			device:  modbus(Point{Name: "p", Type: "float32", Register: 65535, Count: 2}),
+			wantErr: "registers 65535-65536 exceed the last register 65535",
+		},
+		{name: "modbus count 125", device: modbus(Point{Name: "p", Type: "uint16", Count: 125})},
+		{
+			name:    "modbus count above 125",
+			device:  modbus(Point{Name: "p", Type: "uint16", Count: 126}),
+			wantErr: "count must be at most 125",
+		},
 		{name: "http json with path", device: http("json", Point{Name: "p", JSONPath: "a.b"})},
 		{name: "http text without path", device: http("text", Point{Name: "p"})},
 		{

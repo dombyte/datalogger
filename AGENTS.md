@@ -219,7 +219,8 @@ writer that failed, or a missed deadline.
 - Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool` (others are rejected by
   validation); value = raw × `scale` + `offset`, always delivered as float64. `scale`
   defaults to 1 (an explicit 0 is treated as unset). 32-bit types need `count: 2` (high
-  word first); a smaller count is rejected by validation.
+  word first); a smaller count is rejected by validation, as is a `count` above 125 or
+  registers past 65535.
 - Most Modbus devices handle only one request at a time: use `parallelism: 1` unless the
   device is known to support more.
 
