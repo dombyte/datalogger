@@ -20,9 +20,9 @@ import (
 )
 
 // fakeReader returns a reader mock that sends points, then waits for ctx and closes.
-func fakeReader(t *testing.T, name string, points ...datasource.DataPoint) *dsmocks.DeviceReader {
+func fakeReader(t *testing.T, name string, points ...datasource.DataPoint) *dsmocks.MockDeviceReader {
 	t.Helper()
-	r := dsmocks.NewDeviceReader(t)
+	r := dsmocks.NewMockDeviceReader(t)
 	r.EXPECT().Name().Return(name).Maybe()
 	r.EXPECT().Start(mock.Anything).RunAndReturn(func(ctx context.Context) <-chan datasource.DataPoint {
 		ch := make(chan datasource.DataPoint)
@@ -51,9 +51,9 @@ func (rec *recorder) got() []datasource.DataPoint {
 	return rec.points
 }
 
-func fakeWriter(t *testing.T, name string, rec *recorder) *outmocks.Writer {
+func fakeWriter(t *testing.T, name string, rec *recorder) *outmocks.MockWriter {
 	t.Helper()
-	w := outmocks.NewWriter(t)
+	w := outmocks.NewMockWriter(t)
 	w.EXPECT().Name().Return(name).Maybe()
 	w.EXPECT().Start(mock.Anything, mock.Anything).RunAndReturn(
 		func(_ context.Context, in <-chan datasource.DataPoint) <-chan error {
@@ -113,7 +113,7 @@ func TestRoutesToListedOutputsAndDrainsOnShutdown(t *testing.T) {
 
 func TestReaderThatStopsFailsRun(t *testing.T) {
 	t.Parallel()
-	r := dsmocks.NewDeviceReader(t)
+	r := dsmocks.NewMockDeviceReader(t)
 	r.EXPECT().Name().Return("dev1").Maybe()
 	r.EXPECT().Start(mock.Anything).RunAndReturn(func(context.Context) <-chan datasource.DataPoint {
 		ch := make(chan datasource.DataPoint)
@@ -131,7 +131,7 @@ func TestReaderThatStopsFailsRun(t *testing.T) {
 
 func TestWriterThatStopsFailsRunAndShutdown(t *testing.T) {
 	t.Parallel()
-	w := outmocks.NewWriter(t)
+	w := outmocks.NewMockWriter(t)
 	w.EXPECT().Name().Return("broken").Maybe()
 	w.EXPECT().Start(mock.Anything, mock.Anything).RunAndReturn(
 		func(context.Context, <-chan datasource.DataPoint) <-chan error {

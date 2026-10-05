@@ -34,23 +34,25 @@ Datalogger polls **devices** and forwards every reading to one or more **outputs
 make check                                                # ./scripts/pre-commit.sh, check-only
 golangci-lint fmt --config .golangci.yml                  # gofumpt + goimports
 golangci-lint run --config .golangci.yml                  # full linter set (section 10)
-go run golang.org/x/tools/cmd/deadcode@v0.50.0 -test ./... # unused exported code
+go run golang.org/x/tools/cmd/deadcode@v0.51.0 -test ./... # unused exported code
 go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...     # known vulnerabilities
 go test -race ./...                                       # all unit tests, as in CI
-go run github.com/vektra/mockery/v2@v2.53.7               # regenerate mocks (.mockery.yaml)
+go tool mockery                                           # regenerate mocks (.mockery.yaml)
 make build                                                # ./datalogger with version info (ldflags)
 ./datalogger -config config.yaml [-debug]                 # run; -version prints build info
 docker compose -f docker-compose.dev.yaml up --build      # local image with ./config.yaml, ./test-dump
 ```
 
-- CI: `.github/workflows/checks.yml` (PRs, reused by the release; not on push to main).
-- Release: push a `vX.Y.Z` tag on `main`; `release.yml` runs the checks, then goreleaser
-  (`.goreleaser.yaml`) builds archives and `ghcr.io/dombyte/datalogger` images
-  (linux/amd64, arm64, arm/v7).
-- Mocks: every interface is listed in `.mockery.yaml`; the output in `<pkg>/mocks` is never
-  edited by hand, and CI fails when it differs from a fresh generation. Tests that use a
-  package's mocks are black-box tests (`package <pkg>_test`), because the mocks import
-  the package.
+- CI: `.github/workflows/checks.yml` (PRs, pushes to main, reused by the release; see
+  section 11.1).
+- Release: push a `vX.Y.Z` (or `vX.Y.Z-rcN`) tag on `main`; `release.yml` runs the
+  checks, then goreleaser (`.goreleaser.yaml`) builds archives and
+  `ghcr.io/dombyte/datalogger` images (linux/amd64, arm64, arm/v7).
+- Mocks: mockery v3 runs as a Go tool (`tool` directive in `go.mod`, so Renovate updates
+  it with the modules). Every interface is listed in `.mockery.yaml` (`Mock<Interface>`,
+  `NewMock<Interface>(t)`); the output in `<pkg>/mocks` is never edited by hand, and CI
+  fails when it differs from a fresh generation. Tests that use a package's mocks are
+  black-box tests (`package <pkg>_test`), because the mocks import the package.
 
 ---
 
@@ -393,21 +395,24 @@ writer that failed, or a missed deadline.
   gochecknoglobals, forbidigo (`panic`), nolintlint (every `//nolint` names the linter and
   gives a reason). Tests are excluded from revive, dupl, errcheck, gosec, lll,
   gochecknoglobals, forbidigo and mnd.
-- **Tool versions** are pinned (pinned `go run` commands, the golangci-lint action
-  `version:`) and bumped deliberately, the same locally and in CI.
+- **Tool versions** are pinned (pinned `go run` commands, the mockery `tool` in `go.mod`,
+  the golangci-lint action `version:`) and bumped deliberately, the same locally and in CI.
 - **Renovate** (`renovate.json`) updates dependencies for exactly the ecosystems used here:
   `gomod`, `dockerfile`, `docker-compose`, `github-actions`. Every pinned version in the
-  repo should be tracked; one that no built-in manager sees (pinned `go run` commands in
-  workflows, scripts and this file; the golangci-lint `version:`) needs a
-  `customManagers` regex, added in the same change that adds the pin. Updates that need
-  manual work (Go module majors, golangci-lint majors) are disabled with a `description`
-  saying why. Text that only describes a pinning pattern must not match such a regex.
-  GitHub vulnerability alerts stay enabled; Renovate's `vulnerabilityAlerts` reads them.
+  repo is tracked; the golangci-lint `version:` of the CI action is seen by the
+  `github-actions` manager. A pin no built-in manager sees (pinned `go run` commands in
+  workflows, scripts and this file) needs a `customManagers` regex, added in the same
+  change that adds the pin. Updates that need manual work (Go module majors, golangci-lint
+  majors) are disabled with a `description` saying why. Text that only describes a
+  pinning pattern must not match such a regex. GitHub vulnerability alerts stay enabled;
+  Renovate's `vulnerabilityAlerts` reads them.
 - **Images:** `Dockerfile` (dev) and `Dockerfile.goreleaser` build `scratch` images with
   CA certs and tzdata from pinned base images; `.dockerignore`/`.gitignore` keep local
   config, data and build output out.
-- **Releases:** SemVer tags `vX.Y.Z` (pre-releases `vX.Y.Z-rcN`) only on commits on
-  `main`. `release.yml` reruns the checks, verifies the tag is on `main`, then goreleaser
+- **Releases:** SemVer tags `vX.Y.Z` (pre-releases `vX.Y.Z-alphaN`/`-betaN`/`-rcN`) only
+  on commits on `main`. `release.yml` triggers only on SemVer-shaped tags; a guard job
+  checks the exact tag format and that the tag is on `main`, then the checks rerun
+  (`checks.yml`), then goreleaser
   (`go mod verify` only, `-trimpath`, reproducible via `CommitDate`, `goamd64: v1`) builds
   the archives and images. Image tags: `vX.Y.Z` always; `vX.Y`, `vX`, `latest` only for
   stable releases. The changelog is grouped from commit subjects (section 11.2);
@@ -426,8 +431,13 @@ writer that failed, or a missed deadline.
   Renovate always need a PR with green checks).
 - `main` is protected by a repository ruleset: no deletion or force push, signed commits,
   PR required, the `checks.yml` jobs required with "branches must be up to date".
-- CI runs on PRs and release tags, not on pushes to `main`; `make check` is the gate for
-  a direct push.
+- CI minutes: `checks.yml` runs on every PR, every direct push to `main` and every
+  release tag, but not again on the merge commit of a PR. A `gate` job asks the API
+  (`repos/{repo}/commits/{sha}/pulls`) whether the pushed commit is a PR's
+  `merge_commit_sha`; if so the other jobs are skipped, and if the call fails they run.
+  This is safe only because "up to date" is on: the PR run tested the same tree that lands
+  on `main`. A newer push to a PR cancels its superseded run; runs on `main` and tags
+  always finish, and one release per tag runs at a time.
 - Merge with a regular merge commit; squash or rebase only when the user confirms. Only
   rewrite history that is not on a remote.
 - **Batching:** several small changes MAY share one PR. Create one batch branch from

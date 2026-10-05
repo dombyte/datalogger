@@ -104,18 +104,16 @@
   "stopUpdatingLabel": "renovate/stop_updating",
   "customManagers": [
     {
+      "description": "Go tools run as `go run <module>[/cmd/<tool>]@vX.Y.Z` in CI, the pre-commit script and AGENTS.md",
       "customType": "regex",
-      "description": "Pinned `go run <module>@<version>` tools (mockery, deadcode, govulncheck) in CI, the pre-commit script and docs",
       "managerFilePatterns": [
         "/^\\.github/workflows/.+\\.ya?ml$/",
         "/^scripts/.+\\.sh$/",
-        "/^AGENTS\\.md$/",
-        "/^\\.mockery\\.yaml$/"
+        "/^AGENTS\\.md$/"
       ],
       "matchStrings": [
-        "go run (?<packageName>(?:golang\\.org/x|github\\.com/[^/\\s]+)/[^/@\\s]+(?:/v\\d+)?)(?:/[^@\\s]*)?@(?<currentValue>v[^\\s]+)"
+        "go run (?<depName>[^@\\s]+?)(?:/cmd/[^@\\s]+)?@(?<currentValue>v[^\\s]+)"
       ],
-      "depNameTemplate": "{{{packageName}}}",
       "datasourceTemplate": "go"
     }
   ]
