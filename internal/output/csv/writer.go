@@ -6,6 +6,7 @@ import (
 	stdcsv "encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -124,7 +125,8 @@ func (w *Writer) open() error {
 	if err := os.MkdirAll(filepath.Dir(w.settings.FilePath), dirPerm); err != nil {
 		return fmt.Errorf("csv: create directory: %w", err)
 	}
-	file, err := os.OpenFile(w.settings.FilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, filePerm)
+	// Read access for the first row of an existing file (firstRowTime).
+	file, err := os.OpenFile(w.settings.FilePath, os.O_CREATE|os.O_APPEND|os.O_RDWR, filePerm)
 	if err != nil {
 		return fmt.Errorf("csv: open %s: %w", w.settings.FilePath, err)
 	}
@@ -137,7 +139,27 @@ func (w *Writer) open() error {
 	if info.Size() == 0 {
 		return w.writeRow([]string{"timestamp", "device", "point", "value", "unit"})
 	}
+	// The age of an existing file counts from its first row, not from this start: a
+	// process that restarts more often than max_age would otherwise never rotate.
+	if first, ok := firstRowTime(io.NewSectionReader(file, 0, info.Size())); ok {
+		w.opened = first
+	}
 	return nil
+}
+
+// firstRowTime returns the timestamp of the first data row of a CSV file.
+func firstRowTime(file io.Reader) (time.Time, bool) {
+	r := stdcsv.NewReader(file)
+	r.FieldsPerRecord = -1
+	if _, err := r.Read(); err != nil { // header
+		return time.Time{}, false
+	}
+	row, err := r.Read()
+	if err != nil {
+		return time.Time{}, false
+	}
+	first, err := time.Parse(time.RFC3339Nano, row[0])
+	return first, err == nil
 }
 
 // reopen replaces the file and its CSV writer after a failed write: the buffered writer
@@ -197,7 +219,7 @@ func (w *Writer) writeRow(row []string) error {
 func (w *Writer) rotate() error {
 	w.close()
 
-	backup := w.settings.FilePath + "." + w.clock.Now().Format(backupTimeFormat)
+	backup := w.backupName()
 	if err := os.Rename(w.settings.FilePath, backup); err != nil {
 		return fmt.Errorf("csv: rotate: %w", err)
 	}
@@ -209,6 +231,17 @@ func (w *Writer) rotate() error {
 		return fmt.Errorf("csv: open after rotation: %w", err)
 	}
 	return nil
+}
+
+// backupName returns <file>.<YYYYMMDD-HHMMSS> for now, one second later for every
+// backup of that name that exists already: Rename would replace it.
+func (w *Writer) backupName() string {
+	for t := w.clock.Now(); ; t = t.Add(time.Second) {
+		backup := w.settings.FilePath + "." + t.Format(backupTimeFormat)
+		if _, err := os.Lstat(backup); errors.Is(err, os.ErrNotExist) {
+			return backup
+		}
+	}
 }
 
 // removeOldBackups keeps the newest MaxBackups rotated files (all if MaxBackups < 0).

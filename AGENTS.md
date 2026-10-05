@@ -282,8 +282,10 @@ writer that failed, or a missed deadline.
 ### CSV writer
 - Columns: `timestamp` (RFC3339Nano), `device`, `point`, `value`, `unit`; header written
   when the file is empty. Every point is flushed immediately.
-- Rotation: when the file is older than `max_age` (checked after each row), it is renamed
-  to `<file>.<YYYYMMDD-HHMMSS>` and a new file is started. `max_backups`: 0 = keep none,
+- Rotation: when the file is older than `max_age` (checked after each row; the age of an
+  existing file counts from the timestamp of its first row, so restarts do not reset it),
+  it is renamed to `<file>.<YYYYMMDD-HHMMSS>` (one second later if that backup exists)
+  and a new file is started. `max_backups`: 0 = keep none,
   > 0 = keep that many, < 0 = keep all; only files with exactly that name pattern are
   ever deleted.
 - A path that cannot be opened fails startup.
