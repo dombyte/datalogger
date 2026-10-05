@@ -9,7 +9,7 @@ require (
 	github.com/simonvetter/modbus v1.6.4
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
-	github.com/tidwall/gjson v1.19.0
+	github.com/tidwall/gjson v1.19.1
 )
 
 require (
