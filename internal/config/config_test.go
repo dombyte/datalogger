@@ -559,6 +559,23 @@ func TestOutputValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "influxdb negative timeout",
+			output: Output{
+				Name:    "influx",
+				Type:    "influxdb",
+				Devices: []string{"test"},
+				OutputSpecific: OutputSpecific{
+					Influxdb: InfluxdbConfig{
+						Address:  "http://localhost:8086",
+						Token:    "test-token",
+						Database: "test-db",
+						Timeout:  -time.Second,
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
 			name: "mqtt missing address",
 			output: Output{
 				Name:    "mqtt",

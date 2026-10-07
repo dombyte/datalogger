@@ -295,6 +295,9 @@ func (i *InfluxdbConfig) Validate() error {
 	if i.Database == "" {
 		return errors.New("database required")
 	}
+	if i.Timeout < 0 {
+		return errors.New("timeout must not be negative")
+	}
 	return nil
 }
 

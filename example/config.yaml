@@ -249,6 +249,10 @@ outputs:
         token: "<your-influxdb-token>"
         database: "datalogger"
         insecure: false
+        timeout: 10s # per write request (default 10s)
+        # Answer before the write is in the WAL on disk: avoids slow writes on slow
+        # storage, but a crash of InfluxDB can lose the last second (default false).
+        no_sync: false
     devices:
       - inverter
       - energy_meter

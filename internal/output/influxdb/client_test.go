@@ -65,3 +65,35 @@ func TestInsecureClientTimesOut(t *testing.T) {
 	require.Error(t, err)
 	assert.NoError(t, ctx.Err(), "the client timeout ended the request, not the test")
 }
+
+func TestNoSyncIsSentWithTheWrite(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		noSync bool
+		want   string
+	}{
+		{name: "default waits for the WAL", noSync: false, want: ""},
+		{name: "no_sync", noSync: true, want: "true"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := make(chan string, 1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got <- r.URL.Query().Get("no_sync")
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			t.Cleanup(srv.Close)
+
+			client, err := influxdb.NewClient(influxdb.ConnSettings{
+				Address: srv.URL, Token: "t", Database: "d", NoSync: tt.noSync,
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, client.Close()) })
+
+			require.NoError(t, client.Write(context.Background(), []byte("m value=1 1\n")))
+			assert.Equal(t, tt.want, <-got)
+		})
+	}
+}
