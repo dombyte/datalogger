@@ -180,7 +180,7 @@ func (w *Writer) connected(ctx context.Context) bool {
 	if err != nil {
 		w.backoff = nextBackoff(w.backoff)
 		w.nextDial = w.clock.Now().Add(w.backoff)
-		w.logger.Error().Err(err).Dur("retry_in", w.backoff).Msg("MQTT connect failed")
+		w.logger.Error().Err(err).Stringer("retry_in", w.backoff).Msg("MQTT connect failed")
 		return false
 	}
 
