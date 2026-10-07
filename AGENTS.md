@@ -172,7 +172,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   `ECONNRESET`, `EPIPE` (the next poll dials again; timeouts and Modbus exceptions keep
   the connection); HTTP closes idle connections on every transport error (`net.Error`)
   and truncated bodies (status and parse errors do not). A reader never stops because of
-  read errors.
+  read errors. A failed poll is logged once, with `failure_count` and the backoff
+  (`retry_in`): as a warning, from the third failure in a row as an error; the first
+  successful poll after it logs the recovery at info (`failures`, `points`).
 - Write errors are handled inside the writer (InfluxDB: retries, then the batch is
   dropped and logged; MQTT/CSV: log and continue with the next point).
 - A reader or writer that **stops** while the app is not shutting down makes `Run`

@@ -25,6 +25,10 @@ const (
 	maxBackoff     = 30 * time.Second
 	backoffFactor  = 2
 
+	// errorAfterFailures is the number of failed polls in a row from which a failure is
+	// logged at error; single failures that the next poll recovers from are warnings.
+	errorAfterFailures = 3
+
 	// maxBodySize bounds the response body; device APIs answer with a few KiB.
 	maxBodySize = 10 << 20
 
@@ -152,7 +156,7 @@ func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPo
 // pollOnce waits out the backoff, requests the endpoint and sends the parsed points.
 func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
 	if r.backoff > 0 {
-		r.logger.Warn().Dur("wait", r.backoff).Msg("Waiting before retry after a failure")
+		r.logger.Debug().Stringer("wait", r.backoff).Msg("Waiting before retry after a failure")
 		if !clock.Sleep(ctx, r.clock, r.backoff) {
 			return
 		}
@@ -276,13 +280,18 @@ func (r *Reader) pointFound(name string) {
 	}
 }
 
-// handlePollError logs the error, grows the backoff and drops idle connections after a
-// transport error.
+// handlePollError grows the backoff, logs the error (a warning until errorAfterFailures
+// polls failed in a row) and drops idle connections after a transport error.
 func (r *Reader) handlePollError(err error) {
 	r.failCount++
-	r.logger.Error().Err(err).Int("failure_count", r.failCount).Msg("HTTP poll failed")
-
 	r.backoff = min(max(r.backoff*backoffFactor, initialBackoff), maxBackoff)
+
+	level := zerolog.WarnLevel
+	if r.failCount >= errorAfterFailures {
+		level = zerolog.ErrorLevel
+	}
+	r.logger.WithLevel(level).Err(err).Int("failure_count", r.failCount).
+		Stringer("retry_in", r.backoff).Msg("HTTP poll failed")
 
 	if isTransportError(err) {
 		r.client.CloseIdleConnections()
@@ -292,9 +301,10 @@ func (r *Reader) handlePollError(err error) {
 // handlePollSuccess resets the backoff and logs a recovery at info.
 func (r *Reader) handlePollSuccess(count int) {
 	if r.failCount > 0 {
-		r.logger.Info().Int("count", count).Msg("HTTP poll recovered from previous error")
+		r.logger.Info().Int("failures", r.failCount).Int("points", count).
+			Msg("HTTP poll recovered from previous error")
 	} else {
-		r.logger.Debug().Int("count", count).Msg("HTTP poll completed")
+		r.logger.Debug().Int("points", count).Msg("HTTP poll completed")
 	}
 	r.failCount = 0
 	r.backoff = 0
