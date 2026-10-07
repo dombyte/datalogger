@@ -27,6 +27,10 @@ const (
 	initialBackoff = 100 * time.Millisecond
 	maxBackoff     = 30 * time.Second
 	backoffFactor  = 2
+
+	// errorAfterFailures is the number of failed polls in a row from which a failure is
+	// logged at error; single failures that the next poll recovers from are warnings.
+	errorAfterFailures = 3
 )
 
 var (
@@ -213,7 +217,7 @@ func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPo
 // pollOnce waits out the backoff, reads all points and sends what was read.
 func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
 	if r.backoff > 0 {
-		r.logger.Warn().Dur("wait", r.backoff).Msg("Waiting before retry after a failure")
+		r.logger.Debug().Stringer("wait", r.backoff).Msg("Waiting before retry after a failure")
 		if !clock.Sleep(ctx, r.clock, r.backoff) {
 			return
 		}
@@ -260,13 +264,18 @@ func (r *Reader) poll(ctx context.Context) ([]datasource.DataPoint, error) {
 	return r.readDirectMode(ctx)
 }
 
-// handlePollError logs the error, grows the backoff and drops a broken connection, so
-// the next poll dials again.
+// handlePollError grows the backoff, logs the error (a warning until errorAfterFailures
+// polls failed in a row) and drops a broken connection, so the next poll dials again.
 func (r *Reader) handlePollError(err error) {
 	r.failCount++
-	r.logger.Error().Err(err).Int("failure_count", r.failCount).Msg("Modbus poll failed")
-
 	r.backoff = min(max(r.backoff*backoffFactor, initialBackoff), maxBackoff)
+
+	level := zerolog.WarnLevel
+	if r.failCount >= errorAfterFailures {
+		level = zerolog.ErrorLevel
+	}
+	r.logger.WithLevel(level).Err(err).Int("failure_count", r.failCount).
+		Stringer("retry_in", r.backoff).Msg("Modbus poll failed")
 
 	if r.client != nil && isConnectionError(err) {
 		r.logger.Warn().Msg("Connection lost, reconnecting on the next poll")
@@ -277,9 +286,10 @@ func (r *Reader) handlePollError(err error) {
 // handlePollSuccess resets the backoff and logs a recovery at info.
 func (r *Reader) handlePollSuccess(count int) {
 	if r.failCount > 0 {
-		r.logger.Info().Int("count", count).Msg("Modbus poll recovered from previous error")
+		r.logger.Info().Int("failures", r.failCount).Int("points", count).
+			Msg("Modbus poll recovered from previous error")
 	} else {
-		r.logger.Debug().Int("count", count).Msg("Modbus poll completed")
+		r.logger.Debug().Int("points", count).Msg("Modbus poll completed")
 	}
 	r.failCount = 0
 	r.backoff = 0
