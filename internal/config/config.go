@@ -106,6 +106,10 @@ type InfluxdbConfig struct {
 	Token    string `mapstructure:"token"`
 	Database string `mapstructure:"database"`
 	Insecure bool   `mapstructure:"insecure"`
+	// Timeout bounds one write request; 0 = default (10 s).
+	Timeout time.Duration `mapstructure:"timeout"`
+	// NoSync lets InfluxDB answer before the write is in its WAL on disk.
+	NoSync bool `mapstructure:"no_sync"`
 }
 
 // MqttConfig contains MQTT-specific configuration.

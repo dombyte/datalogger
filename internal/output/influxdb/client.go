@@ -31,6 +31,8 @@ type ConnSettings struct {
 	Database string
 	Insecure bool          // skip TLS certificate verification
 	Timeout  time.Duration // per request; 0 = DefaultTimeout
+	// NoSync makes the server answer before the write is persisted in its WAL.
+	NoSync bool
 }
 
 // NewClient creates an InfluxDB 3 client using the v3 write API. It does not connect;
@@ -45,6 +47,7 @@ func NewClient(s ConnSettings) (*influxdb3.Client, error) {
 		WriteOptions: &influxdb3.WriteOptions{
 			UseV2Api:      false, // v3 endpoint /api/v3/write_lp
 			GzipThreshold: gzipThreshold,
+			NoSync:        s.NoSync,
 		},
 	}
 	if s.Insecure {

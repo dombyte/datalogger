@@ -263,8 +263,10 @@ writer that failed, or a missed deadline.
   does not connect at startup.
 - A value line protocol cannot store (anything but float64, int64, uint64, bool,
   string) is skipped with a warning, so it cannot fail the batch of every device.
-- Uses the v3 write API; gzip above 1000 bytes; 10 s timeout per write request (also
-  with `insecure`, which skips certificate checks).
+- Uses the v3 write API; gzip above 1000 bytes; `timeout` per write request (default
+  10 s, also with `insecure`, which skips certificate checks). `no_sync` makes InfluxDB
+  answer before the write is in its WAL on disk (faster on slow storage; a crash can
+  lose the last WAL flush).
 
 ### MQTT writer
 - Broker `address` `tcp://`/`mqtt://` or `tls://`/`ssl://`/`mqtts://` (no scheme = tcp;
