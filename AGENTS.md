@@ -272,7 +272,8 @@ writer that failed, or a missed deadline.
 - Broker `address` `tcp://`/`mqtt://` or `tls://`/`ssl://`/`mqtts://` (no scheme = tcp;
   other schemes fail at startup). TLS verifies the broker certificate against the host
   name; `insecure` uses TLS without verification (also for `tcp://`). MQTT v5, keep-alive
-  30 s, clean start, 10 s connect timeout.
+  30 s, clean start, 10 s connect timeout, 10 s publish timeout (QoS 1/2 wait for the
+  acknowledgement; a timed-out publish counts as a publish error).
 - Connects on the first point and reconnects after a publish error or a lost connection,
   with backoff (1 s doubling to 30 s; the first redial after a publish error is
   immediate, the backoff is reset by the next successful publish). A message the broker
@@ -586,7 +587,7 @@ The required CI checks MUST be green before a PR is merged.
 ### 11.4 Security
 - Validate input at the boundary: config in `config.Validate`, device responses in the
   reader that parses them.
-- Every outgoing call has a timeout (device `timeout`, MQTT connect timeout, InfluxDB
+- Every outgoing call has a timeout (device `timeout`, MQTT connect/publish timeout, InfluxDB
   client); clients verify certificates unless the documented `insecure` option is set.
 - Secrets only in the gitignored `config.yaml` (section 8), never committed or logged.
 - Dependencies: Renovate plus `govulncheck` in CI and in `make check`.

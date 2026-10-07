@@ -18,9 +18,13 @@ const (
 
 	// connectTimeout bounds the TCP/TLS dial and the CONNECT handshake.
 	connectTimeout = 10 * time.Second
+
+	// publishTimeout bounds one publish: with QoS 1 and 2 it waits for the broker's
+	// acknowledgement, which a broker that hangs would delay until the keep-alive fails.
+	publishTimeout = 10 * time.Second
 )
 
-// Publisher is an open MQTT session; *paho.Client implements it.
+// Publisher is an open MQTT session; Dial returns a *paho.Client with a publish timeout.
 type Publisher interface {
 	Publish(ctx context.Context, p *paho.Publish) (*paho.PublishResponse, error)
 	Disconnect(d *paho.Disconnect) error
@@ -43,9 +47,10 @@ type ConnSettings struct {
 
 // PahoDialer dials with github.com/eclipse/paho.golang (MQTT v5).
 type PahoDialer struct {
-	settings ConnSettings
-	host     string // host:port
-	useTLS   bool
+	settings       ConnSettings
+	host           string // host:port
+	useTLS         bool
+	publishTimeout time.Duration
 }
 
 // NewDialer checks the address without connecting.
@@ -65,7 +70,10 @@ func NewDialer(s ConnSettings) (*PahoDialer, error) {
 	if u.Host == "" {
 		return nil, fmt.Errorf("mqtt: address %q has no host", s.Address)
 	}
-	return &PahoDialer{settings: s, host: u.Host, useTLS: tlsScheme || s.Insecure}, nil
+	return &PahoDialer{
+		settings: s, host: u.Host, useTLS: tlsScheme || s.Insecure,
+		publishTimeout: publishTimeout,
+	}, nil
 }
 
 // schemeUsesTLS reports whether a supported scheme means TLS; ok is false for
@@ -105,7 +113,24 @@ func (d *PahoDialer) Dial(ctx context.Context) (Publisher, error) {
 		_ = conn.Close() // the CONNECT error is the one to report
 		return nil, fmt.Errorf("connect: %w", err)
 	}
-	return client, nil
+	return session{Client: client, publishTimeout: d.publishTimeout}, nil
+}
+
+// session is a paho client whose publishes time out.
+type session struct {
+	*paho.Client
+	publishTimeout time.Duration
+}
+
+// Publish sends p and waits at most publishTimeout for the broker's acknowledgement.
+func (s session) Publish(ctx context.Context, p *paho.Publish) (*paho.PublishResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.publishTimeout)
+	defer cancel()
+	resp, err := s.Client.Publish(ctx, p)
+	if err != nil {
+		return resp, fmt.Errorf("publish: %w", err)
+	}
+	return resp, nil
 }
 
 // dialConn opens the TCP connection, wrapped in TLS when configured.
