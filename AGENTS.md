@@ -341,7 +341,7 @@ writer that failed, or a missed deadline.
   closes the connection); `parallelism` 1–100; `poll_interval` > 0; `timeout` > 0.
 - Unknown keys are an error (a typo would otherwise fall back to a default silently).
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
-  poll interval, at most 10 s; point `scale` 1; HTTP method GET and response type json;
+  poll interval, at least 3 s and at most 10 s; point `scale` 1; HTTP method GET and response type json;
   MQTT topic `datalogger` and client ID `logger-<random>`) and then
   runs `Validate()`, which only checks and never changes the config.
 - No environment overrides (see section 8). Secrets (InfluxDB token, MQTT password)

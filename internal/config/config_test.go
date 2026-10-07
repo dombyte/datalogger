@@ -944,7 +944,7 @@ func TestApplyDefaultsScale(t *testing.T) {
 	assert.InDelta(t, 0.1, cfg.Devices[0].Points[1].Scale, 0)
 }
 
-// TestApplyDefaultsTimeout checks the timeout default: the poll interval, at most 10 s.
+// TestApplyDefaultsTimeout checks the timeout default: the poll interval, 3-10 s.
 func TestApplyDefaultsTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -952,11 +952,13 @@ func TestApplyDefaultsTimeout(t *testing.T) {
 		{Name: "fast", PollInterval: 5 * time.Second},
 		{Name: "slow", PollInterval: time.Minute},
 		{Name: "set", PollInterval: time.Minute, Timeout: 2 * time.Second},
+		{Name: "every-second", PollInterval: time.Second},
 	}}
 	cfg.applyDefaults()
 	assert.Equal(t, 5*time.Second, cfg.Devices[0].Timeout)
 	assert.Equal(t, 10*time.Second, cfg.Devices[1].Timeout)
 	assert.Equal(t, 2*time.Second, cfg.Devices[2].Timeout)
+	assert.Equal(t, 3*time.Second, cfg.Devices[3].Timeout, "fast polls get at least 3 s")
 }
 
 // namesConfig returns a valid config with one HTTP device "meter" (points a and b) and
