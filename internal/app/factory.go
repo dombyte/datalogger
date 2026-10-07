@@ -197,6 +197,8 @@ func createInfluxDBWriter(
 		Token:    i.Token,
 		Database: i.Database,
 		Insecure: i.Insecure,
+		Timeout:  i.Timeout,
+		NoSync:   i.NoSync,
 	})
 	if err != nil {
 		return nil, err

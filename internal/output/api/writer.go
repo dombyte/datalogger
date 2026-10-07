@@ -153,7 +153,7 @@ func (w *Writer) stop(ctx context.Context, serveErr <-chan error) error {
 		w.closeServer()
 		<-shutdown // returns once Close removed the connections
 	case <-w.clock.After(shutdownGrace):
-		w.logger.Warn().Dur("grace", shutdownGrace).Msg("API requests still running, closing")
+		w.logger.Warn().Stringer("grace", shutdownGrace).Msg("API requests still running, closing")
 		w.closeServer()
 		<-shutdown
 	}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
@@ -179,4 +180,25 @@ func TestDialFailsWhenBrokerRejectsConnect(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.Dial(context.Background())
 	assert.ErrorContains(t, err, "connect:")
+}
+
+// Regression: a QoS 1 publish waited for a PUBACK without a timeout, so a broker that
+// kept the connection but never answered blocked the writer until the keep-alive failed.
+func TestPublishTimesOutWithoutAcknowledgement(t *testing.T) {
+	t.Parallel()
+	addr, received := fakeBroker(t) // never sends PUBACK
+	d, err := mqtt.NewDialer(mqtt.ConnSettings{Address: addr})
+	require.NoError(t, err)
+	d.SetPublishTimeout(50 * time.Millisecond)
+
+	session, err := d.Dial(context.Background())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Disconnect(&paho.Disconnect{}) })
+	<-received // CONNECT
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = session.Publish(ctx, &paho.Publish{Topic: "a/b", QoS: 1, Payload: []byte("x")})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.NoError(t, ctx.Err(), "the publish timeout ended the publish, not the test")
 }

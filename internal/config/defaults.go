@@ -14,7 +14,10 @@ const (
 	// clientIDSuffixLen is the length of the random part of a generated MQTT client ID.
 	clientIDSuffixLen = 8
 
-	// maxDefaultTimeout caps the default device timeout (the poll interval).
+	// The default device timeout is the poll interval, kept between these bounds: devices
+	// that are polled every second still answer late now and then, which only delays
+	// the next poll.
+	minDefaultTimeout = 3 * time.Second
 	maxDefaultTimeout = 10 * time.Second
 )
 
@@ -34,7 +37,7 @@ func (c *Config) applyDefaults() {
 func (d *Device) applyDefaults() {
 	// Without a timeout a hanging device would block its poll loop forever.
 	if d.Timeout == 0 {
-		d.Timeout = min(d.PollInterval, maxDefaultTimeout)
+		d.Timeout = min(max(d.PollInterval, minDefaultTimeout), maxDefaultTimeout)
 	}
 
 	for i := range d.Points {

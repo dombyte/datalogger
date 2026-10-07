@@ -172,7 +172,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   `ECONNRESET`, `EPIPE` (the next poll dials again; timeouts and Modbus exceptions keep
   the connection); HTTP closes idle connections on every transport error (`net.Error`)
   and truncated bodies (status and parse errors do not). A reader never stops because of
-  read errors.
+  read errors. A failed poll is logged once, with `failure_count` and the backoff
+  (`retry_in`): as a warning, from the third failure in a row as an error; the first
+  successful poll after it logs the recovery at info (`failures`, `points`).
 - Write errors are handled inside the writer (InfluxDB: retries, then the batch is
   dropped and logged; MQTT/CSV: log and continue with the next point).
 - A reader or writer that **stops** while the app is not shutting down makes `Run`
@@ -261,14 +263,17 @@ writer that failed, or a missed deadline.
   does not connect at startup.
 - A value line protocol cannot store (anything but float64, int64, uint64, bool,
   string) is skipped with a warning, so it cannot fail the batch of every device.
-- Uses the v3 write API; gzip above 1000 bytes; 10 s timeout per write request (also
-  with `insecure`, which skips certificate checks).
+- Uses the v3 write API; gzip above 1000 bytes; `timeout` per write request (default
+  10 s, also with `insecure`, which skips certificate checks). `no_sync` makes InfluxDB
+  answer before the write is in its WAL on disk (faster on slow storage; a crash can
+  lose the last WAL flush).
 
 ### MQTT writer
 - Broker `address` `tcp://`/`mqtt://` or `tls://`/`ssl://`/`mqtts://` (no scheme = tcp;
   other schemes fail at startup). TLS verifies the broker certificate against the host
   name; `insecure` uses TLS without verification (also for `tcp://`). MQTT v5, keep-alive
-  30 s, clean start, 10 s connect timeout.
+  30 s, clean start, 10 s connect timeout, 10 s publish timeout (QoS 1/2 wait for the
+  acknowledgement; a timed-out publish counts as a publish error).
 - Connects on the first point and reconnects after a publish error or a lost connection,
   with backoff (1 s doubling to 30 s; the first redial after a publish error is
   immediate, the backoff is reset by the next successful publish). A message the broker
@@ -339,7 +344,7 @@ writer that failed, or a missed deadline.
   closes the connection); `parallelism` 1–100; `poll_interval` > 0; `timeout` > 0.
 - Unknown keys are an error (a typo would otherwise fall back to a default silently).
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
-  poll interval, at most 10 s; point `scale` 1; HTTP method GET and response type json;
+  poll interval, at least 3 s and at most 10 s; point `scale` 1; HTTP method GET and response type json;
   MQTT topic `datalogger` and client ID `logger-<random>`) and then
   runs `Validate()`, which only checks and never changes the config.
 - No environment overrides (see section 8). Secrets (InfluxDB token, MQTT password)
@@ -582,7 +587,7 @@ The required CI checks MUST be green before a PR is merged.
 ### 11.4 Security
 - Validate input at the boundary: config in `config.Validate`, device responses in the
   reader that parses them.
-- Every outgoing call has a timeout (device `timeout`, MQTT connect timeout, InfluxDB
+- Every outgoing call has a timeout (device `timeout`, MQTT connect/publish timeout, InfluxDB
   client); clients verify certificates unless the documented `insecure` option is set.
 - Secrets only in the gitignored `config.yaml` (section 8), never committed or logged.
 - Dependencies: Renovate plus `govulncheck` in CI and in `make check`.
