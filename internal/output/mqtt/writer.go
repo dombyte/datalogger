@@ -116,12 +116,7 @@ func (w *Writer) publish(ctx context.Context, dp datasource.DataPoint) {
 		return
 	}
 
-	topic := fmt.Sprintf("%s/%s/%s", w.settings.Topic, dp.DeviceName, dp.PointName)
-	payload, err := json.Marshal(map[string]any{
-		"value":     dp.JSONValue(), // NaN and ±Inf have no JSON form: null
-		"unit":      dp.Unit,
-		"timestamp": dp.Timestamp.Format(time.RFC3339Nano),
-	})
+	topic, payload, err := w.message(dp)
 	if err != nil {
 		w.logger.Error().Err(err).Str("topic", topic).Msg("Failed to encode MQTT payload")
 		return
@@ -139,6 +134,25 @@ func (w *Writer) publish(ctx context.Context, dp datasource.DataPoint) {
 	}
 	w.backoff = 0
 	w.logger.Debug().Str("topic", topic).Msg("Published MQTT message")
+}
+
+// payload is the JSON message of one point. The keys are in alphabetical order, as
+// json.Marshal writes a map, so the payload is the same as with the earlier map.
+type payload struct {
+	Timestamp string `json:"timestamp"`
+	Unit      string `json:"unit"`
+	Value     any    `json:"value"`
+}
+
+// message returns the topic and the JSON payload of dp.
+func (w *Writer) message(dp datasource.DataPoint) (string, []byte, error) {
+	topic := w.settings.Topic + "/" + dp.DeviceName + "/" + dp.PointName
+	b, err := json.Marshal(payload{
+		Timestamp: dp.Timestamp.Format(time.RFC3339Nano),
+		Unit:      dp.Unit,
+		Value:     dp.JSONValue(), // NaN and ±Inf have no JSON form: null
+	})
+	return topic, b, err
 }
 
 // publishFailed handles a failed publish. A broker that rejected the message (PUBACK or

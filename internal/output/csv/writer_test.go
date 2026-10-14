@@ -87,6 +87,23 @@ func TestFlushesWhenNoPollIsQueued(t *testing.T) {
 	}
 }
 
+// The formatted timestamp is reused only for the same time in the same location.
+func TestFormatsEachTimestamp(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "data.csv")
+	later, local := point(2.0), point(3.0)
+	later.Timestamp = start.Add(time.Millisecond)
+	local.Timestamp = later.Timestamp.In(time.FixedZone("CEST", 2*60*60))
+	run(t, csv.Settings{Name: "file", FilePath: path}, clocktest.NewFake(start),
+		point(1.0), later, local, point(4.0))
+
+	assert.Equal(t, header+
+		"2026-09-29T12:00:00Z,meter,power,1,W\n"+
+		"2026-09-29T12:00:00.001Z,meter,power,2,W\n"+
+		"2026-09-29T14:00:00.001+02:00,meter,power,3,W\n"+
+		"2026-09-29T12:00:00Z,meter,power,4,W\n", read(t, path))
+}
+
 func TestAppendsToExistingFileWithoutSecondHeader(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "data.csv")

@@ -669,6 +669,3 @@ Known gaps to the rules above, one branch each; update this list when an item is
   out with `exclude_points` or in a separate device. Planned fix: the wide schema
   (`feat/influxdb-wide-rows`, `feat(influxdb)!`): one line per poll, table = device, one
   field column per point, so every point gets its own column type.
-- **Formatting on the hot path:** `strconv.Append…` into reused buffers instead of
-  `fmt.Sprintf` for CSV values (`csv/writer.go`) and MQTT topics (`mqtt/writer.go`), with
-  a benchmark (section 9.6).
