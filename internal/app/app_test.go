@@ -219,7 +219,7 @@ func TestNewFailsOnlyOnConfigurationErrors(t *testing.T) {
 	t.Parallel()
 	device := func(address string) config.Device {
 		return config.Device{
-			Name: "inverter", Type: "modbus", PollInterval: time.Second, Parallelism: 1,
+			Name: "inverter", Type: "modbus", PollInterval: time.Second,
 			DeviceSpecific: config.DeviceSpecific{Modbus: config.ModbusConfig{
 				Address: address, SlaveID: 1, RegisterMode: "direct",
 			}},

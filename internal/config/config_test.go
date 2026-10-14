@@ -22,7 +22,6 @@ devices:
     type: http
     poll_interval: 1s
     timeout: 5s
-    parallelism: 1
     device_specific:
       http:
         address: "http://localhost:8080"
@@ -108,7 +107,6 @@ func TestConfigValidate(t *testing.T) {
 						Type:         "http",
 						PollInterval: 1 * time.Second,
 						Timeout:      time.Second,
-						Parallelism:  1,
 						DeviceSpecific: DeviceSpecific{
 							HTTP: HTTPConfig{
 								Address:      "http://localhost",
@@ -143,7 +141,7 @@ func TestConfigValidate(t *testing.T) {
 			name: "no outputs",
 			config: &Config{
 				Devices: []Device{
-					{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1},
+					{Name: "test", Type: "http", PollInterval: 1 * time.Second},
 				},
 			},
 			wantErr: true,
@@ -152,8 +150,8 @@ func TestConfigValidate(t *testing.T) {
 			name: "duplicate device names",
 			config: &Config{
 				Devices: []Device{
-					{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1},
-					{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1},
+					{Name: "test", Type: "http", PollInterval: 1 * time.Second},
+					{Name: "test", Type: "http", PollInterval: 1 * time.Second},
 				},
 			},
 			wantErr: true,
@@ -162,7 +160,7 @@ func TestConfigValidate(t *testing.T) {
 			name: "empty device name",
 			config: &Config{
 				Devices: []Device{
-					{Name: "", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1},
+					{Name: "", Type: "http", PollInterval: 1 * time.Second},
 				},
 			},
 			wantErr: true,
@@ -171,7 +169,7 @@ func TestConfigValidate(t *testing.T) {
 			name: "output references unknown device",
 			config: &Config{
 				Devices: []Device{
-					{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1},
+					{Name: "test", Type: "http", PollInterval: 1 * time.Second},
 				},
 				Outputs: []Output{
 					{Name: "out", Type: "csv", Devices: []string{"unknown"}},
@@ -183,7 +181,7 @@ func TestConfigValidate(t *testing.T) {
 			name: "invalid device type",
 			config: &Config{
 				Devices: []Device{
-					{Name: "test", Type: "invalid", PollInterval: 1 * time.Second, Parallelism: 1},
+					{Name: "test", Type: "invalid", PollInterval: 1 * time.Second},
 				},
 			},
 			wantErr: true,
@@ -192,7 +190,7 @@ func TestConfigValidate(t *testing.T) {
 			name: "invalid output type",
 			config: &Config{
 				Devices: []Device{
-					{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 1},
+					{Name: "test", Type: "http", PollInterval: 1 * time.Second},
 				},
 				Outputs: []Output{
 					{Name: "out", Type: "invalid", Devices: []string{"test"}},
@@ -204,25 +202,7 @@ func TestConfigValidate(t *testing.T) {
 			name: "zero poll interval",
 			config: &Config{
 				Devices: []Device{
-					{Name: "test", Type: "http", PollInterval: 0, Parallelism: 1},
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "parallelism out of range (0)",
-			config: &Config{
-				Devices: []Device{
-					{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 0},
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "parallelism out of range (101)",
-			config: &Config{
-				Devices: []Device{
-					{Name: "test", Type: "http", PollInterval: 1 * time.Second, Parallelism: 101},
+					{Name: "test", Type: "http", PollInterval: 0},
 				},
 			},
 			wantErr: true,
@@ -253,7 +233,6 @@ func TestDeviceValidate(t *testing.T) {
 				Type:         "http",
 				PollInterval: 1 * time.Second,
 				Timeout:      time.Second,
-				Parallelism:  1,
 				DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{
 					Address: "http://localhost", Method: "GET", ResponseType: "json",
 				}},
@@ -268,7 +247,6 @@ func TestDeviceValidate(t *testing.T) {
 				Type:         "modbus",
 				PollInterval: 1 * time.Second,
 				Timeout:      time.Second,
-				Parallelism:  1,
 				DeviceSpecific: DeviceSpecific{
 					Modbus: ModbusConfig{
 						Address:      "tcp://localhost:502",
@@ -283,24 +261,24 @@ func TestDeviceValidate(t *testing.T) {
 		{
 			name: "no timeout (Load fills the default)",
 			device: Device{
-				Name: "test", Type: "http", PollInterval: time.Second, Parallelism: 1,
+				Name: "test", Type: "http", PollInterval: time.Second,
 				Points: []Point{{Name: "temp", JSONPath: "temp"}},
 			},
 			wantErr: true,
 		},
 		{
 			name:    "empty type",
-			device:  Device{Name: "test", PollInterval: 1 * time.Second, Parallelism: 1},
+			device:  Device{Name: "test", PollInterval: 1 * time.Second},
 			wantErr: true,
 		},
 		{
 			name:    "zero poll interval",
-			device:  Device{Name: "test", Type: "http", PollInterval: 0, Parallelism: 1},
+			device:  Device{Name: "test", Type: "http", PollInterval: 0},
 			wantErr: true,
 		},
 		{
 			name:    "negative poll interval",
-			device:  Device{Name: "test", Type: "http", PollInterval: -1 * time.Second, Parallelism: 1},
+			device:  Device{Name: "test", Type: "http", PollInterval: -1 * time.Second},
 			wantErr: true,
 		},
 	}
@@ -984,7 +962,6 @@ func namesConfig(change func(*Config)) *Config {
 	cfg := &Config{
 		Devices: []Device{{
 			Name: "meter", Type: "http", PollInterval: time.Second, Timeout: time.Second,
-			Parallelism: 1,
 			DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{
 				Address: "http://localhost", Method: "GET", ResponseType: "json",
 			}},
@@ -1137,7 +1114,6 @@ devices:
   - name: meter
     type: http
     poll_interval: 1s
-    parallelism: 1
     device_specific:
       http:
         address: "http://localhost"
@@ -1199,11 +1175,6 @@ func TestValidateErrors(t *testing.T) {
 			name:    "unknown device type",
 			change:  func(c *Config) { c.Devices[0].Type = "snmp" },
 			wantErr: "unknown device type: snmp",
-		},
-		{
-			name:    "parallelism",
-			change:  func(c *Config) { c.Devices[0].Parallelism = 0 },
-			wantErr: "parallelism must be between 1 and 100",
 		},
 		{
 			name:    "no points",

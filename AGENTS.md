@@ -209,9 +209,8 @@ writer that failed, or a missed deadline.
 - **Register type** is chosen once per device from the first point with
   `function_code` 3 (holding) or 4 (input); default holding. Mixing 3 and 4 in one device
   is rejected by validation; use two devices.
-- **Direct mode:** one read per point (`register`, `count`, default 1). Points are read with
-  up to `parallelism` goroutines. A failed point is logged and skipped; the rest
-  of the poll is still delivered. Reads not started yet are skipped after a connection
+- **Direct mode:** one read per point (`register`, `count`, default 1), one after the
+  other. A failed point is logged and skipped; the rest of the poll is still delivered. Reads not started yet are skipped after a connection
   error and after two timeouts in a row (the device does not answer; one timeout may be a
   register it ignores), so a silent device does not hold a poll for points × timeout.
 - **Range mode:** the `ranges` (`"start-end"`, inclusive) are read in chunks of at most
@@ -226,9 +225,8 @@ writer that failed, or a missed deadline.
   defaults to 1 (an explicit 0 is treated as unset). 32-bit types need `count: 2` (high
   word first); a smaller count is rejected by validation, as is a `count` above 125 or
   registers past 65535.
-- `parallelism` does not make Modbus requests concurrent: they share the device's one
-  connection, on which the client library sends one request at a time, so `1` is the
-  right value.
+- Requests are sent one at a time: they share the device's one connection, on which
+  the client library cannot run requests concurrently.
 
 ### HTTP reader
 - `method` GET (default) or POST with `body`; `headers` are sent as given; `insecure`
@@ -248,7 +246,7 @@ writer that failed, or a missed deadline.
   `type` (`"N/A"` for `int64`, a negative number for `uint*`); gjson would deliver 0 or
   false, which looks like a reading. Such a point is warned about once, further failures
   are logged at debug, and an info line follows when it can be read again.
-- `parallelism` has no effect: one request per poll, points are parsed in order.
+- One request per poll; points are parsed in order.
 - A request that cannot be built (bad URL, method) fails startup; an unreachable endpoint
   does not.
 
@@ -342,7 +340,7 @@ writer that failed, or a missed deadline.
   `host:port`; every device needs at least one point; point names are unique per
   device; device and point names must not contain `/`; the `topic`, devices and
   non-excluded points of an MQTT output must not contain `+` or `#` (wildcards: a broker
-  closes the connection); `parallelism` 1–100; `poll_interval` > 0; `timeout` > 0.
+  closes the connection); `poll_interval` > 0; `timeout` > 0.
 - Unknown keys are an error (a typo would otherwise fall back to a default silently).
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
   poll interval, at least 3 s and at most 10 s; point `scale` 1; HTTP method GET and response type json;
@@ -667,10 +665,6 @@ Known gaps to the rules above, one branch each; update this list when an item is
   out with `exclude_points` or in a separate device. Planned fix: the wide schema
   (`feat/influxdb-wide-rows`, `feat(influxdb)!`): one line per poll, table = device, one
   field column per point, so every point gets its own column type.
-- **`parallelism` option** (`feat(config)!`): it buys nothing; Modbus requests share one
-  connection (direct and range mode) and HTTP sends one request per poll. Remove the key,
-  its validation and the semaphores in `modbus/read.go`. Unknown keys are errors, so old
-  configs need the key deleted.
 - **Batches to outputs** (`feat(routing)!`): send one filtered `[]DataPoint` per poll per
   output instead of one point per send; `buffer_size` then counts polls, not points.
 - **CSV buffering:** a `bufio.Writer` flushed when the input channel is empty and on

@@ -20,13 +20,10 @@ type Config struct {
 
 // Device represents a device configuration.
 type Device struct {
-	Name         string        `mapstructure:"name"`
-	Type         string        `mapstructure:"type"` // "modbus" or "http"
-	PollInterval time.Duration `mapstructure:"poll_interval"`
-	Timeout      time.Duration `mapstructure:"timeout"`
-	// Parallelism (1-100) is the number of goroutines reading one Modbus poll; the
-	// requests share one connection and are sent one at a time.
-	Parallelism    int            `mapstructure:"parallelism"`
+	Name           string         `mapstructure:"name"`
+	Type           string         `mapstructure:"type"` // "modbus" or "http"
+	PollInterval   time.Duration  `mapstructure:"poll_interval"`
+	Timeout        time.Duration  `mapstructure:"timeout"`
 	DeviceSpecific DeviceSpecific `mapstructure:"device_specific"`
 	Points         []Point        `mapstructure:"points"`
 }

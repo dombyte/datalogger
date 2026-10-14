@@ -33,8 +33,6 @@ lookups:
 #                  runs at startup
 #   timeout        maximum time to wait for one response
 #                  (default: poll_interval, at least 3s and at most 10s)
-#   parallelism    1-100; Modbus requests share one connection and are sent one at a
-#                  time anyway, so 1 is the right value (no effect for HTTP).
 #
 # Point names must be unique within a device and must not contain "/".
 #
@@ -58,7 +56,6 @@ devices:
     type: modbus
     poll_interval: 5s
     timeout: 2s
-    parallelism: 1
     device_specific:
       modbus:
         address: "tcp://192.0.2.10:502"
@@ -136,7 +133,6 @@ devices:
     type: modbus
     poll_interval: 10s
     timeout: 3s
-    parallelism: 1
     device_specific:
       modbus:
         address: "rtu:///dev/ttyUSB0"
@@ -176,7 +172,6 @@ devices:
     type: http
     poll_interval: 1s
     timeout: 2s
-    parallelism: 1
     device_specific:
       http:
         address: "http://192.0.2.20/rpc/EM.GetStatus"
@@ -202,7 +197,6 @@ devices:
     type: http
     poll_interval: 1m
     timeout: 10s
-    parallelism: 2
     device_specific:
       http:
         address: "https://api.example.com/v1/status"

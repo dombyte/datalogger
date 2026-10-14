@@ -120,7 +120,6 @@ func createModbusReader(
 		Settings: modbus.Settings{
 			Name:         d.Name,
 			PollInterval: d.PollInterval,
-			Parallelism:  d.Parallelism,
 			RangeMode:    m.RegisterMode == "range",
 			Ranges:       m.Ranges,
 			Points:       modbusPoints(d.Points),
