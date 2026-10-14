@@ -49,6 +49,7 @@ type ConnSettings struct {
 type PahoDialer struct {
 	settings       ConnSettings
 	host           string // host:port
+	serverName     string // host, checked against the broker certificate
 	useTLS         bool
 	publishTimeout time.Duration
 }
@@ -71,7 +72,7 @@ func NewDialer(s ConnSettings) (*PahoDialer, error) {
 		return nil, fmt.Errorf("mqtt: address %q has no host", s.Address)
 	}
 	return &PahoDialer{
-		settings: s, host: u.Host, useTLS: tlsScheme || s.Insecure,
+		settings: s, host: u.Host, serverName: u.Hostname(), useTLS: tlsScheme || s.Insecure,
 		publishTimeout: publishTimeout,
 	}, nil
 }
@@ -144,12 +145,8 @@ func (d *PahoDialer) dialConn(ctx context.Context) (net.Conn, error) {
 		return conn, nil
 	}
 
-	serverName, _, err := net.SplitHostPort(d.host)
-	if err != nil {
-		serverName = d.host
-	}
 	tlsConn := tls.Client(conn, &tls.Config{
-		ServerName:         serverName,
+		ServerName:         d.serverName,
 		InsecureSkipVerify: d.settings.Insecure,
 		MinVersion:         tls.VersionTLS12,
 	})

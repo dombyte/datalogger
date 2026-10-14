@@ -106,15 +106,13 @@ func (r *Reader) readRangeMode(ctx context.Context) ([]datasource.DataPoint, err
 
 	var results []datasource.DataPoint
 	for _, p := range r.settings.Points {
-		values, received, err := pointRegisters(p, registers)
-		if err == nil {
-			var dp datasource.DataPoint
-			if dp, err = r.dataPoint(p, values, received); err == nil {
-				results = append(results, dp)
-				continue
-			}
+		values, received := pointRegisters(p, registers)
+		dp, err := r.dataPoint(p, values, received)
+		if err != nil {
+			r.logger.Warn().Str("point", p.Name).Err(err).Msg("Failed to decode point")
+			continue
 		}
-		r.logger.Warn().Str("point", p.Name).Err(err).Msg("Failed to decode point")
+		results = append(results, dp)
 	}
 	return results, nil
 }
@@ -160,23 +158,19 @@ func (r *Reader) readRange(
 
 // pointRegisters collects the registers of a point; the timestamp is the receive time
 // of its first register.
-func pointRegisters(
-	p Point,
-	registers map[uint16]registerValue,
-) ([]uint16, time.Time, error) {
+func pointRegisters(p Point, registers map[uint16]registerValue) ([]uint16, time.Time) {
 	values := make([]uint16, registerCount(p))
-	var received time.Time
 	for i := range registerCount(p) {
 		rv, ok := registers[p.Register+i]
 		if !ok {
-			return nil, time.Time{}, fmt.Errorf("register %d not in range data", p.Register+i)
-		}
-		if i == 0 {
-			received = rv.received
+			// New checked that the ranges cover every point, the library returns every
+			// register it was asked for, and a failed chunk fails the poll before this.
+			//nolint:forbidigo // invariant: every register of a point was read
+			panic(fmt.Sprintf("modbus: register %d not in range data", p.Register+i))
 		}
 		values[i] = rv.value
 	}
-	return values, received, nil
+	return values, registers[p.Register].received
 }
 
 // dataPoint decodes and scales the registers of a point.
