@@ -74,7 +74,7 @@ internal/datasource/     DataPoint type, DeviceReader interface
   http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text
 internal/transform/      point expressions (expr-lang): compile at startup, Apply per poll
 internal/output/         Writer interface
-  csv/                   CSV writer: flush per row, rotation by max_age, backup cleanup
+  csv/                   CSV writer: buffered rows, rotation by max_age, backup cleanup
   influxdb/              InfluxDB 3 writer: batching, retries, v3 write API
   mqtt/                  MQTT v5 writer (paho.golang): one topic per point, JSON payload
   api/                   HTTP API: latest value per point in memory, read-only JSON
@@ -289,7 +289,9 @@ writer that failed, or a missed deadline.
 
 ### CSV writer
 - Columns: `timestamp` (RFC3339Nano), `device`, `point`, `value`, `unit`; header written
-  when the file is empty. Every point is flushed immediately.
+  when the file is empty. Rows are buffered and flushed when no further poll is queued
+  (a single poll reaches the file at once, a backlog in large blocks) and on shutdown. A
+  failed write or flush is logged and the file reopened; the rows buffered then are lost.
 - Rotation: when the file is older than `max_age` (checked after each row; the age of an
   existing file counts from the timestamp of its first row, so restarts do not reset it),
   it is renamed to `<file>.<YYYYMMDD-HHMMSS>` (one second later if that backup exists)
@@ -667,8 +669,6 @@ Known gaps to the rules above, one branch each; update this list when an item is
   out with `exclude_points` or in a separate device. Planned fix: the wide schema
   (`feat/influxdb-wide-rows`, `feat(influxdb)!`): one line per poll, table = device, one
   field column per point, so every point gets its own column type.
-- **CSV buffering:** a `bufio.Writer` flushed when the input channel is empty and on
-  shutdown, instead of a flush per row; update section 7.
 - **Formatting on the hot path:** `strconv.Append…` into reused buffers instead of
   `fmt.Sprintf` for CSV values (`csv/writer.go`) and MQTT topics (`mqtt/writer.go`), with
   a benchmark (section 9.6).

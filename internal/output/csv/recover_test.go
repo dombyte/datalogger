@@ -44,9 +44,11 @@ func TestRecoversAfterFailedWrite(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.NoError(t, w.file.Close()) // the next write fails
-	w.handlePoint(row(1))
-	w.handlePoint(row(2))
+	require.NoError(t, w.file.Close()) // the next flush fails
+	w.writePoll([]datasource.DataPoint{row(1)})
+	w.flush()
+	w.writePoll([]datasource.DataPoint{row(2)})
+	w.flush()
 	w.close()
 
 	assert.Equal(t, header+"2026-09-29T12:00:00Z,meter,power,2,\n", read(t, path),
@@ -69,9 +71,9 @@ func TestRecoversAfterFailedRotation(t *testing.T) {
 	require.NoError(t, os.Remove(path)) // the rename of the rotation fails
 	clk.Advance(time.Hour)
 	require.ErrorContains(t, w.write(row(1)), "csv: rotate")
-	w.reopen() // what handlePoint does after the error
+	w.reopen() // what writePoll does after the error
 
-	w.handlePoint(row(2))
+	w.writePoll([]datasource.DataPoint{row(2)})
 	w.close()
 
 	assert.Equal(t, header+"2026-09-29T12:00:00Z,meter,power,2,\n", read(t, path))
@@ -116,12 +118,14 @@ func TestReopenFailureIsLoggedAndRetried(t *testing.T) {
 	require.NoError(t, w.file.Close())
 	require.NoError(t, os.Remove(path))
 	require.NoError(t, os.Mkdir(path, 0o755))
-	w.handlePoint(row(1))
-	assert.Equal(t, []string{"error", "error"}, levels(&logs), "write and reopen failed")
+	w.writePoll([]datasource.DataPoint{row(1)})
+	w.flush()
+	assert.Equal(t, []string{"error", "error"}, levels(&logs), "flush and reopen failed")
 
 	require.NoError(t, os.Remove(path))
-	w.handlePoint(row(2)) // fails on the old file, reopens
-	w.handlePoint(row(3))
+	// row 2 fails on the old writer, which keeps its error, and reopens the file.
+	w.writePoll([]datasource.DataPoint{row(2), row(3)})
+	w.flush()
 	assert.Equal(t, header+"2026-09-29T12:00:00Z,meter,power,3,\n", read(t, path))
 }
 
