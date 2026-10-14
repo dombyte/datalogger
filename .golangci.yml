@@ -54,7 +54,7 @@ linters:
     forbidigo:
       forbid:
         - pattern: ^panic$
-          msg: "no panic at runtime; return an error"
+          msg: "panic only for invariants, with //nolint:forbidigo and the reason; else return an error"
 
     # Line length: hard limit of 100 chars (AGENTS.md 9.4)
     lll:

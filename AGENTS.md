@@ -8,7 +8,8 @@ Keywords: **MUST** = blocker if violated, **SHOULD** = fix unless there is a wri
 reason, **MAY** = allowed option. When code and this file disagree, fix one of them in
 the same change.
 
-**Current state:** the code follows every rule below; open gaps are listed in section 13.
+**Current state:** the code follows every rule below; open gaps are listed in section 13
+and fixed in their own `refactor/` or `fix/` branches, not inside feature work.
 
 ---
 
@@ -400,12 +401,23 @@ writer that failed, or a missed deadline.
 
 ## 9. Code Rules
 
+### Principles
+- Simple first: straight-line code, stdlib before a dependency, no abstraction before a
+  second real use.
+- One way to do each thing; code reads as if one person wrote it.
+
 ### 9.1 Architecture (MUST)
 - **Dependency injection:** every dependency a type uses (client, dialer, clock, logger,
   channel) is passed in through its constructor; nothing is created inside methods.
-  Dependencies are **interfaces declared by the consumer**, next to the code that uses
-  them, and kept small (only the methods it calls). Shared contracts are exported by
-  their package: `datasource.DeviceReader`, `output.Writer`, `clock.Clock`.
+- **Interfaces only at boundaries:** an interface exists for external I/O (Modbus, HTTP,
+  InfluxDB and MQTT clients and dialers) and for time (`clock.Clock`, see section 8),
+  declared by the consumer next to the code that uses it and kept small (only the
+  methods it calls). Shared contracts are exported by their package:
+  `datasource.DeviceReader`, `output.Writer`, `clock.Clock`. In-process parts
+  (`transform.Transformer`, the API store) are concrete types.
+- **Accept interfaces, return concrete types:** constructors return `*Reader`, `*Writer`,
+  `*LibDialer`, …; the exception is `api.Listen`, which returns a `net.Listener` like
+  `net.Listen`.
 - **Composition root:** `internal/app` is the only code that names concrete reader/writer
   types; it creates them through `Create*` factories that switch on the config type and
   return a typed error for an unknown one.
@@ -418,16 +430,19 @@ writer that failed, or a missed deadline.
 - **No global state:** no package-level loggers, singletons, caches or lookup tables
   (build them in a constructor). Allowed package-level variables: `Err…` sentinels and the
   linker-set build info in `main` (`Version`, `Commit`, `BuildDate`, `GoVersion`, marked
-  `//nolint:gochecknoglobals // written by the linker at build time`).
+  `//nolint:gochecknoglobals // written by the linker at build time`). No `init()` with
+  side effects.
 - **Lifecycle:** every goroutine has an owner that starts it, can stop it and waits for
   it. Waiting loops use the injected `clock.Clock`, capture `now` once per iteration and
   derive everything from it. Every channel has a documented owner (the sender closes)
   and a documented behaviour when full (section 5). Component exits are watched with
-  channels, never with sleep-polling. `os.Exit` only in `main`.
+  channels, never with sleep-polling. Never hold a lock across I/O or a channel send.
+  `os.Exit` only in `main`.
 
 ### 9.2 Errors (MUST)
-- Wrap with `%w` and context, prefixed with the package:
-  `fmt.Errorf("modbus: read chunk %d-%d: %w", start, end, err)`.
+- Wrap with `%w` and the operation (`read chunk %d-%d: %w`); add the package name once,
+  where the error leaves the package (`modbus: read chunk 0-124: …`). Don't wrap when it
+  adds nothing.
 - **Sentinels** (`ErrMissingDependency`, `ErrComponentStopped`) for conditions callers
   branch on; **custom types** when callers need data. Both work with `errors.Is`/`As`.
 - **Never swallow** an error: handle it, return it, or log it with the reason it is safe
@@ -435,14 +450,20 @@ writer that failed, or a missed deadline.
 - **Log once**, at the boundary that handles the error; lower layers return, they do not
   log and return.
 - Error strings: lowercase, no trailing punctuation.
-- **No panic** (enforced by `forbidigo`). Startup errors go back to `main`, which exits 1.
+- **Panic only for invariants:** a state the code has already ruled out (e.g. a range
+  checked at construction, a library call that cannot fail with the given arguments),
+  marked `//nolint:forbidigo // invariant: <why it cannot happen>`. Never for input, I/O
+  or runtime conditions; those return errors, and startup errors go back to `main`,
+  which exits 1.
 
 ### 9.3 Logging
 - One `zerolog.Logger` is built in `main` and injected; every component gets
   `log.With().Str("component", name).Logger()`.
-- Context fields, not formatted strings: `.Str("device", name).Err(err).Msg(...)`.
+- Constant messages, data in fields: `.Str("device", name).Err(err).Msg(...)`; no
+  `Msgf`, no `fmt.Sprintf` into `Msg`.
 - Levels: `debug` per poll/point detail, `info` lifecycle, `warn` recovered problems,
-  `error` failures that need attention.
+  `error` failures that need attention. Per-point detail stays at debug, so it costs
+  nothing when debug is off (zerolog returns a nil event for a disabled level).
 - Never log secrets: InfluxDB token, MQTT password, HTTP auth headers, URLs with
   credentials.
 
@@ -456,8 +477,10 @@ writer that failed, or a missed deadline.
   second real use).
 - Naming: packages lowercase and singular; files lowercase with underscores; one-letter
   receivers, consistent per type; stdlib acronyms (`ID`, `URL`, `HTTP`); `Err…` sentinels,
-  `…Error` types; functions verb + noun.
-- Layout: all code under `internal/` (no `pkg/`), at most 3 levels below it.
+  `…Error` types; functions verb + noun; no stutter (`csv.Writer`, not `csv.CSVWriter`),
+  no `Get` prefix. Packages are named by what they provide.
+- Layout: all code under `internal/` (no `pkg/`), at most 3 levels below it; no
+  `util`/`common`/`helpers` packages.
 - Docs: package doc and doc comments on exported types MUST, on exported functions
   SHOULD; they start with the name. Inline comments explain **why**. Non-obvious design
   decisions go into section 8 of this file, not into long code comments.
@@ -473,6 +496,16 @@ writer that failed, or a missed deadline.
   test that fails before the fix.
 - Coverage (SHOULD): ≥ 90 % per package with logic, ≥ 100 % for packages with five or more
   complex functions; `cmd/datalogger` and `app` are covered by the startup test instead.
+- Don't test unreachable branches and don't keep them for coverage: delete them, or turn
+  them into invariant panics (section 9.2). An uncovered invariant panic is an accepted
+  gap below the coverage target.
+
+### 9.6 Performance
+- Measure first: a `perf:` change comes with a benchmark (`for b.Loop()`) and `benchstat`
+  numbers.
+- Batch at boundaries: one channel send per poll, one InfluxDB write per batch. Reuse HTTP
+  clients and connections.
+- Not without a profile: `sync.Pool`, struct field reordering, `unsafe`, custom codecs.
 
 ---
 
@@ -486,7 +519,7 @@ writer that failed, or a missed deadline.
   errcheck, errorlint, gosec, gocyclo, dupl, mnd, lll, misspell, unconvert, perfsprint,
   whitespace, importas, goprintffuncname, ineffassign, wastedassign, durationcheck,
   makezero, tparallel, copyloopvar, intrange, bodyclose, rowserrcheck, sqlclosecheck,
-  gochecknoglobals, forbidigo (`panic`), nolintlint (every `//nolint` names the linter and
+  gochecknoglobals, forbidigo (`panic` outside invariants), nolintlint (every `//nolint` names the linter and
   gives a reason). Tests are excluded from revive, dupl, errcheck, gosec, lll,
   gochecknoglobals, forbidigo and mnd.
 - **Tool versions** are pinned (pinned `go run` commands, the mockery `tool` in `go.mod`,
@@ -555,7 +588,7 @@ writer that failed, or a missed deadline.
 | `<type>(deps)` | dependency and toolchain bumps | Dependencies |
 
 - `!` before the colon marks a breaking change for users upgrading (config keys, MQTT
-  topic/payload, CSV columns, InfluxDB schema); a `BREAKING CHANGE:` footer alone is not
+  topic/payload, CSV columns, InfluxDB schema, API paths/format); a `BREAKING CHANGE:` footer alone is not
   enough, the changelog reads only the subject.
 - Subject: imperative, lowercase first word, no trailing period, ≤ 72 characters.
 - Merge commits keep git's default message.
@@ -576,7 +609,7 @@ feat(influxdb)!: store unit as field instead of tag
 The required CI checks MUST be green before a PR is merged.
 
 - **Blocker:** does not build, failing tests, lint/format/gosec findings; global state,
-  panic, a concrete type where an interface belongs, a dependency created inside a
+  a panic that is not an invariant, a concrete type where an interface belongs, a dependency created inside a
   method; swallowed errors; new code without tests, drifted mocks; AI signatures or
   non-conventional commit subjects; secrets in code, config or logs.
 - **Must fix:** missing package/type docs; a breaking change without `!`; a rule in this
@@ -625,9 +658,23 @@ Known gaps to the rules above, one branch each; update this list when an item is
   never fails (`SetUnitId`), the TLS server name fallback for an address without port
   (the dial fails first), CSV errors that need a broken file system (stat, directory
   listing, reopen right after a rename) and API server errors after shutdown or on a
-  response write to a client that went away. Remove them or accept them per package.
+  response write to a client that went away. Delete each one or turn it into an
+  invariant panic (section 9.2); errors that can really happen (broken file system,
+  client gone) stay as handled errors and are accepted below 100 %.
 - **Mixed value types in InfluxDB:** all points of a device share the `value` field, but
   HTTP points can deliver bool, int64 or string next to float64, and InfluxDB 3 keeps one
   type per column, so such a device's writes can be rejected. Today: keep such points
-  out with `exclude_points` or in a separate device. A fix (e.g. typed fields
-  `value`/`value_str`/`value_bool`) changes the schema and is a breaking change (`!`).
+  out with `exclude_points` or in a separate device. Planned fix: the wide schema
+  (`feat/influxdb-wide-rows`, `feat(influxdb)!`): one line per poll, table = device, one
+  field column per point, so every point gets its own column type.
+- **`parallelism` option** (`feat(config)!`): it buys nothing; Modbus requests share one
+  connection (direct and range mode) and HTTP sends one request per poll. Remove the key,
+  its validation and the semaphores in `modbus/read.go`. Unknown keys are errors, so old
+  configs need the key deleted.
+- **Batches to outputs** (`feat(routing)!`): send one filtered `[]DataPoint` per poll per
+  output instead of one point per send; `buffer_size` then counts polls, not points.
+- **CSV buffering:** a `bufio.Writer` flushed when the input channel is empty and on
+  shutdown, instead of a flush per row; update section 7.
+- **Formatting on the hot path:** `strconv.Append…` into reused buffers instead of
+  `fmt.Sprintf` for CSV values (`csv/writer.go`) and MQTT topics (`mqtt/writer.go`), with
+  a benchmark (section 9.6).
