@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/simonvetter/modbus"
@@ -21,34 +20,23 @@ type registerValue struct {
 	received time.Time
 }
 
-// readDirectMode reads every point with its own request, up to Parallelism at a time.
-// A failed point is logged and skipped. Reads not yet started are skipped on shutdown,
+// readDirectMode reads every point with its own request, one after the other. A
+// failed point is logged and skipped. Reads not yet started are skipped on shutdown,
 // after a connection error and after maxTimeoutsInRow timeouts in a row, so a device
 // that stopped answering does not hold the poll for points × timeout. The returned
 // error is the first connection error, or the first error if no point could be read.
 func (r *Reader) readDirectMode(ctx context.Context) ([]datasource.DataPoint, error) {
-	var (
-		wg   sync.WaitGroup
-		poll directPoll
-	)
-	sem := make(chan struct{}, r.settings.Parallelism)
-
+	var poll directPoll
 	for _, p := range r.settings.Points {
-		wg.Go(func() {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			if poll.skip(ctx) {
-				return
-			}
-			dp, err := r.readPoint(p)
-			if err != nil {
-				r.logger.Warn().Str("point", p.Name).Err(err).Msg("Failed to read point")
-			}
-			poll.add(dp, err)
-		})
+		if poll.skip(ctx) {
+			break
+		}
+		dp, err := r.readPoint(p)
+		if err != nil {
+			r.logger.Warn().Str("point", p.Name).Err(err).Msg("Failed to read point")
+		}
+		poll.add(dp, err)
 	}
-	wg.Wait()
 	return poll.result()
 }
 
@@ -57,10 +45,8 @@ func (r *Reader) readDirectMode(ctx context.Context) ([]datasource.DataPoint, er
 // mean the device does not answer.
 const maxTimeoutsInRow = 2
 
-// directPoll collects the results of one direct-mode poll; its methods are safe for
-// the concurrent reads.
+// directPoll collects the results of one direct-mode poll.
 type directPoll struct {
-	mu            sync.Mutex
 	results       []datasource.DataPoint
 	firstErr      error
 	connErr       error
@@ -69,15 +55,11 @@ type directPoll struct {
 
 // skip reports whether the remaining reads are skipped.
 func (d *directPoll) skip(ctx context.Context) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	return ctx.Err() != nil || d.connErr != nil || d.timeoutsInRow >= maxTimeoutsInRow
 }
 
 // add records the outcome of one read.
 func (d *directPoll) add(dp datasource.DataPoint, err error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	switch {
 	case err == nil:
 		d.results = append(d.results, dp)
@@ -85,16 +67,16 @@ func (d *directPoll) add(dp datasource.DataPoint, err error) {
 		return
 	case errors.Is(err, modbus.ErrRequestTimedOut):
 		d.timeoutsInRow++
-	case isConnectionError(err):
-		d.connErr = cmp(d.connErr, err)
+	case isConnectionError(err) && d.connErr == nil:
+		d.connErr = err
 	}
-	d.firstErr = cmp(d.firstErr, err)
+	if d.firstErr == nil {
+		d.firstErr = err
+	}
 }
 
 // result returns the points read and the error of the poll.
 func (d *directPoll) result() ([]datasource.DataPoint, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.connErr != nil {
 		return d.results, d.connErr
 	}
@@ -102,14 +84,6 @@ func (d *directPoll) result() ([]datasource.DataPoint, error) {
 		return nil, d.firstErr
 	}
 	return d.results, nil
-}
-
-// cmp returns current if it is set, else err.
-func cmp(current, err error) error {
-	if current != nil {
-		return current
-	}
-	return err
 }
 
 // readPoint reads, decodes and scales one point, stamped with the receive time.
@@ -145,66 +119,30 @@ func (r *Reader) readRangeMode(ctx context.Context) ([]datasource.DataPoint, err
 	return results, nil
 }
 
-// readAllRanges reads the ranges, up to Parallelism at a time, and returns the first
-// error of any chunk. After a failed chunk, or on shutdown, no further chunk is read:
-// the poll fails as a whole anyway.
+// readAllRanges reads the ranges one after the other and returns the first error of
+// any chunk. After a failed chunk, or on shutdown, no further chunk is read: the poll
+// fails as a whole anyway.
 func (r *Reader) readAllRanges(ctx context.Context) (map[uint16]registerValue, error) {
-	var wg sync.WaitGroup
-	rp := rangePoll{registers: make(map[uint16]registerValue)}
-	sem := make(chan struct{}, r.settings.Parallelism)
-
+	registers := make(map[uint16]registerValue)
 	for _, rng := range r.ranges {
-		wg.Go(func() {
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			rp.fail(r.readRange(ctx, rng, &rp))
-		})
+		if err := r.readRange(ctx, rng, registers); err != nil {
+			return nil, err
+		}
 	}
-	wg.Wait()
-	return rp.registers, rp.err
+	return registers, nil
 }
 
-// rangePoll collects the registers of one range-mode poll; its methods are safe for
-// the concurrent reads.
-type rangePoll struct {
-	mu        sync.Mutex
-	registers map[uint16]registerValue
-	err       error
-}
-
-// failed reports whether a chunk failed or ctx ended, so no further chunk is read.
-func (rp *rangePoll) failed(ctx context.Context) error {
-	rp.mu.Lock()
-	defer rp.mu.Unlock()
-	if rp.err == nil && ctx.Err() != nil {
-		rp.err = fmt.Errorf("poll cancelled: %w", ctx.Err())
-	}
-	return rp.err
-}
-
-// fail records err (the first one wins); nil is ignored.
-func (rp *rangePoll) fail(err error) {
-	rp.mu.Lock()
-	defer rp.mu.Unlock()
-	rp.err = cmp(rp.err, err)
-}
-
-// store records the registers of one chunk.
-func (rp *rangePoll) store(start int, values []uint16, received time.Time) {
-	rp.mu.Lock()
-	defer rp.mu.Unlock()
-	for i, v := range values {
-		rp.registers[uint16(start+i)] = registerValue{value: v, received: received}
-	}
-}
-
-// readRange reads one range in chunks of at most maxRegistersPerRead and stores the
-// registers; it stops at the first failed chunk, or when another one failed.
-func (r *Reader) readRange(ctx context.Context, rng Range, rp *rangePoll) error {
+// readRange reads one range in chunks of at most maxRegistersPerRead into registers;
+// it stops at the first failed chunk or when ctx ends.
+func (r *Reader) readRange(
+	ctx context.Context,
+	rng Range,
+	registers map[uint16]registerValue,
+) error {
 	// int arithmetic: a range ending at 65535 would overflow uint16.
 	for start := int(rng.Start); start <= int(rng.End); start += maxRegistersPerRead {
-		if rp.failed(ctx) != nil {
-			return nil // already recorded
+		if ctx.Err() != nil {
+			return fmt.Errorf("poll cancelled: %w", ctx.Err())
 		}
 		count := min(int(rng.End)-start+1, maxRegistersPerRead)
 
@@ -212,7 +150,10 @@ func (r *Reader) readRange(ctx context.Context, rng Range, rp *rangePoll) error 
 		if err != nil {
 			return fmt.Errorf("range %d-%d, chunk at %d: %w", rng.Start, rng.End, start, err)
 		}
-		rp.store(start, values, r.clock.Now().UTC())
+		received := r.clock.Now().UTC()
+		for i, v := range values {
+			registers[uint16(start+i)] = registerValue{value: v, received: received}
+		}
 	}
 	return nil
 }

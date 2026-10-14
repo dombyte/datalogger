@@ -43,7 +43,6 @@ const startupConfig = `devices:
   - name: meter
     type: http
     poll_interval: 20ms
-    parallelism: 1
     device_specific:
       http:
         address: %q

@@ -45,7 +45,6 @@ var (
 type Settings struct {
 	Name         string
 	PollInterval time.Duration
-	Parallelism  int
 	RangeMode    bool     // read Ranges and decode points from them
 	Ranges       []string // "start-end", inclusive; range mode only
 	Points       []Point
@@ -125,8 +124,8 @@ func checkDeps(d Deps) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("%w: %s", ErrMissingDependency, strings.Join(missing, ", "))
 	}
-	if d.Settings.PollInterval <= 0 || d.Settings.Parallelism < 1 || len(d.Settings.Points) == 0 {
-		return fmt.Errorf("%w: poll interval, parallelism and points are required",
+	if d.Settings.PollInterval <= 0 || len(d.Settings.Points) == 0 {
+		return fmt.Errorf("%w: poll interval and points are required",
 			ErrInvalidSettings)
 	}
 	return nil
