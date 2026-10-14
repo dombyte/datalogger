@@ -57,6 +57,10 @@ type Writer struct {
 	csv      *stdcsv.Writer
 	opened   time.Time // for rotation
 	failed   bool      // the previous write failed
+
+	// The points of one poll often share their timestamp: the last one is formatted once.
+	lastTime  time.Time
+	lastStamp string
 }
 
 // New creates the directory and opens (or creates) the file. An error here means the
@@ -205,7 +209,7 @@ func (w *Writer) close() {
 // write buffers one row and rotates the file when it is older than MaxAge.
 func (w *Writer) write(dp datasource.DataPoint) error {
 	err := w.csv.Write([]string{
-		dp.Timestamp.Format(time.RFC3339Nano),
+		w.timestamp(dp.Timestamp),
 		dp.DeviceName,
 		dp.PointName,
 		formatValue(dp.Value),
@@ -219,6 +223,15 @@ func (w *Writer) write(dp datasource.DataPoint) error {
 		return w.rotate()
 	}
 	return nil
+}
+
+// timestamp returns t formatted for a row, reusing the last result for the same time.
+func (w *Writer) timestamp(t time.Time) string {
+	// == instead of Equal: the same instant in another location formats differently.
+	if t != w.lastTime || w.lastStamp == "" {
+		w.lastTime, w.lastStamp = t, t.Format(time.RFC3339Nano)
+	}
+	return w.lastStamp
 }
 
 // writeHeader writes and flushes the header of a new file.

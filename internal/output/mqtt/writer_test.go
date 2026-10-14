@@ -105,7 +105,8 @@ func TestPublishesTopicAndPayloadOnOneSession(t *testing.T) {
 
 	first := <-pubs
 	assert.Equal(t, "logger/meter/power", first.Topic)
-	assert.JSONEq(t, `{"value":1.5,"unit":"W","timestamp":"2026-09-29T12:00:00Z"}`,
+	// Exact bytes: the payload is a public format and keeps its key order.
+	assert.Equal(t, `{"timestamp":"2026-09-29T12:00:00Z","unit":"W","value":1.5}`,
 		string(first.Payload))
 	assert.Equal(t, byte(1), first.QoS)
 	assert.True(t, first.Retain)
