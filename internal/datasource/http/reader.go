@@ -189,7 +189,8 @@ func send(dataCh chan<- []datasource.DataPoint, points []datasource.DataPoint) {
 func (r *Reader) poll(ctx context.Context) ([]datasource.DataPoint, error) {
 	req, err := r.newRequest(ctx)
 	if err != nil {
-		return nil, err
+		//nolint:forbidigo // invariant: New built the same request from the same settings
+		panic(fmt.Sprintf("http: build request: %v", err))
 	}
 
 	resp, err := r.client.Do(req)

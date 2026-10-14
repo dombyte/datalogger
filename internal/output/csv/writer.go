@@ -236,12 +236,11 @@ func (w *Writer) timestamp(t time.Time) string {
 
 // writeHeader writes and flushes the header of a new file.
 func (w *Writer) writeHeader() error {
-	if err := w.csv.Write([]string{"timestamp", "device", "point", "value", "unit"}); err != nil {
-		return fmt.Errorf("csv: write header: %w", err)
-	}
+	header := []string{"timestamp", "device", "point", "value", "unit"}
+	_ = w.csv.Write(header) //nolint:errcheck // kept by the writer, reported by Error below
 	w.csv.Flush()
 	if err := w.csv.Error(); err != nil {
-		return fmt.Errorf("csv: flush: %w", err)
+		return fmt.Errorf("csv: write header: %w", err)
 	}
 	return nil
 }

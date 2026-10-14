@@ -59,18 +59,19 @@ func NewDialer(s ConnSettings, logger zerolog.Logger) (*LibDialer, error) {
 	return d, nil
 }
 
-// Dial opens a connection and selects the slave ID.
+// Dial selects the slave ID and opens a connection.
 func (d *LibDialer) Dial() (Client, error) {
 	client, err := modbus.NewClient(&d.conf)
 	if err != nil {
-		return nil, fmt.Errorf("create client: %w", err)
+		//nolint:forbidigo // invariant: NewDialer created a client from the same configuration
+		panic(fmt.Sprintf("modbus: create client: %v", err))
+	}
+	if err := client.SetUnitId(d.slaveID); err != nil {
+		//nolint:forbidigo // invariant: SetUnitId only stores the ID and never fails
+		panic(fmt.Sprintf("modbus: set unit ID: %v", err))
 	}
 	if err := client.Open(); err != nil {
 		return nil, fmt.Errorf("open connection: %w", err)
-	}
-	if err := client.SetUnitId(d.slaveID); err != nil {
-		_ = client.Close()
-		return nil, fmt.Errorf("set unit ID: %w", err)
 	}
 	return client, nil
 }

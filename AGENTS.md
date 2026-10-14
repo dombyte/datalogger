@@ -500,7 +500,8 @@ writer that failed, or a missed deadline.
   complex functions; `cmd/datalogger` and `app` are covered by the startup test instead.
 - Don't test unreachable branches and don't keep them for coverage: delete them, or turn
   them into invariant panics (section 9.2). An uncovered invariant panic is an accepted
-  gap below the coverage target.
+  gap below the coverage target, and so is a handled error that only a broken file
+  system or a client that went away can cause.
 
 ### 9.6 Performance
 - Measure first: a `perf:` change comes with a benchmark (`for b.Loop()`) and `benchstat`
@@ -653,16 +654,6 @@ The required CI checks MUST be green before a PR is merged.
 
 Known gaps to the rules above, one branch each; update this list when an item is done.
 
-- **Coverage below 100 %:** `datasource/http` 99.4 %, `datasource/modbus` 98.4 %,
-  `output/mqtt` 99.1 %, `output/csv` 96.2 %, `output/api` 97.7 %. The open blocks are
-  defensive branches that tests cannot reach: errors already ruled out at construction
-  (HTTP request build, Modbus client creation and range coverage), a library call that
-  never fails (`SetUnitId`), the TLS server name fallback for an address without port
-  (the dial fails first), CSV errors that need a broken file system (stat, directory
-  listing, reopen right after a rename) and API server errors after shutdown or on a
-  response write to a client that went away. Delete each one or turn it into an
-  invariant panic (section 9.2); errors that can really happen (broken file system,
-  client gone) stay as handled errors and are accepted below 100 %.
 - **Mixed value types in InfluxDB:** all points of a device share the `value` field, but
   HTTP points can deliver bool, int64 or string next to float64, and InfluxDB 3 keeps one
   type per column, so such a device's writes can be rejected. Today: keep such points
