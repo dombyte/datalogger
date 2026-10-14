@@ -106,9 +106,9 @@ func TestServesUntilInputIsClosed(t *testing.T) {
 	w := newWriter(t, ln, clocktest.NewFake(start))
 	assert.Equal(t, "api", w.Name())
 
-	in := make(chan datasource.DataPoint)
+	in := make(chan []datasource.DataPoint)
 	done := w.Start(context.Background(), in)
-	in <- point("inverter", "power", 42.0, "W")
+	in <- []datasource.DataPoint{point("inverter", "power", 42.0, "W")}
 
 	url := "http://" + ln.Addr().String() + "/api/devices/inverter/power"
 	require.Eventually(t, func() bool {
@@ -132,7 +132,7 @@ func TestStopsWhenContextIsCancelled(t *testing.T) {
 	w := newWriter(t, newFakeListener(nil, nil), clocktest.NewFake(start))
 	ctx, cancel := context.WithCancel(context.Background())
 
-	done := w.Start(ctx, make(chan datasource.DataPoint))
+	done := w.Start(ctx, make(chan []datasource.DataPoint))
 	cancel()
 
 	assert.Empty(t, errorsOf(t, done))
@@ -142,7 +142,7 @@ func TestServeFailureStopsWriter(t *testing.T) {
 	t.Parallel()
 	w := newWriter(t, newFakeListener(errors.New("accept failed"), nil), clocktest.NewFake(start))
 
-	errs := errorsOf(t, w.Start(context.Background(), make(chan datasource.DataPoint)))
+	errs := errorsOf(t, w.Start(context.Background(), make(chan []datasource.DataPoint)))
 
 	require.Len(t, errs, 1)
 	assert.ErrorContains(t, errs[0], "api: serve: accept failed")
@@ -152,7 +152,7 @@ func TestListenerCloseErrorIsNotFatal(t *testing.T) {
 	t.Parallel()
 	ln := newFakeListener(nil, errors.New("close failed"))
 	w := newWriter(t, ln, clocktest.NewFake(start))
-	in := make(chan datasource.DataPoint)
+	in := make(chan []datasource.DataPoint)
 
 	done := w.Start(context.Background(), in)
 	<-ln.accepting // Shutdown closes only listeners that Serve already uses
@@ -167,12 +167,12 @@ func startWithOpenRequest(
 	t *testing.T,
 	ctx context.Context,
 	clk *clocktest.Fake,
-) (chan datasource.DataPoint, <-chan error) {
+) (chan []datasource.DataPoint, <-chan error) {
 	t.Helper()
 	ln, err := Listen("127.0.0.1:0")
 	require.NoError(t, err)
 	w := newWriter(t, ln, clk)
-	in := make(chan datasource.DataPoint)
+	in := make(chan []datasource.DataPoint)
 	done := w.Start(ctx, in)
 
 	conn, err := net.Dial("tcp", ln.Addr().String())

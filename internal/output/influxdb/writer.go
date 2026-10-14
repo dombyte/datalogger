@@ -99,7 +99,7 @@ func (w *Writer) Name() string {
 // Start batches points until input is closed, writes the last batch, closes the client
 // and closes the returned channel. A full batch is written at once, a partial one every
 // BatchTimeout.
-func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
+func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint) <-chan error {
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
@@ -110,7 +110,7 @@ func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <
 }
 
 // loop is the batching loop.
-func (w *Writer) loop(ctx context.Context, input <-chan datasource.DataPoint) {
+func (w *Writer) loop(ctx context.Context, input <-chan []datasource.DataPoint) {
 	ticker := w.clock.NewTicker(w.settings.BatchTimeout)
 	defer ticker.Stop()
 
@@ -118,16 +118,23 @@ func (w *Writer) loop(ctx context.Context, input <-chan datasource.DataPoint) {
 		select {
 		case <-ctx.Done():
 			return
-		case dp, ok := <-input:
+		case points, ok := <-input:
 			if !ok {
 				w.flush(ctx)
 				return
 			}
-			w.add(dp)
-			if len(w.batch) >= w.settings.BatchSize {
-				w.flush(ctx)
-			}
+			w.addAll(ctx, points)
 		case <-ticker.C():
+			w.flush(ctx)
+		}
+	}
+}
+
+// addAll appends the points to the batch and writes it whenever it is full.
+func (w *Writer) addAll(ctx context.Context, points []datasource.DataPoint) {
+	for _, dp := range points {
+		w.add(dp)
+		if len(w.batch) >= w.settings.BatchSize {
 			w.flush(ctx)
 		}
 	}

@@ -126,9 +126,10 @@ Rules:
 DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)──▶ router goroutine
                                                     │ (one per device, in app)
                                                     │ transform.Apply on the poll
-                                                    │ non-blocking send, copy per output
+                                                    │ non-blocking send, one filtered
+                                                    │ []DataPoint per poll and output
                                                     ▼
-                                  per-output input channel (buffer_size, default 1000)
+                          per-output input channel (buffer_size polls, default 1000)
                                                     ▼
                                            Writer.Start (one goroutine per output)
 ```
@@ -137,11 +138,12 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   stop. A poll sends all its points as one batch after the reads are done (a poll
   without points sends nothing), so the router sees one consistent snapshot per poll.
 - **The router** applies the device's `transform.Transformer` to each poll (the router is
-  its only user), then sends each point to every output whose `devices` list contains the
-  device and whose `exclude_points` does not list the point.
-  The send is **non-blocking**: if an output channel is full, the point is **dropped for
+  its only user), then sends the poll to every output whose `devices` list contains the
+  device, as a new slice per output without the points its `exclude_points` lists (the
+  writer owns it; a poll with nothing left for an output sends nothing to it).
+  The send is **non-blocking**: if an output channel is full, the poll is **dropped for
   that output only**; a warning is logged when an output channel becomes full, and the
-  count of dropped points when it takes points again (per device). A slow output never
+  count of dropped points when it takes data again (per device). A slow output never
   blocks a device or the other outputs.
 - **`app` owns** the output input channels and closes them during shutdown, after all
   routers have finished.
@@ -354,7 +356,7 @@ writer that failed, or a missed deadline.
 
 ## 8. Design Decisions
 
-- **Drop instead of block:** a full output channel drops the point for that output only. A
+- **Drop instead of block:** a full output channel drops the poll for that output only. A
   stalled output must not stop polling or starve other outputs. Tune with `buffer_size`.
 - **Receive-time timestamps in UTC:** readings are stamped when the device answered, so
   slow polls do not shift data; UTC matches InfluxDB and keeps CSV unambiguous.
@@ -665,8 +667,6 @@ Known gaps to the rules above, one branch each; update this list when an item is
   out with `exclude_points` or in a separate device. Planned fix: the wide schema
   (`feat/influxdb-wide-rows`, `feat(influxdb)!`): one line per poll, table = device, one
   field column per point, so every point gets its own column type.
-- **Batches to outputs** (`feat(routing)!`): send one filtered `[]DataPoint` per poll per
-  output instead of one point per send; `buffer_size` then counts polls, not points.
 - **CSV buffering:** a `bufio.Writer` flushed when the input channel is empty and on
   shutdown, instead of a flush per row; update section 7.
 - **Formatting on the hot path:** `strconv.Append…` into reused buffers instead of

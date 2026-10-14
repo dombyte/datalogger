@@ -25,7 +25,7 @@ type harness struct {
 	t      *testing.T
 	clock  *clocktest.Fake
 	dialer *mocks.MockDialer
-	input  chan datasource.DataPoint
+	input  chan []datasource.DataPoint
 	done   <-chan error
 }
 
@@ -35,7 +35,7 @@ func newHarness(t *testing.T) *harness {
 		t:      t,
 		clock:  clocktest.NewFake(start),
 		dialer: mocks.NewMockDialer(t),
-		input:  make(chan datasource.DataPoint),
+		input:  make(chan []datasource.DataPoint),
 	}
 	w, err := mqtt.New(mqtt.Deps{
 		Settings: mqtt.Settings{Name: "broker", Topic: "logger", QoS: 1, Retain: true},
@@ -51,9 +51,9 @@ func newHarness(t *testing.T) *harness {
 // send hands over a point; it returns once the writer took it, which is after the
 // writer finished the previous point.
 func (h *harness) send(name string) {
-	h.input <- datasource.DataPoint{
+	h.input <- []datasource.DataPoint{{
 		DeviceName: "meter", PointName: name, Value: 1.5, Timestamp: start, Unit: "W",
-	}
+	}}
 }
 
 func (h *harness) stop() {
@@ -181,7 +181,7 @@ func TestNameAndStopOnCancelWithoutSession(t *testing.T) {
 	assert.Equal(t, "broker", w.Name())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := w.Start(ctx, make(chan datasource.DataPoint))
+	done := w.Start(ctx, make(chan []datasource.DataPoint))
 	cancel()
 	_, open := <-done
 	assert.False(t, open, "the writer stops when ctx is cancelled")
@@ -197,12 +197,12 @@ func TestPublishesNaNAsNull(t *testing.T) {
 	pubs := published(p, nil)
 	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
 
-	h.input <- datasource.DataPoint{
+	h.input <- []datasource.DataPoint{{
 		DeviceName: "meter", PointName: "nan", Value: math.NaN(), Timestamp: start,
-	}
-	h.input <- datasource.DataPoint{
+	}}
+	h.input <- []datasource.DataPoint{{
 		DeviceName: "meter", PointName: "inf", Value: math.Inf(1), Timestamp: start,
-	}
+	}}
 	h.stop()
 
 	for _, topic := range []string{"logger/meter/nan", "logger/meter/inf"} {
@@ -271,7 +271,7 @@ func TestSkipsPointThatCannotBeEncoded(t *testing.T) {
 	pubs := published(p, nil)
 	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
 
-	h.input <- datasource.DataPoint{DeviceName: "meter", PointName: "c", Value: complex(1, 2)}
+	h.input <- []datasource.DataPoint{{DeviceName: "meter", PointName: "c", Value: complex(1, 2)}}
 	h.send("power")
 	h.stop()
 

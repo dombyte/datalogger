@@ -92,7 +92,7 @@ func (_c *MockWriter_Name_Call) RunAndReturn(run func() string) *MockWriter_Name
 }
 
 // Start provides a mock function for the type MockWriter
-func (_mock *MockWriter) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
+func (_mock *MockWriter) Start(ctx context.Context, input <-chan []datasource.DataPoint) <-chan error {
 	ret := _mock.Called(ctx, input)
 
 	if len(ret) == 0 {
@@ -100,7 +100,7 @@ func (_mock *MockWriter) Start(ctx context.Context, input <-chan datasource.Data
 	}
 
 	var r0 <-chan error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, <-chan datasource.DataPoint) <-chan error); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context, <-chan []datasource.DataPoint) <-chan error); ok {
 		r0 = returnFunc(ctx, input)
 	} else {
 		if ret.Get(0) != nil {
@@ -117,20 +117,20 @@ type MockWriter_Start_Call struct {
 
 // Start is a helper method to define mock.On call
 //   - ctx context.Context
-//   - input <-chan datasource.DataPoint
+//   - input <-chan []datasource.DataPoint
 func (_e *MockWriter_Expecter) Start(ctx any, input any) *MockWriter_Start_Call {
 	return &MockWriter_Start_Call{Call: _e.mock.On("Start", ctx, input)}
 }
 
-func (_c *MockWriter_Start_Call) Run(run func(ctx context.Context, input <-chan datasource.DataPoint)) *MockWriter_Start_Call {
+func (_c *MockWriter_Start_Call) Run(run func(ctx context.Context, input <-chan []datasource.DataPoint)) *MockWriter_Start_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
-		var arg1 <-chan datasource.DataPoint
+		var arg1 <-chan []datasource.DataPoint
 		if args[1] != nil {
-			arg1 = args[1].(<-chan datasource.DataPoint)
+			arg1 = args[1].(<-chan []datasource.DataPoint)
 		}
 		run(
 			arg0,
@@ -145,7 +145,7 @@ func (_c *MockWriter_Start_Call) Return(errCh <-chan error) *MockWriter_Start_Ca
 	return _c
 }
 
-func (_c *MockWriter_Start_Call) RunAndReturn(run func(ctx context.Context, input <-chan datasource.DataPoint) <-chan error) *MockWriter_Start_Call {
+func (_c *MockWriter_Start_Call) RunAndReturn(run func(ctx context.Context, input <-chan []datasource.DataPoint) <-chan error) *MockWriter_Start_Call {
 	_c.Call.Return(run)
 	return _c
 }

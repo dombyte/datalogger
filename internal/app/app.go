@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	// defaultBufferSize is the output channel size when buffer_size is not set.
+	// defaultBufferSize is the output channel size in polls when buffer_size is not set.
 	defaultBufferSize = 1000
 
 	// pathSeparator separates device and point in exclude_points ("device/point").
@@ -38,7 +38,7 @@ type source struct {
 }
 
 // outputRoute is a writer with the devices it accepts, the points it skips
-// ("device/point") and its input buffer size.
+// ("device/point") and its input buffer size in polls.
 type outputRoute struct {
 	writer        output.Writer
 	devices       []string
@@ -54,7 +54,7 @@ type App struct {
 
 	cancelSources context.CancelFunc
 	cancelOutputs context.CancelFunc
-	inputs        []chan datasource.DataPoint
+	inputs        []chan []datasource.DataPoint
 	routers       sync.WaitGroup
 	writers       sync.WaitGroup
 	stopping      atomic.Bool
@@ -151,10 +151,10 @@ func (a *App) Shutdown() error {
 func (a *App) startWriters(
 	ctx context.Context,
 	failed chan<- error,
-) map[string]chan<- datasource.DataPoint {
-	inputs := make(map[string]chan<- datasource.DataPoint, len(a.outputs))
+) map[string]chan<- []datasource.DataPoint {
+	inputs := make(map[string]chan<- []datasource.DataPoint, len(a.outputs))
 	for _, o := range a.outputs {
-		in := make(chan datasource.DataPoint, o.bufferSize)
+		in := make(chan []datasource.DataPoint, o.bufferSize)
 		a.inputs = append(a.inputs, in)
 		inputs[o.writer.Name()] = in
 
@@ -188,7 +188,7 @@ func (a *App) watchWriter(name string, done <-chan error, failed chan<- error) {
 // the points to the outputs that list the device.
 func (a *App) startReaders(
 	ctx context.Context,
-	inputs map[string]chan<- datasource.DataPoint,
+	inputs map[string]chan<- []datasource.DataPoint,
 	failed chan<- error,
 ) {
 	for _, s := range a.sources {
@@ -198,7 +198,7 @@ func (a *App) startReaders(
 		a.routers.Add(1)
 		go func() {
 			defer a.routers.Done()
-			route(data, s.transform, targets, a.log)
+			route(data, s.transform, name, targets, a.log)
 			if ctx.Err() == nil {
 				failed <- fmt.Errorf("%w: device %s", ErrComponentStopped, name)
 			}
@@ -208,7 +208,7 @@ func (a *App) startReaders(
 
 // targets returns the outputs that accept the device, each with the points of the
 // device it skips.
-func (a *App) targets(device string, inputs map[string]chan<- datasource.DataPoint) []target {
+func (a *App) targets(device string, inputs map[string]chan<- []datasource.DataPoint) []target {
 	var targets []target
 	for _, o := range a.outputs {
 		if !slices.Contains(o.devices, device) {

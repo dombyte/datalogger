@@ -73,9 +73,10 @@ outputs:
   is stamped with the time the device answered, in UTC.
 - Every **output** lists the `devices` it receives. All their points are copied to it,
   except those listed in `exclude_points` (`device/point`).
-- Each output has its own queue (`buffer_size`, default 1000). If an output is too slow
-  and its queue is full, new points are dropped for that output only and a warning is
-  logged; devices and other outputs are not affected.
+- Each output has its own queue of polls (`buffer_size`, default 1000): every poll of a
+  device is handed over as one batch. If an output is too slow and its queue is full,
+  new polls are dropped for that output only and a warning is logged; devices and other
+  outputs are not affected.
 
 ### Devices
 
