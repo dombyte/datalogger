@@ -58,11 +58,13 @@ func fakeReader(t *testing.T, name string, points ...datasource.DataPoint) *dsmo
 	return r
 }
 
-// recorder is a writer mock that records points until its input is closed.
+// recorder is a writer mock that records points and batches until its input is
+// closed.
 type recorder struct {
-	mu     sync.Mutex
-	points []datasource.DataPoint
-	err    error // sent when the input is closed
+	mu      sync.Mutex
+	points  []datasource.DataPoint
+	batches int
+	err     error // sent when the input is closed
 }
 
 func (rec *recorder) got() []datasource.DataPoint {
@@ -76,13 +78,14 @@ func fakeWriter(t *testing.T, name string, rec *recorder) *outmocks.MockWriter {
 	w := outmocks.NewMockWriter(t)
 	w.EXPECT().Name().Return(name).Maybe()
 	w.EXPECT().Start(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, in <-chan datasource.DataPoint) <-chan error {
+		func(_ context.Context, in <-chan []datasource.DataPoint) <-chan error {
 			done := make(chan error, 1)
 			go func() {
 				defer close(done)
-				for dp := range in {
+				for batch := range in {
 					rec.mu.Lock()
-					rec.points = append(rec.points, dp)
+					rec.points = append(rec.points, batch...)
+					rec.batches++
 					rec.mu.Unlock()
 				}
 				if rec.err != nil {
@@ -137,6 +140,7 @@ func TestRoutesToListedOutputsAndDrainsOnShutdown(t *testing.T) {
 
 	assert.Len(t, all.got(), 3)
 	assert.Equal(t, []datasource.DataPoint{point("dev1"), point("dev1")}, onlyDev1.got())
+	assert.Equal(t, 1, onlyDev1.batches, "one batch per poll")
 }
 
 func TestReaderThatStopsFailsRun(t *testing.T) {
@@ -162,7 +166,7 @@ func TestWriterThatStopsFailsRunAndShutdown(t *testing.T) {
 	w := outmocks.NewMockWriter(t)
 	w.EXPECT().Name().Return("broken").Maybe()
 	w.EXPECT().Start(mock.Anything, mock.Anything).RunAndReturn(
-		func(context.Context, <-chan datasource.DataPoint) <-chan error {
+		func(context.Context, <-chan []datasource.DataPoint) <-chan error {
 			done := make(chan error, 1)
 			done <- errors.New("disk full")
 			close(done)
@@ -180,13 +184,39 @@ func TestRouteDropsOnlyForFullOutput(t *testing.T) {
 	data := make(chan []datasource.DataPoint, 1)
 	data <- []datasource.DataPoint{point("dev1"), point("dev1"), point("dev1")}
 	close(data)
-	full := make(chan datasource.DataPoint) // nobody reads
-	roomy := make(chan datasource.DataPoint, 3)
+	full := make(chan []datasource.DataPoint) // nobody reads
+	roomy := make(chan []datasource.DataPoint, 1)
 
-	route(data, noTransform(t), []target{{name: "full", in: full}, {name: "roomy", in: roomy}},
-		zerolog.Nop())
+	route(data, noTransform(t), "dev1",
+		[]target{{name: "full", in: full}, {name: "roomy", in: roomy}}, zerolog.Nop())
 
-	assert.Len(t, roomy, 3)
+	require.Len(t, roomy, 1, "one batch per poll")
+	assert.Len(t, <-roomy, 3)
+}
+
+// Each output gets a batch of its own without its excluded points; a poll that has
+// nothing left for an output sends nothing to it.
+func TestRouteSendsFilteredCopyPerOutput(t *testing.T) {
+	t.Parallel()
+	a := datasource.DataPoint{DeviceName: "dev1", PointName: "a", Value: 1.0}
+	b := datasource.DataPoint{DeviceName: "dev1", PointName: "b", Value: 2.0}
+	data := make(chan []datasource.DataPoint, 2)
+	data <- []datasource.DataPoint{a, b}
+	data <- []datasource.DataPoint{b}
+	close(data)
+	all := make(chan []datasource.DataPoint, 2)
+	noB := make(chan []datasource.DataPoint, 2)
+
+	route(data, noTransform(t), "dev1", []target{
+		{name: "all", in: all},
+		{name: "noB", in: noB, exclude: map[string]bool{"b": true}},
+	}, zerolog.Nop())
+
+	require.Len(t, noB, 1, "the second poll has nothing for noB")
+	assert.Equal(t, []datasource.DataPoint{a}, <-noB)
+	require.Len(t, all, 2)
+	assert.Equal(t, []datasource.DataPoint{a, b}, <-all)
+	assert.Equal(t, []datasource.DataPoint{b}, <-all)
 }
 
 // Regression: a stalled output logged one warning per dropped point (hundreds per
@@ -194,17 +224,18 @@ func TestRouteDropsOnlyForFullOutput(t *testing.T) {
 func TestRouteLogsDropsOncePerStall(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	in := make(chan datasource.DataPoint, 1)
+	in := make(chan []datasource.DataPoint, 1)
 	targets := []target{{name: "slow", in: in}}
 	log := zerolog.New(&logs)
 
-	for range 5 {
-		send(point("dev1"), targets, log) // the first fills the buffer, four are dropped
+	poll := []datasource.DataPoint{point("dev1"), point("dev1")}
+	for range 3 {
+		targets[0].send(poll, log) // the first fills the buffer, two polls are dropped
 	}
 	<-in
-	send(point("dev1"), targets, log) // room again
+	targets[0].send(poll, log) // room again
 	for range 2 {
-		send(point("dev1"), targets, log) // a new stall
+		targets[0].send(poll, log) // a new stall
 	}
 
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
@@ -219,7 +250,7 @@ func TestNewFailsOnlyOnConfigurationErrors(t *testing.T) {
 	t.Parallel()
 	device := func(address string) config.Device {
 		return config.Device{
-			Name: "inverter", Type: "modbus", PollInterval: time.Second, Parallelism: 1,
+			Name: "inverter", Type: "modbus", PollInterval: time.Second,
 			DeviceSpecific: config.DeviceSpecific{Modbus: config.ModbusConfig{
 				Address: address, SlaveID: 1, RegisterMode: "direct",
 			}},
@@ -366,7 +397,7 @@ func TestNewCreatesEveryOutputType(t *testing.T) {
 // stopWriter starts w with a closed input and waits until it stopped.
 func stopWriter(t *testing.T, w output.Writer) {
 	t.Helper()
-	in := make(chan datasource.DataPoint)
+	in := make(chan []datasource.DataPoint)
 	close(in)
 	for err := range w.Start(context.Background(), in) {
 		require.NoError(t, err)

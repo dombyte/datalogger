@@ -73,9 +73,10 @@ outputs:
   is stamped with the time the device answered, in UTC.
 - Every **output** lists the `devices` it receives. All their points are copied to it,
   except those listed in `exclude_points` (`device/point`).
-- Each output has its own queue (`buffer_size`, default 1000). If an output is too slow
-  and its queue is full, new points are dropped for that output only and a warning is
-  logged; devices and other outputs are not affected.
+- Each output has its own queue of polls (`buffer_size`, default 1000): every poll of a
+  device is handed over as one batch. If an output is too slow and its queue is full,
+  new polls are dropped for that output only and a warning is logged; devices and other
+  outputs are not affected.
 
 ### Devices
 
@@ -90,7 +91,7 @@ outputs:
 |---|---|
 | `influxdb` | InfluxDB 3.x, batched, with retries. `timeout` per write (default 10 s); `no_sync: true` lets InfluxDB answer before the write is in its WAL on disk (faster on slow storage, a crash can lose the last second). Schema [below](#influxdb-schema). |
 | `mqtt` | MQTT v5, one topic per point: `<topic>/<device>/<point>` (default topic `datalogger`), payload `{"value": 230.5, "unit": "V", "timestamp": "2026-10-05T10:15:02.123Z"}`. `tcp://` or TLS via `tls://`, `ssl://`, `mqtts://`. Points are dropped (and counted) while the broker is unreachable. |
-| `csv` | Columns `timestamp, device, point, value, unit`, flushed per row. Rotated after `max_age` to `<file>.<YYYYMMDD-HHMMSS>`; `max_backups` 0 = keep none, > 0 = keep that many, < 0 = keep all. |
+| `csv` | Columns `timestamp, device, point, value, unit`, written as soon as no further poll is queued. Rotated after `max_age` to `<file>.<YYYYMMDD-HHMMSS>`; `max_backups` 0 = keep none, > 0 = keep that many, < 0 = keep all. |
 | `api` | Read-only JSON API with the latest value of every point, see [below](#http-api). |
 
 ### HTTP API

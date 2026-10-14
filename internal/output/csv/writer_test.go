@@ -32,10 +32,10 @@ func run(t *testing.T, s csv.Settings, clk *clocktest.Fake, points ...datasource
 	w, err := csv.New(csv.Deps{Settings: s, Clock: clk, Log: zerolog.Nop()})
 	require.NoError(t, err)
 
-	in := make(chan datasource.DataPoint)
+	in := make(chan []datasource.DataPoint)
 	done := w.Start(context.Background(), in)
 	for _, dp := range points {
-		in <- dp
+		in <- []datasource.DataPoint{dp}
 	}
 	close(in)
 	for err := range done {
@@ -59,6 +59,49 @@ func TestWritesHeaderAndRowsAndCreatesDirectory(t *testing.T) {
 	assert.Equal(t, header+
 		"2026-09-29T12:00:00Z,meter,power,1.5,W\n"+
 		"2026-09-29T12:00:00Z,meter,power,true,W\n", read(t, path))
+}
+
+// Rows are buffered, but a poll reaches the file as soon as no further poll is queued,
+// not only on shutdown.
+func TestFlushesWhenNoPollIsQueued(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "data.csv")
+	w, err := csv.New(csv.Deps{
+		Settings: csv.Settings{Name: "file", FilePath: path},
+		Clock:    clocktest.NewFake(start),
+		Log:      zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	in := make(chan []datasource.DataPoint)
+	done := w.Start(context.Background(), in)
+
+	in <- []datasource.DataPoint{point(1.0), point(2.0)}
+	want := header + "2026-09-29T12:00:00Z,meter,power,1,W\n" +
+		"2026-09-29T12:00:00Z,meter,power,2,W\n"
+	assert.Eventually(t, func() bool { return read(t, path) == want }, time.Second,
+		time.Millisecond)
+
+	close(in)
+	for err := range done {
+		require.NoError(t, err)
+	}
+}
+
+// The formatted timestamp is reused only for the same time in the same location.
+func TestFormatsEachTimestamp(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "data.csv")
+	later, local := point(2.0), point(3.0)
+	later.Timestamp = start.Add(time.Millisecond)
+	local.Timestamp = later.Timestamp.In(time.FixedZone("CEST", 2*60*60))
+	run(t, csv.Settings{Name: "file", FilePath: path}, clocktest.NewFake(start),
+		point(1.0), later, local, point(4.0))
+
+	assert.Equal(t, header+
+		"2026-09-29T12:00:00Z,meter,power,1,W\n"+
+		"2026-09-29T12:00:00.001Z,meter,power,2,W\n"+
+		"2026-09-29T14:00:00.001+02:00,meter,power,3,W\n"+
+		"2026-09-29T12:00:00Z,meter,power,4,W\n", read(t, path))
 }
 
 func TestAppendsToExistingFileWithoutSecondHeader(t *testing.T) {
@@ -97,7 +140,7 @@ func TestNameAndStopOnCancel(t *testing.T) {
 	assert.Equal(t, "file", w.Name())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := w.Start(ctx, make(chan datasource.DataPoint))
+	done := w.Start(ctx, make(chan []datasource.DataPoint))
 	cancel()
 	_, open := <-done
 	assert.False(t, open, "the writer stops when ctx is cancelled")

@@ -46,7 +46,8 @@ type Deps struct {
 	Log      zerolog.Logger
 }
 
-// Writer appends every point as one CSV row and flushes it at once.
+// Writer appends every point as one CSV row. Rows are buffered and flushed when no
+// further poll is queued, so a backlog is written in large blocks.
 type Writer struct {
 	settings Settings
 	clock    clock.Clock
@@ -56,6 +57,10 @@ type Writer struct {
 	csv      *stdcsv.Writer
 	opened   time.Time // for rotation
 	failed   bool      // the previous write failed
+
+	// The points of one poll often share their timestamp: the last one is formatted once.
+	lastTime  time.Time
+	lastStamp string
 }
 
 // New creates the directory and opens (or creates) the file. An error here means the
@@ -84,7 +89,7 @@ func (w *Writer) Name() string {
 
 // Start writes points until input is closed (or ctx is cancelled), then closes the
 // file and the returned channel.
-func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
+func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint) <-chan error {
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
@@ -93,28 +98,46 @@ func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <
 			select {
 			case <-ctx.Done():
 				return
-			case dp, ok := <-input:
+			case points, ok := <-input:
 				if !ok {
 					return
 				}
-				w.handlePoint(dp)
+				w.writePoll(points)
+				if len(input) == 0 {
+					w.flush()
+				}
 			}
 		}
 	}()
 	return done
 }
 
-// handlePoint writes one point and logs failures and the recovery after one.
-func (w *Writer) handlePoint(dp datasource.DataPoint) {
-	log := w.logger.With().Str("device", dp.DeviceName).Str("point", dp.PointName).Logger()
-	if err := w.write(dp); err != nil {
-		log.Error().Err(err).Msg("Failed to write CSV row")
+// writePoll buffers one row per point. A failed row is logged and the file reopened;
+// the next row goes to the new file.
+func (w *Writer) writePoll(points []datasource.DataPoint) {
+	for _, dp := range points {
+		if err := w.write(dp); err != nil {
+			w.logger.Error().Str("device", dp.DeviceName).Str("point", dp.PointName).Err(err).
+				Msg("Failed to write CSV row")
+			w.failed = true
+			w.reopen()
+		}
+	}
+}
+
+// flush writes the buffered rows to the file and logs a failure or the recovery
+// after one. After a failure the file is reopened: the rows that were buffered are
+// lost.
+func (w *Writer) flush() {
+	w.csv.Flush()
+	if err := w.csv.Error(); err != nil {
+		w.logger.Error().Err(err).Msg("Failed to write CSV rows")
 		w.failed = true
 		w.reopen()
 		return
 	}
 	if w.failed {
-		log.Info().Msg("Wrote CSV row (recovered from previous error)")
+		w.logger.Info().Msg("Wrote CSV rows (recovered from previous error)")
 		w.failed = false
 	}
 }
@@ -137,7 +160,7 @@ func (w *Writer) open() error {
 		return fmt.Errorf("csv: stat %s: %w", w.settings.FilePath, err)
 	}
 	if info.Size() == 0 {
-		return w.writeRow([]string{"timestamp", "device", "point", "value", "unit"})
+		return w.writeHeader()
 	}
 	// The age of an existing file counts from its first row, not from this start: a
 	// process that restarts more often than max_age would otherwise never rotate.
@@ -183,17 +206,17 @@ func (w *Writer) close() {
 	}
 }
 
-// write appends one row and rotates the file when it is older than MaxAge.
+// write buffers one row and rotates the file when it is older than MaxAge.
 func (w *Writer) write(dp datasource.DataPoint) error {
-	err := w.writeRow([]string{
-		dp.Timestamp.Format(time.RFC3339Nano),
+	err := w.csv.Write([]string{
+		w.timestamp(dp.Timestamp),
 		dp.DeviceName,
 		dp.PointName,
 		formatValue(dp.Value),
 		dp.Unit,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("csv: write: %w", err)
 	}
 
 	if w.settings.MaxAge > 0 && w.clock.Now().Sub(w.opened) >= w.settings.MaxAge {
@@ -202,14 +225,22 @@ func (w *Writer) write(dp datasource.DataPoint) error {
 	return nil
 }
 
-// writeRow writes and flushes one row.
-func (w *Writer) writeRow(row []string) error {
-	if err := w.csv.Write(row); err != nil {
-		return fmt.Errorf("csv: write: %w", err)
+// timestamp returns t formatted for a row, reusing the last result for the same time.
+func (w *Writer) timestamp(t time.Time) string {
+	// == instead of Equal: the same instant in another location formats differently.
+	if t != w.lastTime || w.lastStamp == "" {
+		w.lastTime, w.lastStamp = t, t.Format(time.RFC3339Nano)
 	}
+	return w.lastStamp
+}
+
+// writeHeader writes and flushes the header of a new file.
+func (w *Writer) writeHeader() error {
+	header := []string{"timestamp", "device", "point", "value", "unit"}
+	_ = w.csv.Write(header) //nolint:errcheck // kept by the writer, reported by Error below
 	w.csv.Flush()
 	if err := w.csv.Error(); err != nil {
-		return fmt.Errorf("csv: flush: %w", err)
+		return fmt.Errorf("csv: write header: %w", err)
 	}
 	return nil
 }

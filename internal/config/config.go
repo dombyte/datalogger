@@ -20,13 +20,10 @@ type Config struct {
 
 // Device represents a device configuration.
 type Device struct {
-	Name         string        `mapstructure:"name"`
-	Type         string        `mapstructure:"type"` // "modbus" or "http"
-	PollInterval time.Duration `mapstructure:"poll_interval"`
-	Timeout      time.Duration `mapstructure:"timeout"`
-	// Parallelism (1-100) is the number of goroutines reading one Modbus poll; the
-	// requests share one connection and are sent one at a time.
-	Parallelism    int            `mapstructure:"parallelism"`
+	Name           string         `mapstructure:"name"`
+	Type           string         `mapstructure:"type"` // "modbus" or "http"
+	PollInterval   time.Duration  `mapstructure:"poll_interval"`
+	Timeout        time.Duration  `mapstructure:"timeout"`
 	DeviceSpecific DeviceSpecific `mapstructure:"device_specific"`
 	Points         []Point        `mapstructure:"points"`
 }
@@ -79,8 +76,8 @@ type HTTPConfig struct {
 // Output represents an output configuration.
 type Output struct {
 	Name       string `mapstructure:"name"`
-	Type       string `mapstructure:"type"` // influxdb, mqtt, csv, api
-	BufferSize int    `mapstructure:"buffer_size"`
+	Type       string `mapstructure:"type"`        // influxdb, mqtt, csv, api
+	BufferSize int    `mapstructure:"buffer_size"` // queued polls; 0 = default
 	// BatchSize, BatchTimeout, MaxRetries and RetryDelay tune InfluxDB writes; 0 = default.
 	BatchSize    int           `mapstructure:"batch_size"`
 	BatchTimeout time.Duration `mapstructure:"batch_timeout"`

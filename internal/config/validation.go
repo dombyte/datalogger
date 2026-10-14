@@ -10,9 +10,6 @@ import (
 )
 
 const (
-	minParallelism = 1
-	maxParallelism = 100
-
 	// maxQoS is the highest MQTT quality-of-service level.
 	maxQoS = 2
 
@@ -169,10 +166,6 @@ func (d *Device) validateCommon() error {
 
 	if d.Timeout <= 0 {
 		return errors.New("timeout must be positive")
-	}
-
-	if d.Parallelism < minParallelism || d.Parallelism > maxParallelism {
-		return fmt.Errorf("parallelism must be between %d and %d", minParallelism, maxParallelism)
 	}
 
 	if len(d.Points) == 0 {

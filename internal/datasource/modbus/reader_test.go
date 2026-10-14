@@ -39,7 +39,7 @@ type harness struct {
 }
 
 func settings(points ...modbus.Point) modbus.Settings {
-	return modbus.Settings{Name: "inverter", PollInterval: interval, Parallelism: 1, Points: points}
+	return modbus.Settings{Name: "inverter", PollInterval: interval, Points: points}
 }
 
 func newHarness(t *testing.T, s modbus.Settings) *harness {
@@ -340,7 +340,7 @@ func TestPollInProgressAtShutdownIsDelivered(t *testing.T) {
 	))
 	reading, release := make(chan struct{}), make(chan struct{})
 	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
-	// Parallelism 1: the first read blocks, the other one waits for it and is skipped.
+	// The first read blocks; the second one is not started after shutdown.
 	h.client.EXPECT().ReadRegisters(mock.Anything, uint16(1), lib.HOLDING_REGISTER).
 		RunAndReturn(func(register, _ uint16, _ lib.RegType) ([]uint16, error) {
 			close(reading)
@@ -484,28 +484,24 @@ func TestRangeModeShutdownSkipsRemainingChunks(t *testing.T) {
 // shutdown dropped them, although they had been read.
 func TestPointsReadBeforeShutdownErrorAreDelivered(t *testing.T) {
 	t.Parallel()
-	s := settings(
+	h := newHarness(t, settings(
 		modbus.Point{Name: "a", Register: 1, Type: "uint16", Scale: 1},
 		modbus.Point{Name: "b", Register: 2, Type: "uint16", Scale: 1},
-	)
-	s.Parallelism = 2
-	h := newHarness(t, s)
-	started, release := make(chan struct{}, 2), make(chan struct{})
+	))
+	reading, release := make(chan struct{}), make(chan struct{})
 	h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
-	h.client.EXPECT().ReadRegisters(mock.Anything, uint16(1), lib.HOLDING_REGISTER).
-		RunAndReturn(func(register, _ uint16, _ lib.RegType) ([]uint16, error) {
-			started <- struct{}{}
+	h.client.EXPECT().ReadRegisters(uint16(1), uint16(1), lib.HOLDING_REGISTER).
+		Return([]uint16{1}, nil).Once()
+	h.client.EXPECT().ReadRegisters(uint16(2), uint16(1), lib.HOLDING_REGISTER).
+		RunAndReturn(func(uint16, uint16, lib.RegType) ([]uint16, error) {
+			close(reading)
 			<-release
-			if register == 2 {
-				return nil, io.EOF
-			}
-			return []uint16{1}, nil
-		}).Twice()
+			return nil, io.EOF
+		}).Once()
 	h.client.EXPECT().Close().Return(nil).Once()
 
 	h.start()
-	<-started
-	<-started
+	<-reading
 	h.cancel()
 	close(release)
 

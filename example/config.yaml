@@ -33,8 +33,6 @@ lookups:
 #                  runs at startup
 #   timeout        maximum time to wait for one response
 #                  (default: poll_interval, at least 3s and at most 10s)
-#   parallelism    1-100; Modbus requests share one connection and are sent one at a
-#                  time anyway, so 1 is the right value (no effect for HTTP).
 #
 # Point names must be unique within a device and must not contain "/".
 #
@@ -58,7 +56,6 @@ devices:
     type: modbus
     poll_interval: 5s
     timeout: 2s
-    parallelism: 1
     device_specific:
       modbus:
         address: "tcp://192.0.2.10:502"
@@ -136,7 +133,6 @@ devices:
     type: modbus
     poll_interval: 10s
     timeout: 3s
-    parallelism: 1
     device_specific:
       modbus:
         address: "rtu:///dev/ttyUSB0"
@@ -176,7 +172,6 @@ devices:
     type: http
     poll_interval: 1s
     timeout: 2s
-    parallelism: 1
     device_specific:
       http:
         address: "http://192.0.2.20/rpc/EM.GetStatus"
@@ -202,7 +197,6 @@ devices:
     type: http
     poll_interval: 1m
     timeout: 10s
-    parallelism: 2
     device_specific:
       http:
         address: "https://api.example.com/v1/status"
@@ -227,8 +221,9 @@ devices:
 #
 # Common output options:
 #   devices      the devices whose readings this output receives (must exist above)
-#   buffer_size  queued points for this output (default 1000). When the queue is full,
-#                new points are dropped for this output only and a warning is logged.
+#   buffer_size  queued polls for this output (default 1000; each poll of a device is
+#                one entry with all its points). When the queue is full, new polls are
+#                dropped for this output only and a warning is logged.
 #   exclude_points  "device/point" names this output does not receive (optional), e.g.
 #                text values for InfluxDB, where a field keeps one type per device.
 # =====================================================================================
@@ -238,7 +233,7 @@ outputs:
   # batch_size, batch_timeout, max_retries and retry_delay apply to InfluxDB only.
   - name: influxdb
     type: influxdb
-    buffer_size: 10000
+    buffer_size: 1000
     batch_size: 10000 # write when this many points are queued (default 10000)
     batch_timeout: 1s # ... or after this time (default 1s)
     max_retries: 3 # retries per batch before it is dropped (default 3)
@@ -286,13 +281,14 @@ outputs:
       - sensor_rtu
 
   # ----- CSV file with rotation --------------------------------------------------------
-  # Columns: timestamp, device, point, value, unit. Every point is flushed immediately.
+  # Columns: timestamp, device, point, value, unit. Rows are written to the file as soon
+  # as no further poll is queued.
   # When the file is older than max_age it is renamed to <file>.<YYYYMMDD-HHMMSS> and a new
   # file is started. max_backups: 0 = keep no rotated files, > 0 = keep that many,
   # < 0 = keep all. In the container, write below /app/data (mounted from ./data).
   - name: csv
     type: csv
-    buffer_size: 10000
+    buffer_size: 1000
     output_specific:
       csv:
         file_path: "./data/data.csv"

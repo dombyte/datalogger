@@ -35,9 +35,7 @@ func newTestWriter(t *testing.T, token string, points ...datasource.DataPoint) *
 		Log:      zerolog.Nop(),
 	})
 	require.NoError(t, err)
-	for _, dp := range points {
-		w.store.set(dp)
-	}
+	w.store.set(points)
 	clk.Advance(820 * time.Millisecond)
 	return w
 }
