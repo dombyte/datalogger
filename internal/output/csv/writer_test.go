@@ -32,10 +32,10 @@ func run(t *testing.T, s csv.Settings, clk *clocktest.Fake, points ...datasource
 	w, err := csv.New(csv.Deps{Settings: s, Clock: clk, Log: zerolog.Nop()})
 	require.NoError(t, err)
 
-	in := make(chan datasource.DataPoint)
+	in := make(chan []datasource.DataPoint)
 	done := w.Start(context.Background(), in)
 	for _, dp := range points {
-		in <- dp
+		in <- []datasource.DataPoint{dp}
 	}
 	close(in)
 	for err := range done {
@@ -97,7 +97,7 @@ func TestNameAndStopOnCancel(t *testing.T) {
 	assert.Equal(t, "file", w.Name())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := w.Start(ctx, make(chan datasource.DataPoint))
+	done := w.Start(ctx, make(chan []datasource.DataPoint))
 	cancel()
 	_, open := <-done
 	assert.False(t, open, "the writer stops when ctx is cancelled")

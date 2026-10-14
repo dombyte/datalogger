@@ -24,7 +24,7 @@ type harness struct {
 	t      *testing.T
 	clock  *clocktest.Fake
 	client *mocks.MockClient
-	input  chan datasource.DataPoint
+	input  chan []datasource.DataPoint
 	done   <-chan error
 	writes chan []string // line protocol of every WritePoints call
 }
@@ -35,7 +35,7 @@ func newHarness(t *testing.T, s influxdb.Settings) *harness {
 		t:      t,
 		clock:  clocktest.NewFake(start),
 		client: mocks.NewMockClient(t),
-		input:  make(chan datasource.DataPoint),
+		input:  make(chan []datasource.DataPoint),
 		writes: make(chan []string, 10),
 	}
 	w, err := influxdb.New(influxdb.Deps{
@@ -109,8 +109,8 @@ func TestWritesFullBatchWithSchema(t *testing.T) {
 	h := newHarness(t, influxdb.Settings{Name: "db", BatchSize: 2})
 	h.expectWrites(nil)
 
-	h.input <- point("power", 1.5, "W")
-	h.input <- point("on", true, "")
+	h.input <- []datasource.DataPoint{point("power", 1.5, "W")}
+	h.input <- []datasource.DataPoint{point("on", true, "")}
 
 	assert.Equal(t, []string{
 		"meter,point=power,unit=W value=1.5 1790683200000000000\n",
@@ -119,12 +119,27 @@ func TestWritesFullBatchWithSchema(t *testing.T) {
 	h.stop()
 }
 
+// A poll with more points than BatchSize is split: every full batch is written at once.
+func TestSplitsPollLargerThanBatch(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{Name: "db", BatchSize: 2})
+	h.expectWrites(nil, nil)
+
+	h.input <- []datasource.DataPoint{
+		point("a", 1.0, ""), point("b", 2.0, ""), point("c", 3.0, ""),
+	}
+
+	assert.Len(t, h.write(), 2)
+	h.stop() // the rest is written on close
+	assert.Len(t, h.write(), 1)
+}
+
 func TestFlushesPartialBatchEveryTimeout(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, influxdb.Settings{BatchSize: 100, BatchTimeout: time.Second})
 	h.expectWrites(nil)
 
-	h.input <- point("power", 1.0, "")
+	h.input <- []datasource.DataPoint{point("power", 1.0, "")}
 	h.advance(1, time.Second)
 	assert.Len(t, h.write(), 1)
 	h.stop()
@@ -136,7 +151,7 @@ func TestWritesTheRestWhenInputCloses(t *testing.T) {
 	h.expectWrites(nil)
 
 	for range 3 {
-		h.input <- point("power", 1.0, "")
+		h.input <- []datasource.DataPoint{point("power", 1.0, "")}
 	}
 	h.stop()
 	assert.Len(t, h.write(), 3)
@@ -148,14 +163,14 @@ func TestRetriesThenDropsAndRecovers(t *testing.T) {
 	down := errors.New("503")
 	h.expectWrites(down, down, down, nil)
 
-	h.input <- point("lost", 1.0, "")
+	h.input <- []datasource.DataPoint{point("lost", 1.0, "")}
 	h.write()
 	h.advance(2, time.Second) // ticker + retry delay
 	h.write()
 	h.advance(2, time.Second)
 	h.write() // third and last attempt: the batch is dropped
 
-	h.input <- point("next", 2.0, "")
+	h.input <- []datasource.DataPoint{point("next", 2.0, "")}
 	assert.Contains(t, h.write()[0], "point=next")
 	h.stop()
 }
@@ -168,7 +183,7 @@ func startCancellable(t *testing.T, s influxdb.Settings, closeErr error) (
 	t.Helper()
 	h := &harness{
 		t: t, clock: clocktest.NewFake(start), client: mocks.NewMockClient(t),
-		input: make(chan datasource.DataPoint), writes: make(chan []string, 10),
+		input: make(chan []datasource.DataPoint), writes: make(chan []string, 10),
 	}
 	w, err := influxdb.New(influxdb.Deps{
 		Settings: s, Client: h.client, Clock: h.clock, Log: zerolog.Nop(),
@@ -197,7 +212,7 @@ func TestCancelEndsRetries(t *testing.T) {
 		influxdb.Settings{BatchSize: 1, MaxRetries: 5, RetryDelay: time.Hour}, nil)
 	h.expectWrites(errors.New("503"))
 
-	h.input <- point("power", 1.0, "")
+	h.input <- []datasource.DataPoint{point("power", 1.0, "")}
 	h.write()
 	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 }, // ticker + retry
 		time.Second, time.Millisecond)
@@ -214,9 +229,9 @@ func TestDoesNotRetryClientErrors(t *testing.T) {
 	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 3, RetryDelay: time.Hour})
 	h.expectWrites(&influxdb3.ServerError{StatusCode: 401, Message: "unauthorized"}, nil)
 
-	h.input <- point("lost", 1.0, "")
+	h.input <- []datasource.DataPoint{point("lost", 1.0, "")}
 	h.write()
-	h.input <- point("next", 2.0, "") // no retry delay in between
+	h.input <- []datasource.DataPoint{point("next", 2.0, "")} // no retry delay in between
 	assert.Contains(t, h.write()[0], "point=next")
 	h.stop()
 }
@@ -226,7 +241,7 @@ func TestRetriesServerErrorsAndRateLimits(t *testing.T) {
 	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 2, RetryDelay: time.Second})
 	h.expectWrites(&influxdb3.ServerError{StatusCode: 503}, &influxdb3.ServerError{StatusCode: 429}, nil)
 
-	h.input <- point("power", 1.0, "")
+	h.input <- []datasource.DataPoint{point("power", 1.0, "")}
 	h.write()
 	h.advance(2, time.Second) // ticker + retry delay
 	h.write()
@@ -242,10 +257,10 @@ func TestSkipsValuesLineProtocolCannotEncode(t *testing.T) {
 	h := newHarness(t, influxdb.Settings{BatchSize: 2})
 	h.expectWrites(nil)
 
-	h.input <- point("object", map[string]any{"a": 1.0}, "")
-	h.input <- point("list", []any{1.0}, "")
-	h.input <- point("power", 1.5, "W")
-	h.input <- point("count", int64(3), "")
+	h.input <- []datasource.DataPoint{point("object", map[string]any{"a": 1.0}, "")}
+	h.input <- []datasource.DataPoint{point("list", []any{1.0}, "")}
+	h.input <- []datasource.DataPoint{point("power", 1.5, "W")}
+	h.input <- []datasource.DataPoint{point("count", int64(3), "")}
 	assert.Equal(t, []string{
 		"meter,point=power,unit=W value=1.5 1790683200000000000\n",
 		"meter,point=count value=3i 1790683200000000000\n",

@@ -84,7 +84,7 @@ func (w *Writer) Name() string {
 
 // Start writes points until input is closed (or ctx is cancelled), then closes the
 // file and the returned channel.
-func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
+func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint) <-chan error {
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
@@ -93,11 +93,13 @@ func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <
 			select {
 			case <-ctx.Done():
 				return
-			case dp, ok := <-input:
+			case points, ok := <-input:
 				if !ok {
 					return
 				}
-				w.handlePoint(dp)
+				for _, dp := range points {
+					w.handlePoint(dp)
+				}
 			}
 		}
 	}()

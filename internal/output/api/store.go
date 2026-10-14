@@ -24,12 +24,14 @@ func newStore(devices []string) *store {
 	return &store{latest: latest}
 }
 
-// set replaces the stored point; points of devices that are not served are ignored.
-func (s *store) set(dp datasource.DataPoint) {
+// set replaces the stored points; points of devices that are not served are ignored.
+func (s *store) set(points []datasource.DataPoint) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if points, ok := s.latest[dp.DeviceName]; ok {
-		points[dp.PointName] = dp
+	for _, dp := range points {
+		if latest, ok := s.latest[dp.DeviceName]; ok {
+			latest[dp.PointName] = dp
+		}
 	}
 }
 

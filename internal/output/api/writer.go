@@ -104,7 +104,7 @@ func (w *Writer) Name() string {
 // Start serves the API and stores every point from input until input is closed (or
 // ctx is cancelled), then stops the server and closes the returned channel. If the
 // server stops on its own, its error is sent first.
-func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <-chan error {
+func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint) <-chan error {
 	done := make(chan error, 1)
 	go func() {
 		defer close(done)
@@ -116,7 +116,7 @@ func (w *Writer) Start(ctx context.Context, input <-chan datasource.DataPoint) <
 }
 
 // run serves until input is closed, ctx is cancelled or the server fails.
-func (w *Writer) run(ctx context.Context, input <-chan datasource.DataPoint) error {
+func (w *Writer) run(ctx context.Context, input <-chan []datasource.DataPoint) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- w.server.Serve(w.listener) }()
 	w.logger.Info().Str("address", w.listener.Addr().String()).Msg("API listening")
@@ -128,11 +128,11 @@ func (w *Writer) run(ctx context.Context, input <-chan datasource.DataPoint) err
 		case err := <-serveErr:
 			w.closeServer()
 			return fmt.Errorf("api: serve: %w", err)
-		case dp, ok := <-input:
+		case points, ok := <-input:
 			if !ok {
 				return w.stop(ctx, serveErr)
 			}
-			w.store.set(dp)
+			w.store.set(points)
 		}
 	}
 }

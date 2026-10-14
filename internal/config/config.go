@@ -76,8 +76,8 @@ type HTTPConfig struct {
 // Output represents an output configuration.
 type Output struct {
 	Name       string `mapstructure:"name"`
-	Type       string `mapstructure:"type"` // influxdb, mqtt, csv, api
-	BufferSize int    `mapstructure:"buffer_size"`
+	Type       string `mapstructure:"type"`        // influxdb, mqtt, csv, api
+	BufferSize int    `mapstructure:"buffer_size"` // queued polls; 0 = default
 	// BatchSize, BatchTimeout, MaxRetries and RetryDelay tune InfluxDB writes; 0 = default.
 	BatchSize    int           `mapstructure:"batch_size"`
 	BatchTimeout time.Duration `mapstructure:"batch_timeout"`

@@ -221,8 +221,9 @@ devices:
 #
 # Common output options:
 #   devices      the devices whose readings this output receives (must exist above)
-#   buffer_size  queued points for this output (default 1000). When the queue is full,
-#                new points are dropped for this output only and a warning is logged.
+#   buffer_size  queued polls for this output (default 1000; each poll of a device is
+#                one entry with all its points). When the queue is full, new polls are
+#                dropped for this output only and a warning is logged.
 #   exclude_points  "device/point" names this output does not receive (optional), e.g.
 #                text values for InfluxDB, where a field keeps one type per device.
 # =====================================================================================
@@ -232,7 +233,7 @@ outputs:
   # batch_size, batch_timeout, max_retries and retry_delay apply to InfluxDB only.
   - name: influxdb
     type: influxdb
-    buffer_size: 10000
+    buffer_size: 1000
     batch_size: 10000 # write when this many points are queued (default 10000)
     batch_timeout: 1s # ... or after this time (default 1s)
     max_retries: 3 # retries per batch before it is dropped (default 3)
@@ -286,7 +287,7 @@ outputs:
   # < 0 = keep all. In the container, write below /app/data (mounted from ./data).
   - name: csv
     type: csv
-    buffer_size: 10000
+    buffer_size: 1000
     output_specific:
       csv:
         file_path: "./data/data.csv"
