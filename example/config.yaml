@@ -281,7 +281,8 @@ outputs:
       - sensor_rtu
 
   # ----- CSV file with rotation --------------------------------------------------------
-  # Columns: timestamp, device, point, value, unit. Every point is flushed immediately.
+  # Columns: timestamp, device, point, value, unit. Rows are written to the file as soon
+  # as no further poll is queued.
   # When the file is older than max_age it is renamed to <file>.<YYYYMMDD-HHMMSS> and a new
   # file is started. max_backups: 0 = keep no rotated files, > 0 = keep that many,
   # < 0 = keep all. In the container, write below /app/data (mounted from ./data).

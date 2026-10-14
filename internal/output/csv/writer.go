@@ -46,7 +46,8 @@ type Deps struct {
 	Log      zerolog.Logger
 }
 
-// Writer appends every point as one CSV row and flushes it at once.
+// Writer appends every point as one CSV row. Rows are buffered and flushed when no
+// further poll is queued, so a backlog is written in large blocks.
 type Writer struct {
 	settings Settings
 	clock    clock.Clock
@@ -97,8 +98,9 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 				if !ok {
 					return
 				}
-				for _, dp := range points {
-					w.handlePoint(dp)
+				w.writePoll(points)
+				if len(input) == 0 {
+					w.flush()
 				}
 			}
 		}
@@ -106,17 +108,32 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 	return done
 }
 
-// handlePoint writes one point and logs failures and the recovery after one.
-func (w *Writer) handlePoint(dp datasource.DataPoint) {
-	log := w.logger.With().Str("device", dp.DeviceName).Str("point", dp.PointName).Logger()
-	if err := w.write(dp); err != nil {
-		log.Error().Err(err).Msg("Failed to write CSV row")
+// writePoll buffers one row per point. A failed row is logged and the file reopened;
+// the next row goes to the new file.
+func (w *Writer) writePoll(points []datasource.DataPoint) {
+	for _, dp := range points {
+		if err := w.write(dp); err != nil {
+			w.logger.Error().Str("device", dp.DeviceName).Str("point", dp.PointName).Err(err).
+				Msg("Failed to write CSV row")
+			w.failed = true
+			w.reopen()
+		}
+	}
+}
+
+// flush writes the buffered rows to the file and logs a failure or the recovery
+// after one. After a failure the file is reopened: the rows that were buffered are
+// lost.
+func (w *Writer) flush() {
+	w.csv.Flush()
+	if err := w.csv.Error(); err != nil {
+		w.logger.Error().Err(err).Msg("Failed to write CSV rows")
 		w.failed = true
 		w.reopen()
 		return
 	}
 	if w.failed {
-		log.Info().Msg("Wrote CSV row (recovered from previous error)")
+		w.logger.Info().Msg("Wrote CSV rows (recovered from previous error)")
 		w.failed = false
 	}
 }
@@ -139,7 +156,7 @@ func (w *Writer) open() error {
 		return fmt.Errorf("csv: stat %s: %w", w.settings.FilePath, err)
 	}
 	if info.Size() == 0 {
-		return w.writeRow([]string{"timestamp", "device", "point", "value", "unit"})
+		return w.writeHeader()
 	}
 	// The age of an existing file counts from its first row, not from this start: a
 	// process that restarts more often than max_age would otherwise never rotate.
@@ -185,9 +202,9 @@ func (w *Writer) close() {
 	}
 }
 
-// write appends one row and rotates the file when it is older than MaxAge.
+// write buffers one row and rotates the file when it is older than MaxAge.
 func (w *Writer) write(dp datasource.DataPoint) error {
-	err := w.writeRow([]string{
+	err := w.csv.Write([]string{
 		dp.Timestamp.Format(time.RFC3339Nano),
 		dp.DeviceName,
 		dp.PointName,
@@ -195,7 +212,7 @@ func (w *Writer) write(dp datasource.DataPoint) error {
 		dp.Unit,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("csv: write: %w", err)
 	}
 
 	if w.settings.MaxAge > 0 && w.clock.Now().Sub(w.opened) >= w.settings.MaxAge {
@@ -204,10 +221,10 @@ func (w *Writer) write(dp datasource.DataPoint) error {
 	return nil
 }
 
-// writeRow writes and flushes one row.
-func (w *Writer) writeRow(row []string) error {
-	if err := w.csv.Write(row); err != nil {
-		return fmt.Errorf("csv: write: %w", err)
+// writeHeader writes and flushes the header of a new file.
+func (w *Writer) writeHeader() error {
+	if err := w.csv.Write([]string{"timestamp", "device", "point", "value", "unit"}); err != nil {
+		return fmt.Errorf("csv: write header: %w", err)
 	}
 	w.csv.Flush()
 	if err := w.csv.Error(); err != nil {

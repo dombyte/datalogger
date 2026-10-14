@@ -61,6 +61,32 @@ func TestWritesHeaderAndRowsAndCreatesDirectory(t *testing.T) {
 		"2026-09-29T12:00:00Z,meter,power,true,W\n", read(t, path))
 }
 
+// Rows are buffered, but a poll reaches the file as soon as no further poll is queued,
+// not only on shutdown.
+func TestFlushesWhenNoPollIsQueued(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "data.csv")
+	w, err := csv.New(csv.Deps{
+		Settings: csv.Settings{Name: "file", FilePath: path},
+		Clock:    clocktest.NewFake(start),
+		Log:      zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	in := make(chan []datasource.DataPoint)
+	done := w.Start(context.Background(), in)
+
+	in <- []datasource.DataPoint{point(1.0), point(2.0)}
+	want := header + "2026-09-29T12:00:00Z,meter,power,1,W\n" +
+		"2026-09-29T12:00:00Z,meter,power,2,W\n"
+	assert.Eventually(t, func() bool { return read(t, path) == want }, time.Second,
+		time.Millisecond)
+
+	close(in)
+	for err := range done {
+		require.NoError(t, err)
+	}
+}
+
 func TestAppendsToExistingFileWithoutSecondHeader(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "data.csv")
