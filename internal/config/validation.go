@@ -138,17 +138,44 @@ func (o *Output) validateExcludePoints(devices map[string]map[string]bool) error
 	return nil
 }
 
+// validateTypeBlock checks that the settings block of the type is set and no other one:
+// a block of another type would be ignored silently. blocks maps each block name to
+// whether it is set; an unknown type is left to the caller.
+func validateTypeBlock(typ string, blocks map[string]bool) error {
+	set, known := blocks[typ]
+	if !known {
+		return nil
+	}
+	if !set {
+		return fmt.Errorf("%s block required for type %s", typ, typ)
+	}
+	for _, name := range slices.Sorted(maps.Keys(blocks)) {
+		if blocks[name] && name != typ {
+			return fmt.Errorf("%s block not allowed for type %s", name, typ)
+		}
+	}
+	return nil
+}
+
 // Validate validates a device configuration.
 func (d *Device) Validate() error {
+	// Before the points: HTTP points depend on the http block.
+	err := validateTypeBlock(d.Type, map[string]bool{
+		"modbus": d.Modbus != nil,
+		"http":   d.HTTP != nil,
+	})
+	if err != nil {
+		return err
+	}
 	if err := d.validateCommon(); err != nil {
 		return err
 	}
 
 	switch d.Type {
 	case "modbus":
-		return d.DeviceSpecific.Modbus.Validate()
+		return d.Modbus.Validate()
 	case "http":
-		return d.DeviceSpecific.HTTP.Validate()
+		return d.HTTP.Validate()
 	default:
 		return fmt.Errorf("unknown device type: %s", d.Type)
 	}
@@ -258,22 +285,31 @@ func (o *Output) Validate() error {
 		return errors.New("devices required")
 	}
 
-	return o.OutputSpecific.validate(o.Type)
+	return o.validateTypeSettings()
 }
 
-// validate validates the settings of the given output type.
-func (s *OutputSpecific) validate(outputType string) error {
-	switch outputType {
+// validateTypeSettings validates the settings block of the output type.
+func (o *Output) validateTypeSettings() error {
+	err := validateTypeBlock(o.Type, map[string]bool{
+		"influxdb": o.Influxdb != nil,
+		"mqtt":     o.Mqtt != nil,
+		"csv":      o.Csv != nil,
+		"api":      o.API != nil,
+	})
+	if err != nil {
+		return err
+	}
+	switch o.Type {
 	case "influxdb":
-		return s.Influxdb.Validate()
+		return o.Influxdb.Validate()
 	case "mqtt":
-		return s.Mqtt.Validate()
+		return o.Mqtt.Validate()
 	case "csv":
-		return s.Csv.Validate()
+		return o.Csv.Validate()
 	case "api":
-		return s.API.Validate()
+		return o.API.Validate()
 	default:
-		return fmt.Errorf("unknown output type: %s", outputType)
+		return fmt.Errorf("unknown output type: %s", o.Type)
 	}
 }
 

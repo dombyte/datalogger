@@ -347,6 +347,10 @@ writer that failed, or a missed deadline.
   device; device and point names must not contain `/`; the `topic`, devices and
   non-excluded points of an MQTT output must not contain `+` or `#` (wildcards: a broker
   closes the connection); `poll_interval` > 0; `timeout` > 0.
+- Every device and output has a `type` and the block of that type, named like it
+  (`modbus:`, `http:`, `influxdb:`, `mqtt:`, `csv:`, `api:`) and holding every setting
+  only that type uses; validation requires that block and rejects a block of another
+  type.
 - Unknown keys are an error (a typo would otherwise fall back to a default silently).
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
   poll interval, at least 3 s and at most 10 s; point `scale` 1; HTTP method GET and response type json;
@@ -638,8 +642,9 @@ The required CI checks MUST be green before a PR is merged.
    the reader or writer contract: `Settings`, `Deps` checked in `New`, small interfaces
    for its client (listed in `.mockery.yaml`), the injected `clock.Clock` for any waiting,
    and no connecting in the constructor.
-2. Config: add the type-specific struct under `DeviceSpecific`/`OutputSpecific`, its
-   validation, and a commented example in `example/config.yaml`.
+2. Config: add the type's struct as a pointer field on `Device`/`Output`, named and
+   tagged like the type, to the block check in its `Validate`, its validation, and a
+   commented example in `example/config.yaml`.
 3. Composition root: add the `case` and a `create…` function in `internal/app/factory.go`
    that maps config onto `Settings` and creates the real client. Nothing else may
    reference the new package; update section 4.

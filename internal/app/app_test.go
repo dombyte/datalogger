@@ -251,9 +251,9 @@ func TestNewFailsOnlyOnConfigurationErrors(t *testing.T) {
 	device := func(address string) config.Device {
 		return config.Device{
 			Name: "inverter", Type: "modbus", PollInterval: time.Second,
-			DeviceSpecific: config.DeviceSpecific{Modbus: config.ModbusConfig{
+			Modbus: &config.ModbusConfig{
 				Address: address, SlaveID: 1, RegisterMode: "direct",
-			}},
+			},
 			Points: []config.Point{{Name: "p", Register: 1, Type: "uint16", Scale: 1}},
 		}
 	}
@@ -311,9 +311,9 @@ func TestNewFailsOnInvalidExpression(t *testing.T) {
 	t.Parallel()
 	d := config.Device{
 		Name: "meter", Type: "http", PollInterval: time.Second, Timeout: time.Second,
-		DeviceSpecific: config.DeviceSpecific{HTTP: config.HTTPConfig{
+		HTTP: &config.HTTPConfig{
 			Address: "http://localhost", Method: "GET", ResponseType: "json",
-		}},
+		},
 		Points: []config.Point{{Name: "p", JSONPath: "p", Scale: 1, Expr: "points.q"}},
 	}
 
@@ -339,21 +339,27 @@ func TestNewCreatesEveryOutputType(t *testing.T) {
 	t.Parallel()
 	device := config.Device{
 		Name: "meter", Type: "http", PollInterval: time.Second, Timeout: time.Second,
-		DeviceSpecific: config.DeviceSpecific{HTTP: config.HTTPConfig{
+		HTTP: &config.HTTPConfig{
 			Address: "http://localhost", Method: "GET", ResponseType: "json",
-		}},
+		},
 		Points: []config.Point{{Name: "p", JSONPath: "p", Scale: 1}},
 	}
-	csvOut := config.Output{Name: "csv", Type: "csv", Devices: []string{"meter"}}
-	csvOut.OutputSpecific.Csv.FilePath = filepath.Join(t.TempDir(), "data.csv")
-	influxOut := config.Output{Name: "influx", Type: "influxdb", BufferSize: 5}
-	influxOut.OutputSpecific.Influxdb = config.InfluxdbConfig{
-		Address: "http://db:8181", Token: "t", Database: "d",
+	csvOut := config.Output{
+		Name: "csv", Type: "csv", Devices: []string{"meter"},
+		Csv: &config.CsvConfig{FilePath: filepath.Join(t.TempDir(), "data.csv")},
 	}
-	mqttOut := config.Output{Name: "mqtt", Type: "mqtt"}
-	mqttOut.OutputSpecific.Mqtt = config.MqttConfig{Address: "tcp://broker:1883", ClientID: "c"}
-	apiOut := config.Output{Name: "api", Type: "api"}
-	apiOut.OutputSpecific.API.Listen = "127.0.0.1:0"
+	influxOut := config.Output{
+		Name: "influx", Type: "influxdb", BufferSize: 5,
+		Influxdb: &config.InfluxdbConfig{Address: "http://db:8181", Token: "t", Database: "d"},
+	}
+	mqttOut := config.Output{
+		Name: "mqtt", Type: "mqtt",
+		Mqtt: &config.MqttConfig{Address: "tcp://broker:1883", ClientID: "c"},
+	}
+	apiOut := config.Output{
+		Name: "api", Type: "api",
+		API: &config.APIConfig{Listen: "127.0.0.1:0"},
+	}
 	clk := clocktest.NewFake(time.Now())
 
 	a, err := New(&config.Config{
@@ -372,14 +378,18 @@ func TestNewCreatesEveryOutputType(t *testing.T) {
 
 	for name, change := range map[string]func(*config.Output){
 		"unknown output type": func(o *config.Output) { o.Type = "kafka" },
-		"influxdb address":    func(o *config.Output) { *o = influxOut; o.OutputSpecific.Influxdb.Address = "" },
+		// The blocks are pointers: each case sets its own instead of changing the shared one.
+		"influxdb address": func(o *config.Output) {
+			*o = influxOut
+			o.Influxdb = &config.InfluxdbConfig{Token: "t", Database: "d"}
+		},
 		"mqtt scheme": func(o *config.Output) {
 			*o = mqttOut
-			o.OutputSpecific.Mqtt.Address = "http://broker"
+			o.Mqtt = &config.MqttConfig{Address: "http://broker", ClientID: "c"}
 		},
 		"api port in use": func(o *config.Output) {
 			*o = apiOut
-			o.OutputSpecific.API.Listen = busy.Addr().String()
+			o.API = &config.APIConfig{Listen: busy.Addr().String()}
 		},
 	} {
 		out := csvOut

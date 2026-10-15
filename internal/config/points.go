@@ -49,7 +49,7 @@ func (d *Device) validatePoints() error {
 	case "modbus":
 		return validateModbusPoints(d.Points)
 	case "http":
-		return validateHTTPPoints(d.Points, d.DeviceSpecific.HTTP.ResponseType)
+		return validateHTTPPoints(d.Points, d.HTTP.ResponseType)
 	default:
 		return nil
 	}
