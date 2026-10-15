@@ -38,8 +38,8 @@ Datalogger polls **devices** and forwards every reading to one or more **outputs
 make check                                                # ./scripts/pre-commit.sh, check-only
 golangci-lint fmt --config .golangci.yml                  # gofumpt + goimports
 golangci-lint run --config .golangci.yml                  # full linter set (section 10)
-go run golang.org/x/tools/cmd/deadcode@v0.52.0 -test ./... # unused exported code
-go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...     # known vulnerabilities
+go tool deadcode -test ./...                              # unused exported code
+go tool govulncheck ./...                                 # known vulnerabilities
 go test -race ./...                                       # all unit tests, as in CI
 go tool mockery                                           # regenerate mocks (.mockery.yaml)
 make build                                                # ./datalogger with version info (ldflags)
@@ -52,8 +52,10 @@ docker compose -f docker-compose.dev.yaml up --build      # local image with ./c
 - Release: push a `vX.Y.Z` (or `vX.Y.Z-rcN`) tag on `main`; `release.yml` runs the
   checks, then goreleaser (`.goreleaser.yaml`) builds archives and
   `ghcr.io/dombyte/datalogger` images (linux/amd64, arm64, arm/v7).
-- Mocks: mockery v3 runs as a Go tool (`tool` directive in `go.mod`, so Renovate updates
-  it with the modules). Every interface is listed in `.mockery.yaml` (`Mock<Interface>`,
+- Go tools: mockery, deadcode and govulncheck are `tool` directives in `go.mod`, run with
+  `go tool <name>`, so Renovate updates them with the modules. Golangci-lint is not one
+  (its maintainers advise against it); it is installed locally and pinned in CI.
+- Mocks: mockery v3 runs as a Go tool. Every interface is listed in `.mockery.yaml` (`Mock<Interface>`,
   `NewMock<Interface>(t)`); the output in `<pkg>/mocks` is never edited by hand, and CI
   fails when it differs from a fresh generation. Tests that use a package's mocks are
   black-box tests (`package <pkg>_test`), because the mocks import the package.
@@ -525,14 +527,14 @@ writer that failed, or a missed deadline.
   gochecknoglobals, forbidigo (`panic` outside invariants), nolintlint (every `//nolint` names the linter and
   gives a reason). Tests are excluded from revive, dupl, errcheck, gosec, lll,
   gochecknoglobals, forbidigo and mnd.
-- **Tool versions** are pinned (pinned `go run` commands, the mockery `tool` in `go.mod`,
-  the golangci-lint action `version:`) and bumped deliberately, the same locally and in CI.
+- **Tool versions** are pinned (the `tool` directives in `go.mod`, the golangci-lint
+  action `version:`) and bumped deliberately, the same locally and in CI.
 - **Renovate** (`renovate.json`) updates dependencies for exactly the ecosystems used here:
-  `gomod`, `dockerfile`, `docker-compose`, `github-actions`. Every pinned version in the
-  repo is tracked; the golangci-lint `version:` of the CI action is seen by the
-  `github-actions` manager. A pin no built-in manager sees (pinned `go run` commands in
-  workflows, scripts and this file) needs a `customManagers` regex, added in the same
-  change that adds the pin. Updates that need manual work (Go module majors, golangci-lint
+  `gomod`, `dockerfile`, `docker-compose`, `github-actions`; every gomod update runs
+  `go mod tidy`. Every pinned version in the repo is tracked. A pin no built-in manager
+  sees needs a `customManagers` regex, added in the same change that adds the pin; today
+  that is only the golangci-lint `version:` of the CI action (the `github-actions`
+  manager tracks the action, not that input). Updates that need manual work (Go module majors, golangci-lint
   majors) are disabled with a `description` saying why. Text that only describes a
   pinning pattern must not match such a regex. GitHub vulnerability alerts stay enabled;
   Renovate's `vulnerabilityAlerts` reads them.

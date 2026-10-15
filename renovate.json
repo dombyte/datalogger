@@ -32,12 +32,6 @@
     },
     {
       "matchManagers": [
-        "custom.regex"
-      ],
-      "groupName": "Go tools"
-    },
-    {
-      "matchManagers": [
         "dockerfile"
       ],
       "groupName": "Docker images"
@@ -57,8 +51,7 @@
     {
       "description": "Go module majors change the module path and need code changes; update by hand",
       "matchManagers": [
-        "gomod",
-        "custom.regex"
+        "gomod"
       ],
       "matchUpdateTypes": [
         "major"
@@ -96,17 +89,17 @@
   "stopUpdatingLabel": "renovate/stop_updating",
   "customManagers": [
     {
-      "description": "Go tools run as `go run <module>[/cmd/<tool>]@vX.Y.Z` in CI, the pre-commit script and AGENTS.md",
+      "description": "golangci-lint version pinned in the CI action (`version: vX.Y`); the github-actions manager only tracks the action itself",
       "customType": "regex",
       "managerFilePatterns": [
-        "/^\\.github/workflows/.+\\.ya?ml$/",
-        "/^scripts/.+\\.sh$/",
-        "/^AGENTS\\.md$/"
+        "/^\\.github/workflows/.+\\.ya?ml$/"
       ],
       "matchStrings": [
-        "go run (?<depName>[^@\\s]+?)(?:/cmd/[^@\\s]+)?@(?<currentValue>v[^\\s]+)"
+        "golangci/golangci-lint-action@\\S+\\s+with:\\s+version:\\s*(?<currentValue>v\\d+\\.\\d+(?:\\.\\d+)?)"
       ],
-      "datasourceTemplate": "go"
+      "depNameTemplate": "golangci/golangci-lint",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver-coerced"
     }
   ]
 }
