@@ -42,8 +42,8 @@ complete reference with every option explained. Unknown keys (for example a typo
 the program at startup. Keep tokens and passwords only in your local `config.yaml`.
 
 Every device and output has a `type`; the settings of that type go in a block with the
-same name (`http:`, `modbus:`, `influxdb:`, `mqtt:`, `csv:`, `api:`). A minimal config:
-one device, one output.
+same name (`http:`, `modbus:`, `influxdb:`, `mqtt:`, `csv:`, `api:`, `webhook:`). A
+minimal config: one device, one output.
 
 ```yaml
 devices:
@@ -93,6 +93,7 @@ outputs:
 | `mqtt` | MQTT v5, one topic per point: `<topic>/<device>/<point>` (default topic `datalogger`), payload `{"value": 230.5, "unit": "V", "timestamp": "2026-10-05T10:15:02.123Z"}`. `tcp://` or TLS via `tls://`, `ssl://`, `mqtts://`. Points are dropped (and counted) while the broker is unreachable. |
 | `csv` | Columns `timestamp, device, point, value, unit`, written as soon as no further poll is queued. Rotated after `max_age` to `<file>.<YYYYMMDD-HHMMSS>`; `max_backups` 0 = keep none, > 0 = keep that many, < 0 = keep all. |
 | `api` | Read-only JSON API with the latest value of every point, see [below](#http-api). |
+| `webhook` | Pushes readings as a JSON array to your HTTP endpoint, see [below](#webhook). |
 
 ### HTTP API
 
@@ -118,6 +119,38 @@ outputs:
 - Unknown devices and points without a value are `404`. NaN and infinite values are
   `null`.
 - Values live in memory only: after a restart the API is empty until the first poll.
+
+### Webhook
+
+```yaml
+outputs:
+  - name: backend
+    type: webhook
+    webhook:
+      url: "https://ingest.example.com/datalogger"
+      method: POST # or PUT
+      headers:
+        Authorization: "Bearer <token>"
+    devices: [inverter]
+```
+
+Every request has a JSON array as body (`Content-Type: application/json`):
+
+```json
+[
+  {"device": "inverter", "point": "power", "value": 1234.5, "unit": "W",
+   "timestamp": "2026-10-15T08:23:20.123Z"}
+]
+```
+
+- Each poll is sent at once. If your endpoint is slow and polls queue up, they are sent
+  together, up to `max_batch` readings (default 1000) per request.
+- Any `2xx` answer is a success. Network errors, `5xx` and `429` are retried
+  (`max_retries`, default 3, `retry_delay`, default 1 s); other answers such as `401` or
+  `400` drop the batch at once. Dropped batches are logged with the status and the start
+  of your endpoint's answer.
+- `timeout` per request (default 10 s), `insecure: true` skips certificate checks.
+  Headers are never logged, and neither are tokens in the URL.
 
 ### Transforming values
 

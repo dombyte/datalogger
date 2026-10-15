@@ -20,7 +20,8 @@ Datalogger polls **devices** and forwards every reading to one or more **outputs
 - **Inputs:** Modbus TCP/RTU (direct or range register reads), HTTP APIs (JSON via gjson
   paths, or the whole body as text).
 - **Outputs:** InfluxDB 3.x, MQTT, CSV files (with age-based rotation), a read-only HTTP
-  API with the latest value of every point.
+  API with the latest value of every point, a webhook that pushes readings as JSON to an
+  HTTP endpoint.
 - **Transforms:** a point may have an `expr` (expr-lang) that changes its value after a
   poll, using the other points of that poll and named lookup tables.
 - **Routing:** each output lists the devices it accepts; every reading of such a device is
@@ -80,6 +81,7 @@ internal/output/         Writer interface
   influxdb/              InfluxDB 3 writer: batching, retries, v3 write API
   mqtt/                  MQTT v5 writer (paho.golang): one topic per point, JSON payload
   api/                   HTTP API: latest value per point in memory, read-only JSON
+  webhook/               webhook writer: JSON array per request, backlog batching, retries
 internal/**/mocks/       mockery output
 example/                 config.yaml (full reference) and docker-compose.yaml for users
 scripts/pre-commit.sh    local checks (make check)
@@ -99,7 +101,7 @@ Imports (paths below `internal/`):
 ```
 cmd/datalogger    → app, clock, config
 app               → clock, config, datasource{,/modbus,/http},
-                    output{,/csv,/influxdb,/mqtt,/api}, transform
+                    output{,/csv,/influxdb,/mqtt,/api,/webhook}, transform
 transform         → datasource, expr-lang/expr
 datasource/modbus → clock, datasource, simonvetter/modbus
 datasource/http   → clock, datasource, gjson
@@ -108,6 +110,7 @@ output/csv        → clock, datasource
 output/influxdb   → clock, datasource, influxdb3-go
 output/mqtt       → clock, datasource, paho.golang
 output/api        → clock, datasource
+output/webhook    → clock, datasource
 config            → viper
 clock, datasource → stdlib only
 ```
@@ -180,8 +183,8 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   read errors. A failed poll is logged once, with `failure_count` and the backoff
   (`retry_in`): as a warning, from the third failure in a row as an error; the first
   successful poll after it logs the recovery at info (`failures`, `points`).
-- Write errors are handled inside the writer (InfluxDB: retries, then the batch is
-  dropped and logged; MQTT/CSV: log and continue with the next point).
+- Write errors are handled inside the writer (InfluxDB and webhook: retries, then the
+  batch is dropped and logged; MQTT/CSV: log and continue with the next point).
 - A reader or writer that **stops** while the app is not shutting down makes `Run`
   return `ErrComponentStopped`; the process shuts down and exits 1, and the container
   runtime (`restart: unless-stopped`) restarts it. There is no in-process restart.
@@ -194,7 +197,8 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    HTTP request in flight is aborted, so it has no data yet). Each reader then closes its
    data channel and the routers finish.
 3. `app` closes the output input channels; each writer writes what is queued, flushes
-   (CSV flush/close, InfluxDB final batch, MQTT disconnect, API server shutdown) and
+   (CSV flush/close, InfluxDB final batch, webhook queued polls, MQTT disconnect, API
+   server shutdown) and
    stops.
 4. `main` bounds all of this with one hard deadline of **8 s** (below Docker's 10 s stop
    timeout); after it the process exits 1. There is no second-signal force mode: a
@@ -322,6 +326,26 @@ writer that failed, or a missed deadline.
 - Paths and response format are a public interface; changing them is a breaking change
   (`!`).
 
+### Webhook writer
+- `url` (`http://` or `https://` with a host; anything else fails startup), `method` POST
+  (default) or PUT, `headers` sent as given (after `Content-Type: application/json`, so
+  they may replace it; never logged), `insecure` skips certificate checks, `timeout` per
+  request (default 10 s).
+- Body: a JSON array of readings `[{"device", "point", "value", "unit", "timestamp":
+  "<RFC3339Nano>"}]`, the fields of the API and MQTT payloads (NaN/±Inf are `null`). A
+  value JSON cannot encode is skipped with a warning, so it cannot fail the request.
+- Batching: a poll is sent at once unless further polls are queued; those join the same
+  request, up to `max_batch` readings (default 1000; a larger poll is split). No timer:
+  a single poll is never delayed.
+- Any 2xx is a success. Retries: `max_retries` (default 3) with `retry_delay` (default
+  1 s), only for transport errors, 5xx and 429; after that, or at once for other
+  statuses (bad token, rejected payload), the batch is dropped and logged with the status
+  and the start of the response body; the next success logs the recovery. Up to 64 KiB of
+  every response is read so the connection is reused.
+- URLs in errors are reduced to scheme, host and path (tokens in the query are not
+  logged). The client does not connect at startup.
+- The body format is a public interface; changing it is a breaking change (`!`).
+
 ### Transforms (`expr`, `lookups`, `exclude_points`)
 - A point's `expr` ([expr-lang](https://expr-lang.org)) replaces its value after
   `scale`/`offset`. The environment: `value` (this point), `points.<name>` (every point
@@ -348,9 +372,9 @@ writer that failed, or a missed deadline.
   non-excluded points of an MQTT output must not contain `+` or `#` (wildcards: a broker
   closes the connection); `poll_interval` > 0; `timeout` > 0.
 - Every device and output has a `type` and the block of that type, named like it
-  (`modbus:`, `http:`, `influxdb:`, `mqtt:`, `csv:`, `api:`) and holding every setting
-  only that type uses; validation requires that block and rejects a block of another
-  type.
+  (`modbus:`, `http:`, `influxdb:`, `mqtt:`, `csv:`, `api:`, `webhook:`) and holding
+  every setting only that type uses; validation requires that block and rejects a block
+  of another type.
 - Unknown keys are an error (a typo would otherwise fall back to a default silently).
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
   poll interval, at least 3 s and at most 10 s; point `scale` 1; HTTP method GET and response type json;
@@ -472,7 +496,7 @@ writer that failed, or a missed deadline.
 - Levels: `debug` per poll/point detail, `info` lifecycle, `warn` recovered problems,
   `error` failures that need attention. Per-point detail stays at debug, so it costs
   nothing when debug is off (zerolog returns a nil event for a disabled level).
-- Never log secrets: InfluxDB token, MQTT password, HTTP auth headers, URLs with
+- Never log secrets: InfluxDB token, MQTT password, HTTP and webhook headers, URLs with
   credentials.
 
 ### 9.4 Style (MUST, enforced by golangci-lint)
@@ -605,7 +629,7 @@ writer that failed, or a missed deadline.
   commits, PR descriptions or release notes.
 
 Scopes used here: `config`, `modbus`, `http`, `csv`, `influxdb`, `mqtt`, `api`, `routing`,
-`shutdown`, `transform`, `release`, `docker`, `ci`, `deps`
+`shutdown`, `transform`, `webhook`, `release`, `docker`, `ci`, `deps`
 
 ```
 feat(mqtt): support TLS client certificates
@@ -629,8 +653,9 @@ The required CI checks MUST be green before a PR is merged.
 ### 11.4 Security
 - Validate input at the boundary: config in `config.Validate`, device responses in the
   reader that parses them.
-- Every outgoing call has a timeout (device `timeout`, MQTT connect/publish timeout, InfluxDB
-  client); clients verify certificates unless the documented `insecure` option is set.
+- Every outgoing call has a timeout (device `timeout`, MQTT connect/publish timeout,
+  webhook and InfluxDB client); clients verify certificates unless the documented
+  `insecure` option is set.
 - Secrets only in the gitignored `config.yaml` (section 8), never committed or logged.
 - Dependencies: Renovate plus `govulncheck` in CI and in `make check`.
 

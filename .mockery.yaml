@@ -29,3 +29,6 @@ packages:
     interfaces:
       Publisher:
       Dialer:
+  github.com/dombyte/datalogger/internal/output/webhook:
+    interfaces:
+      Client:

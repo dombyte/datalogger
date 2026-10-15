@@ -214,8 +214,9 @@ devices:
         unit: "kW"
 
 # =====================================================================================
-# Outputs: where data is written to. type is "influxdb", "mqtt", "csv" or "api"; the
-# settings of that type go in a block of the same name (influxdb:, mqtt:, csv:, api:).
+# Outputs: where data is written to. type is "influxdb", "mqtt", "csv", "api" or
+# "webhook"; the settings of that type go in a block of the same name (influxdb:, mqtt:,
+# csv:, api:, webhook:).
 #
 # Common output options:
 #   devices      the devices whose readings this output receives (must exist above)
@@ -310,4 +311,27 @@ outputs:
       token: "" # optional: require "Authorization: Bearer <token>"
     devices:
       - inverter
+      - energy_meter
+
+  # ----- Webhook (push to an HTTP endpoint) --------------------------------------------
+  # Body: a JSON array of readings, Content-Type application/json:
+  #   [{"device": "...", "point": "...", "value": ..., "unit": "...",
+  #     "timestamp": "<RFC3339 with nanoseconds>"}, ...]
+  # A poll is sent at once; polls that queue up behind a slow endpoint are sent together,
+  # up to max_batch readings per request. Any 2xx status is a success. Transport errors,
+  # 5xx and 429 are retried; other statuses (e.g. 401, 400) drop the batch at once.
+  - name: webhook
+    type: webhook
+    buffer_size: 1000
+    webhook:
+      url: "https://ingest.example.com/datalogger" # http:// or https://
+      method: POST # POST (default) or PUT
+      headers: # optional, sent as given and never logged
+        Authorization: "Bearer <token>"
+      insecure: false
+      timeout: 10s # per request (default 10s)
+      max_batch: 1000 # readings per request (default 1000)
+      max_retries: 3 # retries per batch before it is dropped (default 3)
+      retry_delay: 1s # wait between retries (default 1s)
+    devices:
       - energy_meter

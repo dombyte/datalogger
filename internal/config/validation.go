@@ -295,6 +295,7 @@ func (o *Output) validateTypeSettings() error {
 		"mqtt":     o.Mqtt != nil,
 		"csv":      o.Csv != nil,
 		"api":      o.API != nil,
+		"webhook":  o.Webhook != nil,
 	})
 	if err != nil {
 		return err
@@ -308,6 +309,8 @@ func (o *Output) validateTypeSettings() error {
 		return o.Csv.Validate()
 	case "api":
 		return o.API.Validate()
+	case "webhook":
+		return o.Webhook.Validate()
 	default:
 		return fmt.Errorf("unknown output type: %s", o.Type)
 	}
@@ -359,6 +362,22 @@ func (a *APIConfig) Validate() error {
 	}
 	if _, _, err := net.SplitHostPort(a.Listen); err != nil {
 		return fmt.Errorf("listen must be host:port: %w", err)
+	}
+	return nil
+}
+
+// Validate validates the webhook configuration. The webhook package checks the URL
+// itself when it is created.
+func (w *WebhookConfig) Validate() error {
+	if w.URL == "" {
+		return errors.New("url required")
+	}
+	method := strings.ToUpper(w.Method)
+	if method != "" && method != "POST" && method != "PUT" {
+		return errors.New("method must be POST or PUT")
+	}
+	if w.Timeout < 0 {
+		return errors.New("timeout must not be negative")
 	}
 	return nil
 }

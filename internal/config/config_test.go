@@ -586,6 +586,38 @@ func TestOutputValidate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "valid webhook output",
+			output: Output{
+				Name: "hook", Type: "webhook", Devices: []string{"test"},
+				Webhook: &WebhookConfig{URL: "https://example.com/hook", Method: "put"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "webhook missing url",
+			output: Output{
+				Name: "hook", Type: "webhook", Devices: []string{"test"},
+				Webhook: &WebhookConfig{},
+			},
+			wantErr: true,
+		},
+		{
+			name: "webhook method GET",
+			output: Output{
+				Name: "hook", Type: "webhook", Devices: []string{"test"},
+				Webhook: &WebhookConfig{URL: "https://example.com/hook", Method: "GET"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "webhook negative timeout",
+			output: Output{
+				Name: "hook", Type: "webhook", Devices: []string{"test"},
+				Webhook: &WebhookConfig{URL: "https://example.com/hook", Timeout: -time.Second},
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

@@ -16,6 +16,7 @@ import (
 	"github.com/dombyte/datalogger/internal/output/csv"
 	"github.com/dombyte/datalogger/internal/output/influxdb"
 	"github.com/dombyte/datalogger/internal/output/mqtt"
+	"github.com/dombyte/datalogger/internal/output/webhook"
 	"github.com/dombyte/datalogger/internal/transform"
 )
 
@@ -90,6 +91,8 @@ func createWriter(
 		return createMQTTWriter(o, log, clk)
 	case "api":
 		return createAPIWriter(o, log, clk)
+	case "webhook":
+		return createWebhookWriter(o, log, clk)
 	default:
 		return nil, fmt.Errorf("unknown output type %q", o.Type)
 	}
@@ -267,4 +270,27 @@ func createAPIWriter(
 		return nil, errors.Join(err, ln.Close())
 	}
 	return w, nil
+}
+
+// createWebhookWriter maps an output config onto a webhook writer with its own client.
+func createWebhookWriter(
+	o config.Output,
+	log zerolog.Logger,
+	clk clock.Clock,
+) (output.Writer, error) {
+	h := o.Webhook
+	return webhook.New(webhook.Deps{
+		Settings: webhook.Settings{
+			Name:       o.Name,
+			URL:        h.URL,
+			Method:     h.Method,
+			Headers:    h.Headers,
+			MaxBatch:   h.MaxBatch,
+			MaxRetries: h.MaxRetries,
+			RetryDelay: h.RetryDelay,
+		},
+		Client: webhook.NewClient(h.Timeout, h.Insecure),
+		Clock:  clk,
+		Log:    log,
+	})
 }
