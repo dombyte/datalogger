@@ -73,17 +73,18 @@ type HTTPConfig struct {
 // Output represents an output configuration.
 type Output struct {
 	Name       string   `mapstructure:"name"`
-	Type       string   `mapstructure:"type"`        // influxdb, mqtt, csv, api
+	Type       string   `mapstructure:"type"`        // influxdb, mqtt, csv, api, webhook
 	BufferSize int      `mapstructure:"buffer_size"` // queued polls; 0 = default
 	Devices    []string `mapstructure:"devices"`
 	// ExcludePoints lists "device/point" names this output does not receive.
 	ExcludePoints []string `mapstructure:"exclude_points"`
-	// Influxdb, Mqtt, Csv and API hold the settings of the output type; exactly the block
-	// named by Type is set.
+	// Influxdb, Mqtt, Csv, API and Webhook hold the settings of the output type; exactly
+	// the block named by Type is set.
 	Influxdb *InfluxdbConfig `mapstructure:"influxdb"`
 	Mqtt     *MqttConfig     `mapstructure:"mqtt"`
 	Csv      *CsvConfig      `mapstructure:"csv"`
 	API      *APIConfig      `mapstructure:"api"`
+	Webhook  *WebhookConfig  `mapstructure:"webhook"`
 }
 
 // InfluxdbConfig contains InfluxDB3-specific configuration.
@@ -127,6 +128,20 @@ type CsvConfig struct {
 type APIConfig struct {
 	Listen string `mapstructure:"listen"` // host:port, ":8080" for all interfaces
 	Token  string `mapstructure:"token"`  // Optional: required bearer token
+}
+
+// WebhookConfig contains the configuration of the webhook output.
+type WebhookConfig struct {
+	URL      string            `mapstructure:"url"`
+	Method   string            `mapstructure:"method"` // POST (default) or PUT
+	Headers  map[string]string `mapstructure:"headers"`
+	Insecure bool              `mapstructure:"insecure"`
+	// Timeout bounds one request; 0 = default (10 s).
+	Timeout time.Duration `mapstructure:"timeout"`
+	// MaxBatch, MaxRetries and RetryDelay tune the requests; 0 = default.
+	MaxBatch   int           `mapstructure:"max_batch"`
+	MaxRetries int           `mapstructure:"max_retries"`
+	RetryDelay time.Duration `mapstructure:"retry_delay"`
 }
 
 // Load reads the configuration from a YAML file, fills in defaults and validates it.

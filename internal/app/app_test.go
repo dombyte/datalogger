@@ -360,14 +360,18 @@ func TestNewCreatesEveryOutputType(t *testing.T) {
 		Name: "api", Type: "api",
 		API: &config.APIConfig{Listen: "127.0.0.1:0"},
 	}
+	hookOut := config.Output{
+		Name: "hook", Type: "webhook",
+		Webhook: &config.WebhookConfig{URL: "https://example.com/hook"},
+	}
 	clk := clocktest.NewFake(time.Now())
 
 	a, err := New(&config.Config{
 		Devices: []config.Device{device},
-		Outputs: []config.Output{csvOut, influxOut, mqttOut, apiOut},
+		Outputs: []config.Output{csvOut, influxOut, mqttOut, apiOut, hookOut},
 	}, zerolog.Nop(), clk)
 	require.NoError(t, err, "constructors do not connect")
-	require.Len(t, a.outputs, 4)
+	require.Len(t, a.outputs, 5)
 	assert.Equal(t, defaultBufferSize, a.outputs[0].bufferSize)
 	assert.Equal(t, 5, a.outputs[1].bufferSize)
 	stopWriter(t, a.outputs[3].writer) // releases the bound port
@@ -390,6 +394,10 @@ func TestNewCreatesEveryOutputType(t *testing.T) {
 		"api port in use": func(o *config.Output) {
 			*o = apiOut
 			o.API = &config.APIConfig{Listen: busy.Addr().String()}
+		},
+		"webhook scheme": func(o *config.Output) {
+			*o = hookOut
+			o.Webhook = &config.WebhookConfig{URL: "ftp://example.com/hook"}
 		},
 	} {
 		out := csvOut
