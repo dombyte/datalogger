@@ -25,24 +25,16 @@
       "matchManagers": [
         "gomod"
       ],
-      "groupName": "Go dependencies"
+      "groupName": "Go dependencies",
+      "postUpdateOptions": [
+        "gomodTidy"
+      ]
     },
     {
       "matchManagers": [
         "custom.regex"
       ],
       "groupName": "Go tools"
-    },
-    {
-      "matchManagers": [
-        "gomod"
-      ],
-      "matchDepTypes": [
-        "golang"
-      ],
-      "postUpdateOptions": [
-        "gomodTidy"
-      ]
     },
     {
       "matchManagers": [
