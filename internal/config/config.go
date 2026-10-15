@@ -20,12 +20,15 @@ type Config struct {
 
 // Device represents a device configuration.
 type Device struct {
-	Name           string         `mapstructure:"name"`
-	Type           string         `mapstructure:"type"` // "modbus" or "http"
-	PollInterval   time.Duration  `mapstructure:"poll_interval"`
-	Timeout        time.Duration  `mapstructure:"timeout"`
-	DeviceSpecific DeviceSpecific `mapstructure:"device_specific"`
-	Points         []Point        `mapstructure:"points"`
+	Name         string        `mapstructure:"name"`
+	Type         string        `mapstructure:"type"` // "modbus" or "http"
+	PollInterval time.Duration `mapstructure:"poll_interval"`
+	Timeout      time.Duration `mapstructure:"timeout"`
+	// Modbus and HTTP hold the settings of the device type; exactly the block named by
+	// Type is set.
+	Modbus *ModbusConfig `mapstructure:"modbus"`
+	HTTP   *HTTPConfig   `mapstructure:"http"`
+	Points []Point       `mapstructure:"points"`
 }
 
 // Point represents a data point configuration.
@@ -42,12 +45,6 @@ type Point struct {
 	// Expr is an optional expr-lang expression that replaces the value after scale and
 	// offset; compiled at startup (internal/transform).
 	Expr string `mapstructure:"expr"`
-}
-
-// DeviceSpecific contains device-type-specific configuration.
-type DeviceSpecific struct {
-	Modbus ModbusConfig `mapstructure:"modbus"`
-	HTTP   HTTPConfig   `mapstructure:"http"`
 }
 
 // ModbusConfig contains Modbus-specific configuration.
@@ -75,26 +72,18 @@ type HTTPConfig struct {
 
 // Output represents an output configuration.
 type Output struct {
-	Name       string `mapstructure:"name"`
-	Type       string `mapstructure:"type"`        // influxdb, mqtt, csv, api
-	BufferSize int    `mapstructure:"buffer_size"` // queued polls; 0 = default
-	// BatchSize, BatchTimeout, MaxRetries and RetryDelay tune InfluxDB writes; 0 = default.
-	BatchSize    int           `mapstructure:"batch_size"`
-	BatchTimeout time.Duration `mapstructure:"batch_timeout"`
-	MaxRetries   int           `mapstructure:"max_retries"`
-	RetryDelay   time.Duration `mapstructure:"retry_delay"`
-	Devices      []string      `mapstructure:"devices"`
+	Name       string   `mapstructure:"name"`
+	Type       string   `mapstructure:"type"`        // influxdb, mqtt, csv, api
+	BufferSize int      `mapstructure:"buffer_size"` // queued polls; 0 = default
+	Devices    []string `mapstructure:"devices"`
 	// ExcludePoints lists "device/point" names this output does not receive.
-	ExcludePoints  []string       `mapstructure:"exclude_points"`
-	OutputSpecific OutputSpecific `mapstructure:"output_specific"`
-}
-
-// OutputSpecific contains output-type-specific configuration.
-type OutputSpecific struct {
-	Influxdb InfluxdbConfig `mapstructure:"influxdb"`
-	Mqtt     MqttConfig     `mapstructure:"mqtt"`
-	Csv      CsvConfig      `mapstructure:"csv"`
-	API      APIConfig      `mapstructure:"api"`
+	ExcludePoints []string `mapstructure:"exclude_points"`
+	// Influxdb, Mqtt, Csv and API hold the settings of the output type; exactly the block
+	// named by Type is set.
+	Influxdb *InfluxdbConfig `mapstructure:"influxdb"`
+	Mqtt     *MqttConfig     `mapstructure:"mqtt"`
+	Csv      *CsvConfig      `mapstructure:"csv"`
+	API      *APIConfig      `mapstructure:"api"`
 }
 
 // InfluxdbConfig contains InfluxDB3-specific configuration.
@@ -107,6 +96,11 @@ type InfluxdbConfig struct {
 	Timeout time.Duration `mapstructure:"timeout"`
 	// NoSync lets InfluxDB answer before the write is in its WAL on disk.
 	NoSync bool `mapstructure:"no_sync"`
+	// BatchSize, BatchTimeout, MaxRetries and RetryDelay tune the writes; 0 = default.
+	BatchSize    int           `mapstructure:"batch_size"`
+	BatchTimeout time.Duration `mapstructure:"batch_timeout"`
+	MaxRetries   int           `mapstructure:"max_retries"`
+	RetryDelay   time.Duration `mapstructure:"retry_delay"`
 }
 
 // MqttConfig contains MQTT-specific configuration.

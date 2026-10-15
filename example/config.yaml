@@ -26,7 +26,8 @@ lookups:
 
 # =====================================================================================
 # Devices: where data is read from. Every device needs a unique name and at least one
-# point. type is "modbus" or "http".
+# point. type is "modbus" or "http"; the settings of that type go in a block of the same
+# name (modbus: or http:).
 #
 # Common device options:
 #   poll_interval  how often the device is polled (required, > 0); the first poll
@@ -56,12 +57,11 @@ devices:
     type: modbus
     poll_interval: 5s
     timeout: 2s
-    device_specific:
-      modbus:
-        address: "tcp://192.0.2.10:502"
-        slave_id: 1
-        register_mode: range
-        ranges: ["33049-33058", "33095-33121", "33135-33150"]
+    modbus:
+      address: "tcp://192.0.2.10:502"
+      slave_id: 1
+      register_mode: range
+      ranges: ["33049-33058", "33095-33121", "33135-33150"]
     # Point options (Modbus):
     #   register       start register address
     #   count          number of registers: 1 for 16-bit types and bool,
@@ -133,15 +133,14 @@ devices:
     type: modbus
     poll_interval: 10s
     timeout: 3s
-    device_specific:
-      modbus:
-        address: "rtu:///dev/ttyUSB0"
-        slave_id: 1
-        speed: 9600
-        data_bits: 8
-        parity: "N" # N = none, E = even, O = odd
-        stop_bits: 1
-        register_mode: direct
+    modbus:
+      address: "rtu:///dev/ttyUSB0"
+      slave_id: 1
+      speed: 9600
+      data_bits: 8
+      parity: "N" # N = none, E = even, O = odd
+      stop_bits: 1
+      register_mode: direct
     points:
       - name: temperature
         register: 100
@@ -172,14 +171,13 @@ devices:
     type: http
     poll_interval: 1s
     timeout: 2s
-    device_specific:
-      http:
-        address: "http://192.0.2.20/rpc/EM.GetStatus"
-        method: GET
-        headers:
-          Accept: "application/json"
-        response_type: json
-        insecure: false # true skips TLS certificate verification (self-signed devices)
+    http:
+      address: "http://192.0.2.20/rpc/EM.GetStatus"
+      method: GET
+      headers:
+        Accept: "application/json"
+      response_type: json
+      insecure: false # true skips TLS certificate verification (self-signed devices)
     points:
       - name: a_voltage
         json_path: "a_voltage"
@@ -197,16 +195,15 @@ devices:
     type: http
     poll_interval: 1m
     timeout: 10s
-    device_specific:
-      http:
-        address: "https://api.example.com/v1/status"
-        method: POST
-        headers:
-          Accept: "application/json"
-          Content-Type: "application/json"
-          Authorization: "Bearer <your-api-token>"
-        body: '{"action": "GetStatus"}'
-        response_type: json
+    http:
+      address: "https://api.example.com/v1/status"
+      method: POST
+      headers:
+        Accept: "application/json"
+        Content-Type: "application/json"
+        Authorization: "Bearer <your-api-token>"
+      body: '{"action": "GetStatus"}'
+      response_type: json
     points:
       - name: online
         json_path: "status.online"
@@ -217,7 +214,8 @@ devices:
         unit: "kW"
 
 # =====================================================================================
-# Outputs: where data is written to. type is "influxdb", "mqtt" or "csv".
+# Outputs: where data is written to. type is "influxdb", "mqtt", "csv" or "api"; the
+# settings of that type go in a block of the same name (influxdb:, mqtt:, csv:, api:).
 #
 # Common output options:
 #   devices      the devices whose readings this output receives (must exist above)
@@ -230,24 +228,22 @@ devices:
 outputs:
   # ----- InfluxDB 3 --------------------------------------------------------------------
   # Schema: measurement = device name, tags "point" and "unit", field "value".
-  # batch_size, batch_timeout, max_retries and retry_delay apply to InfluxDB only.
   - name: influxdb
     type: influxdb
     buffer_size: 1000
-    batch_size: 10000 # write when this many points are queued (default 10000)
-    batch_timeout: 1s # ... or after this time (default 1s)
-    max_retries: 3 # retries per batch before it is dropped (default 3)
-    retry_delay: 1s # wait between retries (default 1s)
-    output_specific:
-      influxdb:
-        address: "http://influxdb.example.com:8181"
-        token: "<your-influxdb-token>"
-        database: "datalogger"
-        insecure: false
-        timeout: 10s # per write request (default 10s)
-        # Answer before the write is in the WAL on disk: avoids slow writes on slow
-        # storage, but a crash of InfluxDB can lose the last second (default false).
-        no_sync: false
+    influxdb:
+      address: "http://influxdb.example.com:8181"
+      token: "<your-influxdb-token>"
+      database: "datalogger"
+      insecure: false
+      timeout: 10s # per write request (default 10s)
+      batch_size: 10000 # write when this many points are queued (default 10000)
+      batch_timeout: 1s # ... or after this time (default 1s)
+      max_retries: 3 # retries per batch before it is dropped (default 3)
+      retry_delay: 1s # wait between retries (default 1s)
+      # Answer before the write is in the WAL on disk: avoids slow writes on slow
+      # storage, but a crash of InfluxDB can lose the last second (default false).
+      no_sync: false
     devices:
       - inverter
       - energy_meter
@@ -266,16 +262,15 @@ outputs:
   - name: mqtt
     type: mqtt
     buffer_size: 1000
-    output_specific:
-      mqtt:
-        address: "tcp://mqtt.example.com:1883"
-        client_id: "datalogger-01" # default: logger-<8 random characters>
-        topic: "datalogger" # default: datalogger
-        qos: 1 # 0, 1 or 2
-        retain: false
-        username: "<user>"
-        password: "<password>"
-        insecure: false
+    mqtt:
+      address: "tcp://mqtt.example.com:1883"
+      client_id: "datalogger-01" # default: logger-<8 random characters>
+      topic: "datalogger" # default: datalogger
+      qos: 1 # 0, 1 or 2
+      retain: false
+      username: "<user>"
+      password: "<password>"
+      insecure: false
     devices:
       - inverter
       - sensor_rtu
@@ -289,11 +284,10 @@ outputs:
   - name: csv
     type: csv
     buffer_size: 1000
-    output_specific:
-      csv:
-        file_path: "./data/data.csv"
-        max_age: 24h
-        max_backups: 7
+    csv:
+      file_path: "./data/data.csv"
+      max_age: 24h
+      max_backups: 7
     devices:
       - inverter
       - sensor_rtu
@@ -311,10 +305,9 @@ outputs:
   # port (ports: ["8080:8080"]).
   - name: api
     type: api
-    output_specific:
-      api:
-        listen: ":8080" # host:port; "127.0.0.1:8080" for local access only
-        token: "" # optional: require "Authorization: Bearer <token>"
+    api:
+      listen: ":8080" # host:port; "127.0.0.1:8080" for local access only
+      token: "" # optional: require "Authorization: Bearer <token>"
     devices:
       - inverter
       - energy_meter

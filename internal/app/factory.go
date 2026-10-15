@@ -73,7 +73,7 @@ func createWriter(
 ) (output.Writer, error) {
 	switch o.Type {
 	case "csv":
-		c := o.OutputSpecific.Csv
+		c := o.Csv
 		return csv.New(csv.Deps{
 			Settings: csv.Settings{
 				Name:       o.Name,
@@ -102,7 +102,7 @@ func createModbusReader(
 	log zerolog.Logger,
 	clk clock.Clock,
 ) (datasource.DeviceReader, error) {
-	m := d.DeviceSpecific.Modbus
+	m := d.Modbus
 	dialer, err := modbus.NewDialer(modbus.ConnSettings{
 		Address:  m.Address,
 		SlaveID:  m.SlaveID,
@@ -154,7 +154,7 @@ func createHTTPReader(
 	log zerolog.Logger,
 	clk clock.Clock,
 ) (datasource.DeviceReader, error) {
-	h := d.DeviceSpecific.HTTP
+	h := d.HTTP
 	points := make([]http.Point, len(d.Points))
 	for i, p := range d.Points {
 		points[i] = http.Point{
@@ -190,7 +190,7 @@ func createInfluxDBWriter(
 	log zerolog.Logger,
 	clk clock.Clock,
 ) (output.Writer, error) {
-	i := o.OutputSpecific.Influxdb
+	i := o.Influxdb
 	client, err := influxdb.NewClient(influxdb.ConnSettings{
 		Address:  i.Address,
 		Token:    i.Token,
@@ -205,10 +205,10 @@ func createInfluxDBWriter(
 	return influxdb.New(influxdb.Deps{
 		Settings: influxdb.Settings{
 			Name:         o.Name,
-			BatchSize:    o.BatchSize,
-			BatchTimeout: o.BatchTimeout,
-			MaxRetries:   o.MaxRetries,
-			RetryDelay:   o.RetryDelay,
+			BatchSize:    i.BatchSize,
+			BatchTimeout: i.BatchTimeout,
+			MaxRetries:   i.MaxRetries,
+			RetryDelay:   i.RetryDelay,
 		},
 		Client: client,
 		Clock:  clk,
@@ -222,7 +222,7 @@ func createMQTTWriter(
 	log zerolog.Logger,
 	clk clock.Clock,
 ) (output.Writer, error) {
-	m := o.OutputSpecific.Mqtt
+	m := o.Mqtt
 	dialer, err := mqtt.NewDialer(mqtt.ConnSettings{
 		Address:  m.Address,
 		ClientID: m.ClientID,
@@ -252,7 +252,7 @@ func createAPIWriter(
 	log zerolog.Logger,
 	clk clock.Clock,
 ) (output.Writer, error) {
-	a := o.OutputSpecific.API
+	a := o.API
 	ln, err := api.Listen(a.Listen)
 	if err != nil {
 		return nil, err

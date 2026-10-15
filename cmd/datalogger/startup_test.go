@@ -38,14 +38,13 @@ func (b *lockedBuffer) String() string {
 }
 
 // startupConfig is a config with one HTTP device at deviceURL and one output; output is
-// the YAML of the output's output_specific block.
+// the YAML of the output's type block.
 const startupConfig = `devices:
   - name: meter
     type: http
     poll_interval: 20ms
-    device_specific:
-      http:
-        address: %q
+    http:
+      address: %q
     points:
       - name: power
         json_path: "power"
@@ -54,7 +53,6 @@ const startupConfig = `devices:
 outputs:
   - name: out
     type: %s
-    output_specific:
 %s
     devices: [meter]
 `
@@ -69,7 +67,7 @@ func writeConfig(t *testing.T, content string) string {
 
 // csvConfig returns a config that polls deviceURL and writes to the CSV file csvPath.
 func csvConfig(deviceURL, csvPath string) string {
-	output := fmt.Sprintf("      csv:\n        file_path: %q", csvPath)
+	output := fmt.Sprintf("    csv:\n      file_path: %q", csvPath)
 	return fmt.Sprintf(startupConfig, deviceURL, "csv", output)
 }
 
@@ -133,11 +131,11 @@ func TestRunCleanShutdown(t *testing.T) {
 func TestRunStartupErrors(t *testing.T) {
 	t.Parallel()
 
-	mqttOutput := "      mqtt:\n        address: \"http://broker.invalid:1883\""
+	mqttOutput := "    mqtt:\n      address: \"http://broker.invalid:1883\""
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = busy.Close() })
-	apiOutput := fmt.Sprintf("      api:\n        listen: %q", busy.Addr().String())
+	apiOutput := fmt.Sprintf("    api:\n      listen: %q", busy.Addr().String())
 	tests := []struct {
 		name    string
 		config  string // written to a file and passed as -config; empty: no -config
@@ -163,7 +161,7 @@ func TestRunStartupErrors(t *testing.T) {
 		},
 		{
 			name:    "invalid config",
-			config:  fmt.Sprintf(startupConfig, "http://192.0.2.1", "csv", "      csv: {}"),
+			config:  fmt.Sprintf(startupConfig, "http://192.0.2.1", "csv", "    csv: {}"),
 			want:    1,
 			wantLog: "Failed to load config",
 		},

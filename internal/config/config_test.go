@@ -22,11 +22,10 @@ devices:
     type: http
     poll_interval: 1s
     timeout: 5s
-    device_specific:
-      http:
-        address: "http://localhost:8080"
-        method: GET
-        response_type: json
+    http:
+      address: "http://localhost:8080"
+      method: GET
+      response_type: json
     points:
       - name: temp
         json_path: "temperature"
@@ -37,9 +36,8 @@ outputs:
     type: csv
     devices:
       - test_device
-    output_specific:
-      csv:
-        file_path: "/tmp/test.csv"
+    csv:
+      file_path: "/tmp/test.csv"
 `
 	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
@@ -107,12 +105,10 @@ func TestConfigValidate(t *testing.T) {
 						Type:         "http",
 						PollInterval: 1 * time.Second,
 						Timeout:      time.Second,
-						DeviceSpecific: DeviceSpecific{
-							HTTP: HTTPConfig{
-								Address:      "http://localhost",
-								Method:       "GET",
-								ResponseType: "json",
-							},
+						HTTP: &HTTPConfig{
+							Address:      "http://localhost",
+							Method:       "GET",
+							ResponseType: "json",
 						},
 						Points: []Point{{Name: "temp", JSONPath: "temp"}},
 					},
@@ -122,10 +118,8 @@ func TestConfigValidate(t *testing.T) {
 						Name:    "csv_out",
 						Type:    "csv",
 						Devices: []string{"test"},
-						OutputSpecific: OutputSpecific{
-							Csv: CsvConfig{
-								FilePath: "test.csv",
-							},
+						Csv: &CsvConfig{
+							FilePath: "test.csv",
 						},
 					},
 				},
@@ -233,9 +227,9 @@ func TestDeviceValidate(t *testing.T) {
 				Type:         "http",
 				PollInterval: 1 * time.Second,
 				Timeout:      time.Second,
-				DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{
+				HTTP: &HTTPConfig{
 					Address: "http://localhost", Method: "GET", ResponseType: "json",
-				}},
+				},
 				Points: []Point{{Name: "temp", JSONPath: "temp"}},
 			},
 			wantErr: false,
@@ -247,12 +241,10 @@ func TestDeviceValidate(t *testing.T) {
 				Type:         "modbus",
 				PollInterval: 1 * time.Second,
 				Timeout:      time.Second,
-				DeviceSpecific: DeviceSpecific{
-					Modbus: ModbusConfig{
-						Address:      "tcp://localhost:502",
-						SlaveID:      1,
-						RegisterMode: "direct",
-					},
+				Modbus: &ModbusConfig{
+					Address:      "tcp://localhost:502",
+					SlaveID:      1,
+					RegisterMode: "direct",
 				},
 				Points: []Point{{Name: "power", Register: 1, Type: "uint16", Scale: 1}},
 			},
@@ -437,12 +429,10 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "influx",
 				Type:    "influxdb",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Influxdb: InfluxdbConfig{
-						Address:  "http://localhost:8086",
-						Token:    "test-token",
-						Database: "test-db",
-					},
+				Influxdb: &InfluxdbConfig{
+					Address:  "http://localhost:8086",
+					Token:    "test-token",
+					Database: "test-db",
 				},
 			},
 			wantErr: false,
@@ -453,11 +443,9 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "mqtt",
 				Type:    "mqtt",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Mqtt: MqttConfig{
-						Address: "tcp://localhost:1883",
-						Topic:   "test",
-					},
+				Mqtt: &MqttConfig{
+					Address: "tcp://localhost:1883",
+					Topic:   "test",
 				},
 			},
 			wantErr: false,
@@ -468,10 +456,8 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "csv",
 				Type:    "csv",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Csv: CsvConfig{
-						FilePath: "test.csv",
-					},
+				Csv: &CsvConfig{
+					FilePath: "test.csv",
 				},
 			},
 			wantErr: false,
@@ -497,11 +483,9 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "influx",
 				Type:    "influxdb",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Influxdb: InfluxdbConfig{
-						Token:    "test-token",
-						Database: "test-db",
-					},
+				Influxdb: &InfluxdbConfig{
+					Token:    "test-token",
+					Database: "test-db",
 				},
 			},
 			wantErr: true,
@@ -512,11 +496,9 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "influx",
 				Type:    "influxdb",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Influxdb: InfluxdbConfig{
-						Address:  "http://localhost:8086",
-						Database: "test-db",
-					},
+				Influxdb: &InfluxdbConfig{
+					Address:  "http://localhost:8086",
+					Database: "test-db",
 				},
 			},
 			wantErr: true,
@@ -527,11 +509,9 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "influx",
 				Type:    "influxdb",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Influxdb: InfluxdbConfig{
-						Address: "http://localhost:8086",
-						Token:   "test-token",
-					},
+				Influxdb: &InfluxdbConfig{
+					Address: "http://localhost:8086",
+					Token:   "test-token",
 				},
 			},
 			wantErr: true,
@@ -542,13 +522,11 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "influx",
 				Type:    "influxdb",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Influxdb: InfluxdbConfig{
-						Address:  "http://localhost:8086",
-						Token:    "test-token",
-						Database: "test-db",
-						Timeout:  -time.Second,
-					},
+				Influxdb: &InfluxdbConfig{
+					Address:  "http://localhost:8086",
+					Token:    "test-token",
+					Database: "test-db",
+					Timeout:  -time.Second,
 				},
 			},
 			wantErr: true,
@@ -559,10 +537,8 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "mqtt",
 				Type:    "mqtt",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Mqtt: MqttConfig{
-						Topic: "test",
-					},
+				Mqtt: &MqttConfig{
+					Topic: "test",
 				},
 			},
 			wantErr: true,
@@ -573,12 +549,10 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "mqtt",
 				Type:    "mqtt",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Mqtt: MqttConfig{
-						Address: "tcp://localhost:1883",
-						Topic:   "test",
-						QoS:     3,
-					},
+				Mqtt: &MqttConfig{
+					Address: "tcp://localhost:1883",
+					Topic:   "test",
+					QoS:     3,
 				},
 			},
 			wantErr: true,
@@ -589,19 +563,17 @@ func TestOutputValidate(t *testing.T) {
 				Name:    "csv",
 				Type:    "csv",
 				Devices: []string{"test"},
-				OutputSpecific: OutputSpecific{
-					Csv: CsvConfig{},
-				},
+				Csv:     &CsvConfig{},
 			},
 			wantErr: true,
 		},
 		{
 			name: "valid api output",
 			output: Output{
-				Name:           "api",
-				Type:           "api",
-				Devices:        []string{"test"},
-				OutputSpecific: OutputSpecific{API: APIConfig{Listen: ":8080"}},
+				Name:    "api",
+				Type:    "api",
+				Devices: []string{"test"},
+				API:     &APIConfig{Listen: ":8080"},
 			},
 			wantErr: false,
 		},
@@ -796,30 +768,90 @@ func TestLoadExampleConfig(t *testing.T) {
 func TestApplyDefaults(t *testing.T) {
 	cfg := &Config{
 		Devices: []Device{
-			{Name: "defaults", Type: "http"},
-			{Name: "set", Type: "http", DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{
+			{Name: "defaults", Type: "http", HTTP: &HTTPConfig{}},
+			{Name: "set", Type: "http", HTTP: &HTTPConfig{
 				Method: "POST", ResponseType: "text",
-			}}},
+			}},
+			{Name: "no http block", Type: "modbus", Modbus: &ModbusConfig{}},
 		},
 		Outputs: []Output{
-			{Name: "defaults", Type: "mqtt"},
-			{Name: "set", Type: "mqtt", OutputSpecific: OutputSpecific{Mqtt: MqttConfig{
+			{Name: "defaults", Type: "mqtt", Mqtt: &MqttConfig{}},
+			{Name: "set", Type: "mqtt", Mqtt: &MqttConfig{
 				Topic: "custom", ClientID: "fixed",
-			}}},
+			}},
 		},
 	}
 
 	cfg.applyDefaults()
 
-	assert.Equal(t, "GET", cfg.Devices[0].DeviceSpecific.HTTP.Method)
-	assert.Equal(t, "json", cfg.Devices[0].DeviceSpecific.HTTP.ResponseType)
-	assert.Equal(t, "POST", cfg.Devices[1].DeviceSpecific.HTTP.Method)
-	assert.Equal(t, "text", cfg.Devices[1].DeviceSpecific.HTTP.ResponseType)
+	assert.Equal(t, "GET", cfg.Devices[0].HTTP.Method)
+	assert.Equal(t, "json", cfg.Devices[0].HTTP.ResponseType)
+	assert.Equal(t, "POST", cfg.Devices[1].HTTP.Method)
+	assert.Equal(t, "text", cfg.Devices[1].HTTP.ResponseType)
+	assert.Nil(t, cfg.Devices[2].HTTP, "defaults never add a block of another type")
 
-	assert.Equal(t, "datalogger", cfg.Outputs[0].OutputSpecific.Mqtt.Topic)
-	assert.Regexp(t, `^logger-[a-z2-7]{8}$`, cfg.Outputs[0].OutputSpecific.Mqtt.ClientID)
-	assert.Equal(t, "custom", cfg.Outputs[1].OutputSpecific.Mqtt.Topic)
-	assert.Equal(t, "fixed", cfg.Outputs[1].OutputSpecific.Mqtt.ClientID)
+	assert.Equal(t, "datalogger", cfg.Outputs[0].Mqtt.Topic)
+	assert.Regexp(t, `^logger-[a-z2-7]{8}$`, cfg.Outputs[0].Mqtt.ClientID)
+	assert.Equal(t, "custom", cfg.Outputs[1].Mqtt.Topic)
+	assert.Equal(t, "fixed", cfg.Outputs[1].Mqtt.ClientID)
+}
+
+// TestValidateTypeBlock checks that exactly the block named by type is set: a block of
+// another type would otherwise be ignored without a word.
+func TestValidateTypeBlock(t *testing.T) {
+	t.Parallel()
+	httpDevice := func(change func(*Device)) *Device {
+		d := Device{
+			Name: "d", Type: "http", PollInterval: time.Second, Timeout: time.Second,
+			HTTP:   &HTTPConfig{Address: "http://localhost", Method: "GET", ResponseType: "json"},
+			Points: []Point{{Name: "p", JSONPath: "p"}},
+		}
+		change(&d)
+		return &d
+	}
+	csvOutput := func(change func(*Output)) *Output {
+		o := Output{
+			Name: "o", Type: "csv", Devices: []string{"d"},
+			Csv: &CsvConfig{FilePath: "x.csv"},
+		}
+		change(&o)
+		return &o
+	}
+	tests := map[string]struct {
+		validate func() error
+		wantErr  string
+	}{
+		"device without its block": {
+			validate: httpDevice(func(d *Device) { d.HTTP = nil }).Validate,
+			wantErr:  "http block required for type http",
+		},
+		"device with another block": {
+			validate: httpDevice(func(d *Device) { d.Modbus = &ModbusConfig{} }).Validate,
+			wantErr:  "modbus block not allowed for type http",
+		},
+		"device of unknown type": {
+			validate: httpDevice(func(d *Device) { d.Type = "snmp" }).Validate,
+			wantErr:  "unknown device type: snmp",
+		},
+		"output without its block": {
+			validate: csvOutput(func(o *Output) { o.Csv = nil }).Validate,
+			wantErr:  "csv block required for type csv",
+		},
+		"output with another block": {
+			validate: csvOutput(func(o *Output) { o.API = &APIConfig{Listen: ":80"} }).Validate,
+			wantErr:  "api block not allowed for type csv",
+		},
+		"output of unknown type": {
+			validate: csvOutput(func(o *Output) { o.Type = "kafka" }).Validate,
+			wantErr:  "unknown output type: kafka",
+		},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.EqualError(t, tt.validate(), tt.wantErr)
+		})
+	}
 }
 
 // TestValidateHasNoSideEffects checks that Validate leaves the config unchanged.
@@ -838,9 +870,9 @@ func TestValidatePoints(t *testing.T) {
 	}
 	http := func(responseType string, points ...Point) Device {
 		return Device{
-			Type:           "http",
-			DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{ResponseType: responseType}},
-			Points:         points,
+			Type:   "http",
+			HTTP:   &HTTPConfig{ResponseType: responseType},
+			Points: points,
 		}
 	}
 
@@ -962,14 +994,14 @@ func namesConfig(change func(*Config)) *Config {
 	cfg := &Config{
 		Devices: []Device{{
 			Name: "meter", Type: "http", PollInterval: time.Second, Timeout: time.Second,
-			DeviceSpecific: DeviceSpecific{HTTP: HTTPConfig{
+			HTTP: &HTTPConfig{
 				Address: "http://localhost", Method: "GET", ResponseType: "json",
-			}},
+			},
 			Points: []Point{{Name: "a", JSONPath: "a"}, {Name: "b", JSONPath: "b"}},
 		}},
 		Outputs: []Output{{
 			Name: "out", Type: "csv", Devices: []string{"meter"},
-			OutputSpecific: OutputSpecific{Csv: CsvConfig{FilePath: "x.csv"}},
+			Csv: &CsvConfig{FilePath: "x.csv"},
 		}},
 	}
 	change(cfg)
@@ -1041,9 +1073,8 @@ func TestValidateNamesAndExcludePoints(t *testing.T) {
 // toMQTT turns the output of namesConfig into an MQTT output.
 func toMQTT(c *Config) {
 	c.Outputs[0].Type = "mqtt"
-	c.Outputs[0].OutputSpecific = OutputSpecific{Mqtt: MqttConfig{
-		Address: "tcp://localhost:1883", Topic: "logger",
-	}}
+	c.Outputs[0].Csv = nil
+	c.Outputs[0].Mqtt = &MqttConfig{Address: "tcp://localhost:1883", Topic: "logger"}
 }
 
 // Regression: + and # are wildcards, not allowed in a published topic; the broker
@@ -1083,7 +1114,7 @@ func TestValidateMQTTTopicNames(t *testing.T) {
 		},
 		{
 			name:    "topic prefix",
-			change:  func(c *Config) { toMQTT(c); c.Outputs[0].OutputSpecific.Mqtt.Topic = "home/#" },
+			change:  func(c *Config) { toMQTT(c); c.Outputs[0].Mqtt.Topic = "home/#" },
 			wantErr: `topic "home/#" must not contain + or #`,
 		},
 	}
@@ -1114,9 +1145,8 @@ devices:
   - name: meter
     type: http
     poll_interval: 1s
-    device_specific:
-      http:
-        address: "http://localhost"
+    http:
+      address: "http://localhost"
     points:
       - name: status
         json_path: status
@@ -1126,9 +1156,8 @@ outputs:
     type: csv
     devices: [meter]
     exclude_points: [meter/status]
-    output_specific:
-      csv:
-        file_path: x.csv
+    csv:
+      file_path: x.csv
 `), 0o600))
 
 	cfg, err := Load(path)
@@ -1201,7 +1230,7 @@ func TestLoadErrors(t *testing.T) {
 			wantErr: "poll_intervall",
 		},
 		"unknown nested key": {
-			content: "outputs:\n  - output_specific:\n      csv:\n        max_backup: 7\n",
+			content: "outputs:\n  - csv:\n      max_backup: 7\n",
 			wantErr: "max_backup",
 		},
 		"validate": {content: "outputs: []\n", wantErr: "at least one device required"},

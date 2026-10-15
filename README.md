@@ -41,16 +41,17 @@ One YAML file, passed with `-config`. [example/config.yaml](example/config.yaml)
 complete reference with every option explained. Unknown keys (for example a typo) stop
 the program at startup. Keep tokens and passwords only in your local `config.yaml`.
 
-A minimal config: one device, one output.
+Every device and output has a `type`; the settings of that type go in a block with the
+same name (`http:`, `modbus:`, `influxdb:`, `mqtt:`, `csv:`, `api:`). A minimal config:
+one device, one output.
 
 ```yaml
 devices:
   - name: meter
     type: http
     poll_interval: 5s
-    device_specific:
-      http:
-        address: "http://192.0.2.20/rpc/EM.GetStatus"
+    http:
+      address: "http://192.0.2.20/rpc/EM.GetStatus"
     points:
       - name: power
         json_path: "total_act_power"
@@ -59,11 +60,10 @@ devices:
 outputs:
   - name: csv
     type: csv
-    output_specific:
-      csv:
-        file_path: "./data/data.csv"
-        max_age: 24h
-        max_backups: 7
+    csv:
+      file_path: "./data/data.csv"
+      max_age: 24h
+      max_backups: 7
     devices: [meter]
 ```
 
@@ -100,10 +100,9 @@ outputs:
 outputs:
   - name: api
     type: api
-    output_specific:
-      api:
-        listen: ":8080"
-        token: "" # optional: require "Authorization: Bearer <token>"
+    api:
+      listen: ":8080"
+      token: "" # optional: require "Authorization: Bearer <token>"
     devices: [inverter]
 ```
 
@@ -166,6 +165,29 @@ outputs:
   field and device, so keep text and true/false values out of it with `exclude_points`.
 - An expression that does not compile, or names an unknown point or lookup, stops the
   program at startup. One that fails while running skips the point and is logged.
+
+### Upgrading from v1
+
+v2 drops the `device_specific:` and `output_specific:` levels: the type block moves up
+one level. The InfluxDB options `batch_size`, `batch_timeout`, `max_retries` and
+`retry_delay` move into the `influxdb:` block.
+
+```yaml
+# v1
+- name: db
+  type: influxdb
+  batch_size: 5000
+  output_specific:
+    influxdb:
+      address: "http://influxdb:8181"
+
+# v2
+- name: db
+  type: influxdb
+  influxdb:
+    address: "http://influxdb:8181"
+    batch_size: 5000
+```
 
 ## Running
 

@@ -47,18 +47,22 @@ func (d *Device) applyDefaults() {
 		}
 	}
 
-	h := &d.DeviceSpecific.HTTP
-	if h.Method == "" {
-		h.Method = defaultHTTPMethod
-	}
-	if h.ResponseType == "" {
-		h.ResponseType = defaultResponseType
+	if h := d.HTTP; h != nil {
+		if h.Method == "" {
+			h.Method = defaultHTTPMethod
+		}
+		if h.ResponseType == "" {
+			h.ResponseType = defaultResponseType
+		}
 	}
 }
 
 // applyDefaults fills in the MQTT topic and a random client ID.
 func (o *Output) applyDefaults() {
-	m := &o.OutputSpecific.Mqtt
+	m := o.Mqtt
+	if m == nil {
+		return
+	}
 	if m.Topic == "" {
 		m.Topic = defaultMQTTTopic
 	}
