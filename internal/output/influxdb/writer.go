@@ -53,6 +53,7 @@ type Writer struct {
 	logger   zerolog.Logger
 	batch    []*influxdb3.Point
 	failed   bool // the previous batch failed
+	partial  bool // the server rejected lines of the previous batch
 }
 
 // New creates a Writer; it does not connect.
@@ -162,7 +163,8 @@ func newPoint(dp datasource.DataPoint) *influxdb3.Point {
 	return influxdb3.NewPoint(dp.DeviceName, tags, map[string]any{"value": dp.Value}, dp.Timestamp)
 }
 
-// flush writes the batch with retries; after the last retry the batch is dropped.
+// flush writes the batch with retries; after the last retry the batch is dropped. A
+// partial write counts as written: the server stored every line it did not reject.
 func (w *Writer) flush(ctx context.Context) {
 	if len(w.batch) == 0 {
 		return
@@ -171,6 +173,15 @@ func (w *Writer) flush(ctx context.Context) {
 
 	log := w.logger.With().Int("points", len(w.batch)).Logger()
 	err := w.writeWithRetry(ctx)
+	var partialErr *influxdb3.PartialWriteError
+	if errors.As(err, &partialErr) {
+		w.logRejected(log, partialErr)
+		err = nil
+	} else if err == nil && w.partial {
+		log.Info().Msg("InfluxDB accepts every line again")
+		w.partial = false
+	}
+
 	switch {
 	case err != nil:
 		log.Error().Err(err).Msg("Dropping batch after failed writes")
@@ -181,6 +192,21 @@ func (w *Writer) flush(ctx context.Context) {
 	default:
 		log.Debug().Msg("Wrote batch to InfluxDB")
 	}
+}
+
+// logRejected logs the lines of a partial write: a warning with the first rejected line,
+// then at debug while every batch has rejected lines, so a lasting cause (e.g. a column
+// type conflict) does not log once per batch.
+func (w *Writer) logRejected(log zerolog.Logger, err *influxdb3.PartialWriteError) {
+	level := zerolog.WarnLevel
+	if w.partial {
+		level = zerolog.DebugLevel
+	}
+	w.partial = true
+	first := err.LineErrors[0] // the client only returns a PartialWriteError with lines
+	log.WithLevel(level).Int("rejected", len(err.LineErrors)).Int("line", first.LineNumber).
+		Str("error", first.ErrorMessage).Str("original_line", first.OriginalLine).
+		Msg("InfluxDB rejected lines of the batch, stored the rest")
 }
 
 // writeWithRetry tries the write 1 + MaxRetries times, RetryDelay apart.

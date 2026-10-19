@@ -265,9 +265,11 @@ writer that failed, or a missed deadline.
 - Batching: a full `batch_size` (default 10000) is written at once, a partial batch every
   `batch_timeout` (default 1 s). Retries: `max_retries` (default 3) with `retry_delay`
   (default 1 s), only for network errors, 5xx and 429; after that, or at once for other
-  HTTP errors (bad token, unknown database, rejected lines), the batch is dropped and
-  logged. The last batch is written when the input is closed on shutdown. The client
-  does not connect at startup.
+  HTTP errors (bad token, unknown database), the batch is dropped and logged. A partial
+  write (the server rejects single lines and stores the rest) counts as written: the
+  first rejected line is logged as a warning, further batches with rejected lines at
+  debug, and info when every line is accepted again. The last batch is written when the
+  input is closed on shutdown. The client does not connect at startup.
 - A value line protocol cannot store (anything but float64, int64, uint64, bool,
   string) is skipped with a warning, so it cannot fail the batch of every device.
 - Uses the v3 write API; gzip above 1000 bytes; `timeout` per write request (default
