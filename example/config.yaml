@@ -224,11 +224,12 @@ devices:
 #                one entry with all its points). When the queue is full, new polls are
 #                dropped for this output only and a warning is logged.
 #   exclude_points  "device/point" names this output does not receive (optional), e.g.
-#                text values for InfluxDB, where a field keeps one type per device.
+#                helper points only used by an expr.
 # =====================================================================================
 outputs:
   # ----- InfluxDB 3 --------------------------------------------------------------------
-  # Schema: measurement = device name, tags "point" and "unit", field "value".
+  # Schema: one row per poll; table = device name, one column per point, no tags.
+  # At most 499 points per device (excluded points do not count).
   - name: influxdb
     type: influxdb
     buffer_size: 1000
@@ -238,7 +239,7 @@ outputs:
       database: "datalogger"
       insecure: false
       timeout: 10s # per write request (default 10s)
-      batch_size: 10000 # write when this many points are queued (default 10000)
+      batch_size: 10000 # write when this many polls are queued (default 10000)
       batch_timeout: 1s # ... or after this time (default 1s)
       max_retries: 3 # retries per batch before it is dropped (default 3)
       retry_delay: 1s # wait between retries (default 1s)

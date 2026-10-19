@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1148,6 +1149,77 @@ func TestValidateMQTTTopicNames(t *testing.T) {
 			name:    "topic prefix",
 			change:  func(c *Config) { toMQTT(c); c.Outputs[0].Mqtt.Topic = "home/#" },
 			wantErr: `topic "home/#" must not contain + or #`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := namesConfig(tt.change).Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+// toInfluxDB turns the output of namesConfig into an InfluxDB output.
+func toInfluxDB(c *Config) {
+	c.Outputs[0].Type = "influxdb"
+	c.Outputs[0].Csv = nil
+	c.Outputs[0].Influxdb = &InfluxdbConfig{Address: "http://db:8181", Token: "t", Database: "d"}
+}
+
+// withPoints gives the device of namesConfig n points.
+func withPoints(c *Config, n int) {
+	c.Devices[0].Points = nil
+	for i := range n {
+		name := fmt.Sprintf("p%d", i)
+		c.Devices[0].Points = append(c.Devices[0].Points, Point{Name: name, JSONPath: name})
+	}
+}
+
+// Every point is a column of the device's InfluxDB table, which holds at most 500
+// columns, one of them time.
+func TestValidateInfluxDBColumns(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		change  func(*Config)
+		wantErr string
+	}{
+		{name: "valid", change: toInfluxDB},
+		{name: "499 points fit", change: func(c *Config) { toInfluxDB(c); withPoints(c, 499) }},
+		{
+			name:    "500 points do not fit",
+			change:  func(c *Config) { toInfluxDB(c); withPoints(c, 500) },
+			wantErr: "device meter sends 500 points, an InfluxDB table holds at most 499",
+		},
+		{
+			name: "excluded points do not count",
+			change: func(c *Config) {
+				toInfluxDB(c)
+				withPoints(c, 500)
+				c.Outputs[0].ExcludePoints = []string{"meter/p0"}
+			},
+		},
+		{
+			name:   "other outputs have no limit",
+			change: func(c *Config) { withPoints(c, 500) },
+		},
+		{
+			name:    "point named time",
+			change:  func(c *Config) { toInfluxDB(c); c.Devices[0].Points[1].Name = "time" },
+			wantErr: `point meter/time: "time" is the InfluxDB time column`,
+		},
+		{
+			name: "excluded point named time",
+			change: func(c *Config) {
+				toInfluxDB(c)
+				c.Devices[0].Points[1].Name = "time"
+				c.Outputs[0].ExcludePoints = []string{"meter/time"}
+			},
 		},
 	}
 	for _, tt := range tests {

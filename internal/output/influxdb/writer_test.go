@@ -108,34 +108,23 @@ func TestNewChecksDependencies(t *testing.T) {
 	assert.ErrorIs(t, err, influxdb.ErrMissingDependency)
 }
 
-func TestWritesFullBatchWithSchema(t *testing.T) {
+// A poll is one line: table = device, one field per point, no tags.
+func TestWritesOneLinePerPoll(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, influxdb.Settings{Name: "db", BatchSize: 2})
 	h.expectWrites(nil)
 
-	h.input <- []datasource.DataPoint{point("power", 1.5, "W")}
-	h.input <- []datasource.DataPoint{point("on", true, "")}
+	h.input <- []datasource.DataPoint{
+		point("power", 1.5, "W"), point("count", int64(3), ""),
+		point("on", true, ""), point("state", "ok", ""), point("missing", nil, ""),
+	}
+	h.input <- []datasource.DataPoint{point("power", 2.5, "W")}
 
 	assert.Equal(t, []string{
-		"meter,point=power,unit=W value=1.5 1790683200000000000\n",
-		"meter,point=on value=true 1790683200000000000\n",
+		"meter count=3i,on=true,power=1.5,state=\"ok\" 1790683200000000000\n",
+		"meter power=2.5 1790683200000000000\n",
 	}, h.write())
 	h.stop()
-}
-
-// A poll with more points than BatchSize is split: every full batch is written at once.
-func TestSplitsPollLargerThanBatch(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t, influxdb.Settings{Name: "db", BatchSize: 2})
-	h.expectWrites(nil, nil)
-
-	h.input <- []datasource.DataPoint{
-		point("a", 1.0, ""), point("b", 2.0, ""), point("c", 3.0, ""),
-	}
-
-	assert.Len(t, h.write(), 2)
-	h.stop() // the rest is written on close
-	assert.Len(t, h.write(), 1)
 }
 
 func TestFlushesPartialBatchEveryTimeout(t *testing.T) {
@@ -175,7 +164,7 @@ func TestRetriesThenDropsAndRecovers(t *testing.T) {
 	h.write() // third and last attempt: the batch is dropped
 
 	h.input <- []datasource.DataPoint{point("next", 2.0, "")}
-	assert.Contains(t, h.write()[0], "point=next")
+	assert.Contains(t, h.write()[0], "meter next=2")
 	h.stop()
 }
 
@@ -236,7 +225,7 @@ func TestDoesNotRetryClientErrors(t *testing.T) {
 	h.input <- []datasource.DataPoint{point("lost", 1.0, "")}
 	h.write()
 	h.input <- []datasource.DataPoint{point("next", 2.0, "")} // no retry delay in between
-	assert.Contains(t, h.write()[0], "point=next")
+	assert.Contains(t, h.write()[0], "meter next=2")
 	h.stop()
 }
 
@@ -250,7 +239,7 @@ func TestRetriesServerErrorsAndRateLimits(t *testing.T) {
 	h.advance(2, time.Second) // ticker + retry delay
 	h.write()
 	h.advance(2, time.Second)
-	assert.Contains(t, h.write()[0], "point=power")
+	assert.Contains(t, h.write()[0], "meter power=1")
 	h.stop()
 }
 
@@ -266,8 +255,8 @@ func TestSkipsValuesLineProtocolCannotEncode(t *testing.T) {
 	h.input <- []datasource.DataPoint{point("power", 1.5, "W")}
 	h.input <- []datasource.DataPoint{point("count", int64(3), "")}
 	assert.Equal(t, []string{
-		"meter,point=power,unit=W value=1.5 1790683200000000000\n",
-		"meter,point=count value=3i 1790683200000000000\n",
+		"meter power=1.5 1790683200000000000\n",
+		"meter count=3i 1790683200000000000\n",
 	}, h.write())
 	h.stop()
 }
@@ -322,4 +311,26 @@ func TestRetryWaitsForRetryAfter(t *testing.T) {
 	h.advance(2, 4*time.Second)
 	assert.Equal(t, start.Add(5*time.Second), <-retried)
 	h.stop()
+}
+
+// InfluxDB keeps one type per column and rejects a line with a value of another type,
+// which would lose the whole poll; only that value is skipped.
+func TestSkipsValueOfAnotherColumnType(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 3})
+	h.expectWrites(nil)
+
+	h.input <- []datasource.DataPoint{point("a", 1.5, ""), point("b", "x", "")}
+	h.input <- []datasource.DataPoint{point("a", "N/A", ""), point("b", "y", "")}
+	h.input <- []datasource.DataPoint{point("a", 2.5, ""), point("b", "z", "")}
+	assert.Equal(t, []string{
+		"meter a=1.5,b=\"x\" 1790683200000000000\n",
+		"meter b=\"y\" 1790683200000000000\n",
+		"meter a=2.5,b=\"z\" 1790683200000000000\n",
+	}, h.write())
+	h.stop()
+
+	logs := h.logs.String()
+	assert.Contains(t, logs, `"column_type":"float","value_type":"string"`)
+	assert.Contains(t, logs, "Point has its column type again")
 }

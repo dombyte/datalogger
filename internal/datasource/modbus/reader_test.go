@@ -595,3 +595,49 @@ func names(points []datasource.DataPoint) []string {
 	}
 	return out
 }
+
+// readTakes makes a read take d of fake time, so reads of one poll receive at different times.
+func (h *harness) readTakes(call *mocks.MockClient_ReadRegisters_Call, values []uint16,
+	d time.Duration,
+) {
+	call.RunAndReturn(func(uint16, uint16, lib.RegType) ([]uint16, error) {
+		h.clock.Advance(d)
+		return values, nil
+	}).Once()
+}
+
+// All points of a poll share one timestamp, the receive time of the last read, so the
+// poll is one snapshot (one InfluxDB row) although its reads arrive at different times.
+func TestPollHasOneTimestamp(t *testing.T) {
+	t.Parallel()
+	points := []modbus.Point{
+		{Name: "a", Register: 10, Type: "uint16", Scale: 1},
+		{Name: "b", Register: 20, Type: "uint16", Scale: 1},
+	}
+	tests := []struct {
+		name   string
+		ranges []string
+	}{
+		{name: "direct mode"},
+		{name: "range mode", ranges: []string{"10-10", "20-20"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := settings(points...)
+			s.RangeMode, s.Ranges = tt.ranges != nil, tt.ranges
+			h := newHarness(t, s)
+			h.dialer.EXPECT().Dial().Return(h.client, nil).Once()
+			for _, reg := range []uint16{10, 20} {
+				h.readTakes(h.client.EXPECT().ReadRegisters(reg, uint16(1), lib.HOLDING_REGISTER),
+					[]uint16{1}, 10*time.Millisecond)
+			}
+			h.client.EXPECT().Close().Return(nil).Once()
+
+			h.start()
+			for _, dp := range h.receivePoll() {
+				assert.Equal(t, start.Add(20*time.Millisecond), dp.Timestamp, dp.PointName)
+			}
+		})
+	}
+}

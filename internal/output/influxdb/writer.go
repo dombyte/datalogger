@@ -30,7 +30,7 @@ var ErrMissingDependency = errors.New("influxdb: missing dependency")
 // Settings configures a Writer; zero values use the defaults.
 type Settings struct {
 	Name         string
-	BatchSize    int
+	BatchSize    int // lines (polls) per write
 	BatchTimeout time.Duration
 	MaxRetries   int
 	RetryDelay   time.Duration
@@ -44,16 +44,28 @@ type Deps struct {
 	Log      zerolog.Logger
 }
 
-// Writer batches points and writes them with retries. Schema: measurement = device,
-// tags point and unit (unit only when set), field value, timestamp = reading time.
+// Writer batches polls and writes them with retries. Schema: one line per poll, table =
+// device, one field per point, no tags, timestamp = the poll's reading time.
 type Writer struct {
 	settings Settings
 	client   Client
 	clock    clock.Clock
 	logger   zerolog.Logger
-	batch    []*influxdb3.Point
+	batch    []*influxdb3.Point // one line per poll
+	columns  map[column]*columnType
 	failed   bool // the previous batch failed
 	partial  bool // the server rejected lines of the previous batch
+}
+
+// column is a field column of a device's table: one point.
+type column struct {
+	device, point string
+}
+
+// columnType is the field type a column was first written with in this run.
+type columnType struct {
+	name     string
+	mismatch bool // the last value of the column had another type
 }
 
 // New creates a Writer; it does not connect.
@@ -81,6 +93,7 @@ func New(d Deps) (*Writer, error) {
 		clock:    d.Clock,
 		logger:   d.Log.With().Str("component", "influxdb").Str("output", s.Name).Logger(),
 		batch:    make([]*influxdb3.Point, 0, s.BatchSize),
+		columns:  make(map[column]*columnType),
 	}, nil
 }
 
@@ -131,36 +144,97 @@ func (w *Writer) loop(ctx context.Context, input <-chan []datasource.DataPoint) 
 	}
 }
 
-// addAll appends the points to the batch and writes it whenever it is full.
+// addAll appends the poll as one line to the batch and writes the batch when it is full.
 func (w *Writer) addAll(ctx context.Context, points []datasource.DataPoint) {
-	for _, dp := range points {
-		w.add(dp)
-		if len(w.batch) >= w.settings.BatchSize {
-			w.flush(ctx)
-		}
+	if row := w.newRow(points); row != nil {
+		w.batch = append(w.batch, row)
+	}
+	if len(w.batch) >= w.settings.BatchSize {
+		w.flush(ctx)
 	}
 }
 
-// add appends dp to the batch. A value line protocol cannot encode is skipped: the
-// client would fail the whole batch, which holds the points of every device.
-func (w *Writer) add(dp datasource.DataPoint) {
-	switch dp.Value.(type) {
-	case float64, int64, uint64, bool, string, nil:
-		w.batch = append(w.batch, newPoint(dp))
-	default:
+// newRow maps a poll onto one line: table = device, one field per point, time = the
+// poll's timestamp (a reader sends one device's poll, all points stamped alike). It
+// returns nil when no point of the poll can be written.
+func (w *Writer) newRow(points []datasource.DataPoint) *influxdb3.Point {
+	row := influxdb3.NewPointWithMeasurement(points[0].DeviceName).
+		SetTimestamp(points[0].Timestamp)
+	fields := 0
+	for _, dp := range points {
+		if w.writable(dp) {
+			row.SetField(dp.PointName, dp.Value)
+			fields++
+		}
+	}
+	if fields == 0 {
+		return nil
+	}
+	return row
+}
+
+// writable reports whether the value of dp is written. A value line protocol cannot
+// encode, or one whose type differs from the type its column was first written with,
+// is skipped: InfluxDB would reject the line, and with it the whole poll.
+func (w *Writer) writable(dp datasource.DataPoint) bool {
+	if dp.Value == nil {
+		return false // no reading: the column stays empty in this row
+	}
+	typ, ok := fieldType(dp.Value)
+	if !ok {
 		w.logger.Warn().Str("device", dp.DeviceName).Str("point", dp.PointName).
 			Str("type", fmt.Sprintf("%T", dp.Value)).
 			Msg("Skipping point with a value InfluxDB cannot store")
+		return false
+	}
+	return w.checkType(column{device: dp.DeviceName, point: dp.PointName}, typ)
+}
+
+// fieldType returns the InfluxDB field type of a value line protocol can encode.
+func fieldType(v any) (string, bool) {
+	switch v.(type) {
+	case float64:
+		return "float", true
+	case int64:
+		return "integer", true
+	case uint64:
+		return "uinteger", true
+	case bool:
+		return "boolean", true
+	case string:
+		return "string", true
+	default:
+		return "", false
 	}
 }
 
-// newPoint maps a data point onto the InfluxDB schema.
-func newPoint(dp datasource.DataPoint) *influxdb3.Point {
-	tags := map[string]string{"point": dp.PointName}
-	if dp.Unit != "" {
-		tags["unit"] = dp.Unit
+// checkType records the first type of a column and reports whether typ matches it. A
+// mismatch is warned about once, then logged at debug, and at info when it matches again.
+// After a restart the column may already have another type on the server; that line is
+// rejected by the server and logged as a partial write.
+func (w *Writer) checkType(c column, typ string) bool {
+	col, ok := w.columns[c]
+	if !ok {
+		w.columns[c] = &columnType{name: typ}
+		return true
 	}
-	return influxdb3.NewPoint(dp.DeviceName, tags, map[string]any{"value": dp.Value}, dp.Timestamp)
+	if typ == col.name {
+		if col.mismatch {
+			col.mismatch = false
+			w.logger.Info().Str("device", c.device).Str("point", c.point).
+				Msg("Point has its column type again")
+		}
+		return true
+	}
+	level := zerolog.WarnLevel
+	if col.mismatch {
+		level = zerolog.DebugLevel
+	}
+	col.mismatch = true
+	w.logger.WithLevel(level).Str("device", c.device).Str("point", c.point).
+		Str("column_type", col.name).Str("value_type", typ).
+		Msg("Skipping value whose type differs from its column")
+	return false
 }
 
 // flush writes the batch with retries; after the last retry the batch is dropped. A
@@ -171,7 +245,7 @@ func (w *Writer) flush(ctx context.Context) {
 	}
 	defer func() { w.batch = w.batch[:0] }()
 
-	log := w.logger.With().Int("points", len(w.batch)).Logger()
+	log := w.logger.With().Int("lines", len(w.batch)).Logger()
 	err := w.writeWithRetry(ctx)
 	var partialErr *influxdb3.PartialWriteError
 	if errors.As(err, &partialErr) {

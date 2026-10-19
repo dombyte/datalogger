@@ -18,6 +18,14 @@ const (
 
 	// mqttWildcards are not allowed in the topic names an MQTT client publishes to.
 	mqttWildcards = "+#\x00"
+
+	// maxInfluxDBFields is the number of points a device may send to InfluxDB: each point
+	// is a column of the device's table, which holds at most 500 columns (the InfluxDB 3
+	// default), one of them the time column.
+	maxInfluxDBFields = 499
+
+	// influxDBTimeColumn is the time column of every InfluxDB table.
+	influxDBTimeColumn = "time"
 )
 
 // Validate validates the entire configuration.
@@ -82,7 +90,7 @@ func (c *Config) validateOutputs(devices map[string]map[string]bool) error {
 }
 
 // validateReferences checks the devices, exclude_points and, for MQTT, the topic names
-// of an output.
+// of an output, for InfluxDB the columns.
 func (o *Output) validateReferences(devices map[string]map[string]bool) error {
 	for _, deviceName := range o.Devices {
 		if devices[deviceName] == nil {
@@ -92,9 +100,39 @@ func (o *Output) validateReferences(devices map[string]map[string]bool) error {
 	if err := o.validateExcludePoints(devices); err != nil {
 		return fmt.Errorf("output %s: %w", o.Name, err)
 	}
-	if o.Type == "mqtt" {
-		if err := o.validateTopicNames(devices); err != nil {
-			return fmt.Errorf("output %s: %w", o.Name, err)
+	var err error
+	switch o.Type {
+	case "mqtt":
+		err = o.validateTopicNames(devices)
+	case "influxdb":
+		err = o.validateColumns(devices)
+	}
+	if err != nil {
+		return fmt.Errorf("output %s: %w", o.Name, err)
+	}
+	return nil
+}
+
+// validateColumns checks that every device of an InfluxDB output fits one table: at
+// most maxInfluxDBFields points that are not excluded, none named like the time column.
+func (o *Output) validateColumns(devices map[string]map[string]bool) error {
+	for _, device := range o.Devices {
+		fields := 0
+		for point := range devices[device] {
+			entry := device + pathSeparator + point
+			if slices.Contains(o.ExcludePoints, entry) {
+				continue
+			}
+			if point == influxDBTimeColumn {
+				return fmt.Errorf("point %s: %q is the InfluxDB time column; rename it or "+
+					"list it in exclude_points", entry, point)
+			}
+			fields++
+		}
+		if fields > maxInfluxDBFields {
+			return fmt.Errorf("device %s sends %d points, an InfluxDB table holds at most %d; "+
+				"split the device or list points in exclude_points",
+				device, fields, maxInfluxDBFields)
 		}
 	}
 	return nil
