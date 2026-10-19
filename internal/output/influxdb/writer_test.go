@@ -1,8 +1,10 @@
 package influxdb_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +29,7 @@ type harness struct {
 	input  chan []datasource.DataPoint
 	done   <-chan error
 	writes chan []string // line protocol of every WritePoints call
+	logs   *bytes.Buffer // read only after stop: the writer goroutine has ended
 }
 
 func newHarness(t *testing.T, s influxdb.Settings) *harness {
@@ -37,9 +40,10 @@ func newHarness(t *testing.T, s influxdb.Settings) *harness {
 		client: mocks.NewMockClient(t),
 		input:  make(chan []datasource.DataPoint),
 		writes: make(chan []string, 10),
+		logs:   &bytes.Buffer{},
 	}
 	w, err := influxdb.New(influxdb.Deps{
-		Settings: s, Client: h.client, Clock: h.clock, Log: zerolog.Nop(),
+		Settings: s, Client: h.client, Clock: h.clock, Log: zerolog.New(h.logs),
 	})
 	require.NoError(t, err)
 	h.done = w.Start(context.Background(), h.input)
@@ -265,5 +269,57 @@ func TestSkipsValuesLineProtocolCannotEncode(t *testing.T) {
 		"meter,point=power,unit=W value=1.5 1790683200000000000\n",
 		"meter,point=count value=3i 1790683200000000000\n",
 	}, h.write())
+	h.stop()
+}
+
+func partialWrite(line int) *influxdb3.PartialWriteError {
+	return &influxdb3.PartialWriteError{
+		ServerError: influxdb3.ServerError{
+			StatusCode: 400, Message: "partial write of line protocol occurred",
+		},
+		LineErrors: []influxdb3.PartialWriteLineError{{
+			LineNumber: line, ErrorMessage: "invalid column type", OriginalLine: "meter bad",
+		}},
+	}
+}
+
+// Regression: a partial write was logged as a dropped batch, although the server had
+// stored every line it did not reject.
+func TestPartialWriteCountsAsWritten(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 3, RetryDelay: time.Hour})
+	h.expectWrites(partialWrite(1), partialWrite(1), nil)
+
+	for _, name := range []string{"first", "second", "third"} {
+		h.input <- []datasource.DataPoint{point(name, 1.0, "")} // no retry delay in between
+		h.write()
+	}
+	h.stop()
+
+	logs := h.logs.String()
+	assert.NotContains(t, logs, "Dropping batch")
+	assert.Equal(t, 1, strings.Count(logs, `"level":"warn"`), "warned once, then debug")
+	assert.Contains(t, logs, `"rejected":1,"line":1,"error":"invalid column type"`)
+	assert.Contains(t, logs, "InfluxDB accepts every line again")
+}
+
+// Regression: a Retry-After longer than RetryDelay was ignored, so the writer retried a
+// busy server too early.
+func TestRetryWaitsForRetryAfter(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 1, RetryDelay: time.Second})
+	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).
+		Return(&influxdb3.ServerError{StatusCode: 429, RetryAfter: 5}).Once()
+	retried := make(chan time.Time, 1)
+	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).RunAndReturn(
+		func(context.Context, []*influxdb3.Point, ...influxdb3.WriteOption) error {
+			retried <- h.clock.Now()
+			return nil
+		}).Once()
+
+	h.input <- []datasource.DataPoint{point("power", 1.0, "")}
+	h.advance(2, time.Second) // ticker + retry wait: RetryDelay has passed
+	h.advance(2, 4*time.Second)
+	assert.Equal(t, start.Add(5*time.Second), <-retried)
 	h.stop()
 }
