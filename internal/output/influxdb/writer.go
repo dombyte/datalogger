@@ -209,13 +209,16 @@ func (w *Writer) logRejected(log zerolog.Logger, err *influxdb3.PartialWriteErro
 		Msg("InfluxDB rejected lines of the batch, stored the rest")
 }
 
-// writeWithRetry tries the write 1 + MaxRetries times, RetryDelay apart.
+// writeWithRetry tries the write 1 + MaxRetries times, RetryDelay apart (longer when
+// the server asks for it with Retry-After).
 func (w *Writer) writeWithRetry(ctx context.Context) error {
 	var err error
 	for attempt := range w.settings.MaxRetries + 1 {
 		if attempt > 0 {
-			w.logger.Warn().Int("attempt", attempt+1).Err(err).Msg("Retrying batch write")
-			if !clock.Sleep(ctx, w.clock, w.settings.RetryDelay) {
+			delay := w.retryDelay(err)
+			w.logger.Warn().Int("attempt", attempt+1).Stringer("retry_in", delay).Err(err).
+				Msg("Retrying batch write")
+			if !clock.Sleep(ctx, w.clock, delay) {
 				return fmt.Errorf("cancelled while retrying: %w", err)
 			}
 		}
@@ -227,6 +230,16 @@ func (w *Writer) writeWithRetry(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("after %d retries: %w", w.settings.MaxRetries, err)
+}
+
+// retryDelay returns RetryDelay, or the Retry-After of a 429 or 503 answer if that is
+// longer: retrying earlier only adds load to a server that is busy.
+func (w *Writer) retryDelay(err error) time.Duration {
+	var serverErr *influxdb3.ServerError
+	if !errors.As(err, &serverErr) {
+		return w.settings.RetryDelay
+	}
+	return max(w.settings.RetryDelay, time.Duration(serverErr.RetryAfter)*time.Second)
 }
 
 // retryable reports whether a write may succeed when repeated: network errors, server

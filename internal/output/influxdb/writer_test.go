@@ -302,3 +302,24 @@ func TestPartialWriteCountsAsWritten(t *testing.T) {
 	assert.Contains(t, logs, `"rejected":1,"line":1,"error":"invalid column type"`)
 	assert.Contains(t, logs, "InfluxDB accepts every line again")
 }
+
+// Regression: a Retry-After longer than RetryDelay was ignored, so the writer retried a
+// busy server too early.
+func TestRetryWaitsForRetryAfter(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 1, RetryDelay: time.Second})
+	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).
+		Return(&influxdb3.ServerError{StatusCode: 429, RetryAfter: 5}).Once()
+	retried := make(chan time.Time, 1)
+	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).RunAndReturn(
+		func(context.Context, []*influxdb3.Point, ...influxdb3.WriteOption) error {
+			retried <- h.clock.Now()
+			return nil
+		}).Once()
+
+	h.input <- []datasource.DataPoint{point("power", 1.0, "")}
+	h.advance(2, time.Second) // ticker + retry wait: RetryDelay has passed
+	h.advance(2, 4*time.Second)
+	assert.Equal(t, start.Add(5*time.Second), <-retried)
+	h.stop()
+}

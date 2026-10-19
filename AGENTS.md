@@ -264,7 +264,8 @@ writer that failed, or a missed deadline.
   schema; changing it is a breaking change (`!`).
 - Batching: a full `batch_size` (default 10000) is written at once, a partial batch every
   `batch_timeout` (default 1 s). Retries: `max_retries` (default 3) with `retry_delay`
-  (default 1 s), only for network errors, 5xx and 429; after that, or at once for other
+  (default 1 s; a longer `Retry-After` of the server wins), only for network errors, 5xx
+  and 429; after that, or at once for other
   HTTP errors (bad token, unknown database), the batch is dropped and logged. A partial
   write (the server rejects single lines and stores the rest) counts as written: the
   first rejected line is logged as a warning, further batches with rejected lines at
