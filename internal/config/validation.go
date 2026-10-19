@@ -26,6 +26,9 @@ const (
 
 	// influxDBTimeColumn is the time column of every InfluxDB table.
 	influxDBTimeColumn = "time"
+
+	// rtuScheme starts the address of a Modbus device on a serial port.
+	rtuScheme = "rtu://"
 )
 
 // Validate validates the entire configuration.
@@ -66,7 +69,43 @@ func (c *Config) validateDevices() (map[string]map[string]bool, error) {
 			devices[d.Name][p.Name] = true
 		}
 	}
-	return devices, nil
+	return devices, c.validateSerialPorts()
+}
+
+// serialSettings are the settings of a serial port.
+type serialSettings struct {
+	speed, dataBits, stopBits int
+	parity                    string
+}
+
+// validateSerialPorts checks that the Modbus devices on one serial port use the same
+// serial settings: they share one connection (an RS-485 bus with one slave_id each, or
+// one device split in two).
+func (c *Config) validateSerialPorts() error {
+	first := make(map[string]Device)
+	for _, d := range c.Devices {
+		if d.Type != "modbus" || !strings.HasPrefix(d.Modbus.Address, rtuScheme) {
+			continue
+		}
+		other, ok := first[d.Modbus.Address]
+		if !ok {
+			first[d.Modbus.Address] = d
+			continue
+		}
+		if portSettings(other.Modbus) != portSettings(d.Modbus) {
+			return fmt.Errorf("devices %s and %s share %s with different serial settings; "+
+				"set speed, data_bits, parity and stop_bits alike", other.Name, d.Name,
+				d.Modbus.Address)
+		}
+	}
+	return nil
+}
+
+// portSettings returns the serial settings of a Modbus device.
+func portSettings(m *ModbusConfig) serialSettings {
+	return serialSettings{
+		speed: m.Speed, dataBits: m.DataBits, stopBits: m.StopBits, parity: m.Parity,
+	}
 }
 
 // validateOutputs validates every output, checks that names are unique and that it

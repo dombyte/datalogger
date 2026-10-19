@@ -330,7 +330,7 @@ func TestExampleConfigExpressionsCompile(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, d := range cfg.Devices {
-		_, err := createSource(d, cfg.Lookups, zerolog.Nop(), clocktest.NewFake(time.Now()))
+		_, err := createSource(d, cfg.Lookups, nil, zerolog.Nop(), clocktest.NewFake(time.Now()))
 		assert.NoError(t, err, "device %s", d.Name)
 	}
 }
@@ -420,4 +420,35 @@ func stopWriter(t *testing.T, w output.Writer) {
 	for err := range w.Start(context.Background(), in) {
 		require.NoError(t, err)
 	}
+}
+
+// Modbus devices on one serial port share one bus with the largest timeout of its
+// devices; it runs and stops with the readers.
+func TestNewSharesSerialPort(t *testing.T) {
+	t.Parallel()
+	device := func(name, address string, timeout time.Duration) config.Device {
+		return config.Device{
+			Name: name, Type: "modbus", PollInterval: time.Second, Timeout: timeout,
+			Modbus: &config.ModbusConfig{
+				Address: address, SlaveID: 1, Speed: 9600, RegisterMode: "direct",
+			},
+			Points: []config.Point{{Name: "p", Register: 1, Type: "uint16", Scale: 1}},
+		}
+	}
+	const port = "rtu:///dev/datalogger-test-missing"
+	var logs bytes.Buffer
+	a, err := New(&config.Config{Devices: []config.Device{
+		device("meter", port, time.Second),
+		device("inverter", port, 3*time.Second),
+		device("gateway", "tcp://127.0.0.1:1", time.Second),
+	}}, zerolog.New(zerolog.SyncWriter(&logs)), clocktest.NewFake(time.Now()))
+	require.NoError(t, err)
+	require.Len(t, a.buses, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.NoError(t, a.Run(ctx))
+	require.NoError(t, a.Shutdown(), "the readers stop before their bus")
+	assert.Contains(t, logs.String(), // read after Shutdown: the readers log too
+		`"port":"`+port+`","devices":["meter","inverter"],"timeout":"3s"`)
 }

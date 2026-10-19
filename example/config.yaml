@@ -128,7 +128,8 @@ devices:
 
   # ----- Modbus RTU (serial), direct mode ----------------------------------------------
   # direct mode reads every point on its own. A failing point is skipped; the other points
-  # of the poll are still delivered.
+  # of the poll are still delivered. More devices may use the same port (other slave_id,
+  # same speed/data_bits/parity/stop_bits); their requests run one after the other.
   - name: sensor_rtu
     type: modbus
     poll_interval: 10s

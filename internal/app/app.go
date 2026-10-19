@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/config"
 	"github.com/dombyte/datalogger/internal/datasource"
+	"github.com/dombyte/datalogger/internal/datasource/modbus"
 	"github.com/dombyte/datalogger/internal/output"
 	"github.com/dombyte/datalogger/internal/transform"
 )
@@ -50,8 +52,11 @@ type outputRoute struct {
 type App struct {
 	sources []source
 	outputs []outputRoute
+	buses   []*modbus.Bus // serial ports, shared by the Modbus readers on them
 	log     zerolog.Logger
 
+	cancelBuses   context.CancelFunc
+	busesDone     []<-chan struct{}
 	cancelSources context.CancelFunc
 	cancelOutputs context.CancelFunc
 	inputs        []chan []datasource.DataPoint
@@ -67,17 +72,37 @@ type App struct {
 // (for example an address the client library rejects); devices and brokers that are
 // unreachable are not an error, the components connect in the background.
 func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) {
+	buses, err := createBuses(cfg.Devices, log)
+	if err != nil {
+		return nil, err
+	}
 	sources := make([]source, 0, len(cfg.Devices))
 	for _, d := range cfg.Devices {
-		s, err := createSource(d, cfg.Lookups, log, clk)
+		s, err := createSource(d, cfg.Lookups, buses, log, clk)
 		if err != nil {
 			return nil, fmt.Errorf("device %s: %w", d.Name, err)
 		}
 		sources = append(sources, s)
 	}
 
-	outputs := make([]outputRoute, 0, len(cfg.Outputs))
-	for _, o := range cfg.Outputs {
+	outputs, err := createOutputs(cfg.Outputs, log, clk)
+	if err != nil {
+		return nil, err
+	}
+
+	a := newApp(sources, outputs, log)
+	a.buses = slices.Collect(maps.Values(buses))
+	return a, nil
+}
+
+// createOutputs creates the writer of every output with its route.
+func createOutputs(
+	outputs []config.Output,
+	log zerolog.Logger,
+	clk clock.Clock,
+) ([]outputRoute, error) {
+	routes := make([]outputRoute, 0, len(outputs))
+	for _, o := range outputs {
 		w, err := createWriter(o, log, clk)
 		if err != nil {
 			return nil, fmt.Errorf("output %s: %w", o.Name, err)
@@ -86,12 +111,11 @@ func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) 
 		if bufferSize <= 0 {
 			bufferSize = defaultBufferSize
 		}
-		outputs = append(outputs, outputRoute{
+		routes = append(routes, outputRoute{
 			writer: w, devices: o.Devices, excludePoints: o.ExcludePoints, bufferSize: bufferSize,
 		})
 	}
-
-	return newApp(sources, outputs, log), nil
+	return routes, nil
 }
 
 // newApp wires already created components; tests use it with mocks.
@@ -106,12 +130,17 @@ func newApp(sources []source, outputs []outputRoute, log zerolog.Logger) *App {
 // Run starts all components and blocks until ctx is cancelled (nil) or a component
 // stops on its own (ErrComponentStopped). Call Shutdown afterwards in both cases.
 func (a *App) Run(ctx context.Context) error {
+	busCtx, cancelBuses := context.WithCancel(context.Background())
 	sourceCtx, cancelSources := context.WithCancel(context.Background())
 	outputCtx, cancelOutputs := context.WithCancel(context.Background())
-	a.cancelSources, a.cancelOutputs = cancelSources, cancelOutputs
+	a.cancelBuses, a.cancelSources, a.cancelOutputs = cancelBuses, cancelSources, cancelOutputs
 
 	failed := make(chan error, len(a.sources)+len(a.outputs))
 	inputs := a.startWriters(outputCtx, failed)
+	// Before the readers, which send their requests to the buses.
+	for _, bus := range a.buses {
+		a.busesDone = append(a.busesDone, bus.Start(busCtx))
+	}
 	a.startReaders(sourceCtx, inputs, failed)
 	a.log.Info().Int("devices", len(a.sources)).Int("outputs", len(a.outputs)).
 		Msg("Datalogger started")
@@ -133,6 +162,11 @@ func (a *App) Shutdown() error {
 	a.log.Info().Msg("Stopping data sources")
 	a.cancelSources()
 	a.routers.Wait()
+	// After the readers: a reader in its last poll still uses its bus.
+	a.cancelBuses()
+	for _, done := range a.busesDone {
+		<-done
+	}
 
 	a.log.Info().Msg("Draining outputs")
 	for _, in := range a.inputs {
