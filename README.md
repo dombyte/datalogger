@@ -69,8 +69,9 @@ outputs:
 
 ### How data flows
 
-- Every **device** is polled at once on startup, then every `poll_interval`. Each reading
-  is stamped with the time the device answered, in UTC.
+- Every **device** is polled at once on startup, then every `poll_interval`. Each poll
+  is stamped with the time the device answered (its last read), in UTC; all points of a
+  poll share that time.
 - Every **output** lists the `devices` it receives. All their points are copied to it,
   except those listed in `exclude_points` (`device/point`).
 - Each output has its own queue of polls (`buffer_size`, default 1000): every poll of a
@@ -194,8 +195,8 @@ outputs:
 - A point that could not be read in this poll is `nil` in `points`; guard where it
   matters: `points.dir == nil ? nil : (points.dir == 1 ? value : -value)`. A result of
   `nil` skips the point for this poll.
-- Numbers become float64; true/false and text are kept. InfluxDB stores one type per
-  field and device, so keep text and true/false values out of it with `exclude_points`.
+- Numbers become float64; true/false and text are kept. In InfluxDB every point has its
+  own column, so text next to numbers is fine; a point must keep its type, though.
 - An expression that does not compile, or names an unknown point or lookup, stops the
   program at startup. One that fails while running skips the point and is logged.
 
@@ -203,7 +204,12 @@ outputs:
 
 v2 drops the `device_specific:` and `output_specific:` levels: the type block moves up
 one level. The InfluxDB options `batch_size`, `batch_timeout`, `max_retries` and
-`retry_delay` move into the `influxdb:` block.
+`retry_delay` move into the `influxdb:` block; `batch_size` now counts polls.
+
+The [InfluxDB schema](#influxdb-schema) changes from one row per point to one row per
+poll. Write v2 into a **new database**: the tables of v1 have the columns `point`,
+`unit` and `value` and would mix both layouts. The v1 database stays readable for
+older data; rewrite the queries as shown below.
 
 ```yaml
 # v1
@@ -236,55 +242,59 @@ one level. The InfluxDB options `batch_size`, `batch_timeout`, `max_retries` and
 
 ## InfluxDB schema
 
+One row per poll: the table is the device, every point is a column, there are no tags.
+
 | Element | Content | Example |
 |---|---|---|
-| Measurement (table) | device name | `spine` |
-| Tag `point` | point name | `a_voltage` |
-| Tag `unit` | unit (omitted when empty) | `V` |
-| Field `value` | the reading | `230.5` |
-| Time | when the device answered | |
+| Table | device name | `spine` |
+| Column per point | the reading of that point; type from its value (float, integer, boolean, string) | `a_voltage` |
+| `time` | when the device answered (one time per poll) | |
 
 ```
-spine,point=a_voltage,unit=V value=230.5 1712345678901234567
+spine a_voltage=230.5,b_voltage=231.1,freq=50.01 1712345678901234567
 ```
+
+- A point that was not read in a poll (or whose `expr` returned `nil`) is `NULL` in
+  that row. Aggregates such as `avg` skip `NULL`.
+- Adding a point adds a column (older rows are `NULL`); a removed point keeps its
+  column and history. Renaming a point starts a new column.
+- A point keeps the type of its first value: a value of another type is skipped and
+  logged. To change a point's type, give it a new name. For HTTP points, `type:` pins it.
+- A table holds at most 500 columns, one of them `time`, so a device may send at most
+  499 points to InfluxDB (excluded points do not count; a point may not be named
+  `time`). Split a larger device into two. Columns of removed points still count.
+- The unit is not stored; set it in the dashboard.
 
 ### Query examples (SQL, Grafana FlightSQL)
 
-One point in the dashboard time range:
-```sql
-SELECT time AS "Time", value AS "A Phase Voltage"
-FROM spine
-WHERE point = 'a_voltage' AND time >= $__timeFrom() AND time <= $__timeTo()
-```
-
-Several points, or all points of a device:
-```sql
-SELECT time AS "Time", point, value
-FROM spine
-WHERE point IN ('a_voltage', 'b_voltage', 'c_voltage')
-  AND time >= $__timeFrom() AND time <= $__timeTo()
-```
-
-Averaged to the Grafana interval:
+Several points of a device, averaged to an interval:
 ```sql
 SELECT
   date_bin(INTERVAL '${__interval_ms} milliseconds', time) AS "Time",
-  avg(value) AS "A Phase Voltage"
+  avg(a_voltage) AS "A Phase Voltage",
+  avg(b_voltage) AS "B Phase Voltage"
 FROM spine
-WHERE point = 'a_voltage' AND time >= $__timeFrom() AND time <= $__timeTo()
+WHERE time >= $__timeFrom() AND time <= $__timeTo()
 GROUP BY 1
 ORDER BY 1
 ```
 
-Latest value of every point:
+Raw values:
 ```sql
-SELECT point, value, unit, time
-FROM (
-  SELECT point, value, unit, time,
-         row_number() OVER (PARTITION BY point ORDER BY time DESC) AS rn
-  FROM spine
-  WHERE time >= now() - INTERVAL '1 hour'
-)
-WHERE rn = 1
-ORDER BY point
+SELECT time AS "Time", a_voltage AS "A Phase Voltage"
+FROM spine
+WHERE time >= $__timeFrom() AND time <= $__timeTo()
+ORDER BY time
 ```
+
+Latest value (gauge):
+```sql
+SELECT time AS "Time", a_voltage AS "A Phase Voltage"
+FROM spine
+WHERE time >= now() - INTERVAL '1 minute' AND a_voltage IS NOT NULL
+ORDER BY time DESC
+LIMIT 1
+```
+
+Point names are column names: write names with capitals or special characters in double
+quotes (`"L1-Power"`).
