@@ -83,8 +83,33 @@ outputs:
 
 | Type | Notes |
 |---|---|
-| `modbus` | `tcp://host:port` or `rtu:///dev/ttyUSB0`. **direct** mode reads each point on its own (a failing point is skipped). **range** mode reads register ranges and decodes all points from them (a failing range skips the whole poll). Types `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool`; value = raw × `scale` + `offset`. One register type (3 holding / 4 input) per device. |
+| `modbus` | `tcp://host:port` or `rtu:///dev/ttyUSB0`. **direct** mode reads each point on its own (a failing point is skipped). **range** mode reads register ranges and decodes all points from them (a failing range skips the whole poll). Types `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool`; value = raw × `scale` + `offset`. One register type (3 holding / 4 input) per device. Several devices may share one serial port, see [below](#several-devices-on-one-serial-port). |
 | `http` | GET or POST with optional headers and body. `response_type: json` extracts values with [gjson paths](https://github.com/tidwall/gjson/blob/master/SYNTAX.md); `text` delivers the whole body as one string. A path that is missing or `null` skips the point (no fake `0`). |
+
+### Several devices on one serial port
+
+Devices with the same `rtu://` address share the port: an RS-485 bus with several
+slaves, or one device split into two (e.g. a fast and a slow poll).
+
+```yaml
+devices:
+  - name: meter
+    type: modbus
+    poll_interval: 1s
+    modbus: {address: "rtu:///dev/ttyUSB0", slave_id: 1, speed: 9600, parity: "N"}
+    # ...
+  - name: heat_pump
+    type: modbus
+    poll_interval: 10s
+    modbus: {address: "rtu:///dev/ttyUSB0", slave_id: 2, speed: 9600, parity: "N"}
+    # ...
+```
+
+- `speed`, `data_bits`, `parity` and `stop_bits` must be the same on every device of a
+  port; otherwise the program does not start.
+- Requests run one after the other, so devices on a port wait for each other. A slave
+  that does not answer holds the port for up to `timeout` per request.
+- The port uses the largest `timeout` of its devices.
 
 ### Outputs
 

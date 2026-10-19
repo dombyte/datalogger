@@ -73,7 +73,8 @@ internal/app/            composition root: Create* factories (config → Setting
 internal/config/         Config structs (viper/mapstructure), Load() (defaults + Validate)
 internal/clock/          Clock interface (Now, tickers, After) + Sleep; clocktest/ fake
 internal/datasource/     DataPoint type, DeviceReader interface
-  modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, reconnect
+  modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, reconnect;
+                         Bus: one serial port shared by the devices on it
   http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text
 internal/transform/      point expressions (expr-lang): compile at startup, Apply per poll
 internal/output/         Writer interface
@@ -170,8 +171,8 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    does not compile or names an unknown point or lookup, an API port that cannot be
    bound) ends the process with exit 1. **Connecting is not construction:** readers connect on their first poll, so a
    device that is down at startup does not stop the others and recovers on its own.
-3. `app.Run` starts the writers, then the readers with one router each. Each reader
-   polls at once, then every `poll_interval`.
+3. `app.Run` starts the writers, then one `modbus.Bus` per serial port, then the readers
+   with one router each. Each reader polls at once, then every `poll_interval`.
 
 ### Failure handling
 - Poll errors are handled inside the reader: exponential backoff (100 ms doubling, max
@@ -195,7 +196,7 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    A Modbus read that is in flight finishes and starts no further read of its poll;
    the points read so far are still delivered (range mode: only a complete poll is; an
    HTTP request in flight is aborted, so it has no data yet). Each reader then closes its
-   data channel and the routers finish.
+   data channel and the routers finish. Then the serial buses stop and close their ports.
 3. `app` closes the output input channels; each writer writes what is queued, flushes
    (CSV flush/close, InfluxDB final batch, webhook queued polls, MQTT disconnect, API
    server shutdown) and
@@ -235,6 +236,15 @@ writer that failed, or a missed deadline.
   registers past 65535.
 - Requests are sent one at a time: they share the device's one connection, on which
   the client library cannot run requests concurrently.
+- **Serial port (RTU):** every serial port has one `Bus`, created by `app` for all
+  devices with that `rtu://` address (an RS-485 bus with one `slave_id` each, or one
+  device split in two). Its goroutine is the only code that uses the port: readers send
+  their requests (slave, register, count) over a channel and it runs them one after the
+  other, so frames never mix. Devices on a port wait for each other: a slave that does
+  not answer holds the port for its timeout. The port opens on the first request and
+  reopens after a connection error; a timeout keeps it open. The port has one timeout,
+  the largest of its devices. Validation requires the same `speed`, `data_bits`,
+  `parity` and `stop_bits` on all devices of a port. TCP devices keep one connection each.
 
 ### HTTP reader
 - `method` GET (default) or POST with `body`; `headers` are sent as given; `insecure`
@@ -379,7 +389,8 @@ writer that failed, or a missed deadline.
   `host:port`; every device needs at least one point; point names are unique per
   device; device and point names must not contain `/`; the `topic`, devices and
   non-excluded points of an MQTT output must not contain `+` or `#` (wildcards: a broker
-  closes the connection); a device of an InfluxDB output sends at most 499 points that
+  closes the connection); Modbus devices on one serial port have the same serial
+  settings; a device of an InfluxDB output sends at most 499 points that
   are not excluded (a table holds 500 columns, one of them `time`) and none named
   `time`; `poll_interval` > 0; `timeout` > 0.
 - Every device and output has a `type` and the block of that type, named like it
@@ -441,6 +452,12 @@ writer that failed, or a missed deadline.
   values live in a mutex-guarded map inside the writer: its goroutine is the only
   writer, the HTTP handlers of the same component read copies, so nothing is shared
   between components. The port is bound in the factory so a port in use fails startup.
+- **Serial bus goroutine instead of a shared client:** devices on one RS-485 port must
+  not send at the same time, and the client library keeps the slave ID as state of the
+  connection. A mutex around a shared client would hold a lock across I/O (section
+  9.1); a goroutine that owns the port and takes requests over a channel keeps the
+  hand-over by channel. Sharing is automatic, without an option: separate connections
+  to one port never work.
 - **Hand-written fake clock instead of a mock:** `clock.Clock`/`clock.Ticker` are faked by
   `clocktest.Fake`, not by mockery. Tests need time that moves consistently across tickers
   and `After` (`Advance`); call expectations cannot model that.

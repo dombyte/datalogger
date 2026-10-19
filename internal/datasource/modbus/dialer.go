@@ -61,19 +61,67 @@ func NewDialer(s ConnSettings, logger zerolog.Logger) (*LibDialer, error) {
 
 // Dial selects the slave ID and opens a connection.
 func (d *LibDialer) Dial() (Client, error) {
+	client := d.newClient()
+	setUnitID(client, d.slaveID)
+	if err := client.Open(); err != nil {
+		return nil, fmt.Errorf("open connection: %w", err)
+	}
+	return client, nil
+}
+
+// Open opens a connection without a fixed slave, for a Bus: it selects the slave per
+// request.
+func (d *LibDialer) Open() (BusClient, error) {
+	client := d.newClient()
+	if err := client.Open(); err != nil {
+		return nil, fmt.Errorf("open connection: %w", err)
+	}
+	return libBusClient{client: client}, nil
+}
+
+// newClient creates a client from the checked configuration.
+func (d *LibDialer) newClient() *modbus.ModbusClient {
 	client, err := modbus.NewClient(&d.conf)
 	if err != nil {
 		//nolint:forbidigo // invariant: NewDialer created a client from the same configuration
 		panic(fmt.Sprintf("modbus: create client: %v", err))
 	}
-	if err := client.SetUnitId(d.slaveID); err != nil {
+	return client
+}
+
+// setUnitID selects the slave of the next requests.
+func setUnitID(client *modbus.ModbusClient, slaveID uint8) {
+	if err := client.SetUnitId(slaveID); err != nil {
 		//nolint:forbidigo // invariant: SetUnitId only stores the ID and never fails
 		panic(fmt.Sprintf("modbus: set unit ID: %v", err))
 	}
-	if err := client.Open(); err != nil {
-		return nil, fmt.Errorf("open connection: %w", err)
+}
+
+// libBusClient reads from any slave of an open library client.
+type libBusClient struct {
+	client *modbus.ModbusClient
+}
+
+// ReadSlave selects the slave and reads its registers.
+func (c libBusClient) ReadSlave(
+	slaveID uint8,
+	addr, quantity uint16,
+	regType modbus.RegType,
+) ([]uint16, error) {
+	setUnitID(c.client, slaveID)
+	values, err := c.client.ReadRegisters(addr, quantity, regType)
+	if err != nil {
+		return nil, fmt.Errorf("slave %d: %w", slaveID, err)
 	}
-	return client, nil
+	return values, nil
+}
+
+// Close closes the connection.
+func (c libBusClient) Close() error {
+	if err := c.client.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
 }
 
 // parseParity converts N/E/O to the library constant (default: none).

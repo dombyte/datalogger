@@ -11,6 +11,8 @@ filename: "mock_{{.InterfaceName | snakecase}}.go"
 packages:
   github.com/dombyte/datalogger/internal/datasource/modbus:
     interfaces:
+      BusClient:
+      BusOpener:
       Client:
       Dialer:
   github.com/dombyte/datalogger/internal/datasource/http:

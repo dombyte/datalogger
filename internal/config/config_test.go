@@ -1235,6 +1235,93 @@ func TestValidateInfluxDBColumns(t *testing.T) {
 	}
 }
 
+// rtuConfig returns a valid config with two Modbus devices on one serial port, changed
+// by change.
+func rtuConfig(change func(*Config)) *Config {
+	device := func(name string, slave uint8) Device {
+		return Device{
+			Name: name, Type: "modbus", PollInterval: time.Second, Timeout: time.Second,
+			Modbus: &ModbusConfig{
+				Address: "rtu:///dev/ttyUSB0", SlaveID: slave, Speed: 9600, DataBits: 8,
+				Parity: "N", StopBits: 1, RegisterMode: "direct",
+			},
+			Points: []Point{{Name: "p", Register: 1, Type: "uint16", Scale: 1}},
+		}
+	}
+	cfg := &Config{
+		Devices: []Device{device("meter", 1), device("inverter", 2)},
+		Outputs: []Output{{
+			Name: "out", Type: "csv", Devices: []string{"meter", "inverter"},
+			Csv: &CsvConfig{FilePath: "x.csv"},
+		}},
+	}
+	change(cfg)
+	return cfg
+}
+
+// Devices on one serial port share its connection, so they need the same serial
+// settings.
+func TestValidateSerialPorts(t *testing.T) {
+	t.Parallel()
+	const wantErr = "devices meter and inverter share rtu:///dev/ttyUSB0 with different " +
+		"serial settings"
+	tests := []struct {
+		name    string
+		change  func(*Config)
+		wantErr string
+	}{
+		{name: "same settings, other slaves", change: func(*Config) {}},
+		{
+			name:   "same slave: a device split in two",
+			change: func(c *Config) { c.Devices[1].Modbus.SlaveID = 1 },
+		},
+		{
+			name:   "other ports",
+			change: func(c *Config) { c.Devices[1].Modbus.Address = "rtu:///dev/ttyUSB1"; c.Devices[1].Modbus.Speed = 19200 },
+		},
+		{
+			name: "tcp devices are not checked",
+			change: func(c *Config) {
+				for i := range c.Devices {
+					c.Devices[i].Modbus.Address = "tcp://gateway:502"
+				}
+				c.Devices[1].Modbus.Speed = 19200
+			},
+		},
+		{
+			name:    "speed",
+			change:  func(c *Config) { c.Devices[1].Modbus.Speed = 19200 },
+			wantErr: wantErr,
+		},
+		{
+			name:    "data bits",
+			change:  func(c *Config) { c.Devices[1].Modbus.DataBits = 7 },
+			wantErr: wantErr,
+		},
+		{
+			name:    "parity",
+			change:  func(c *Config) { c.Devices[1].Modbus.Parity = "E" },
+			wantErr: wantErr,
+		},
+		{
+			name:    "stop bits",
+			change:  func(c *Config) { c.Devices[1].Modbus.StopBits = 2 },
+			wantErr: wantErr,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := rtuConfig(tt.change).Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 // TestLoadExprAndLookups checks that expressions, hex lookup codes and exclude_points
 // are read from YAML.
 func TestLoadExprAndLookups(t *testing.T) {
