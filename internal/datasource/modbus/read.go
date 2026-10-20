@@ -100,15 +100,20 @@ func (r *Reader) readPoint(ctx context.Context, p Point) (datasource.DataPoint, 
 // registers, stamped with the receive time of the last chunk. Any failed chunk fails
 // the whole poll.
 func (r *Reader) readRangeMode(ctx context.Context) ([]datasource.DataPoint, error) {
-	registers, err := r.readAllRanges(ctx)
-	if err != nil {
-		return nil, err
+	for i, rng := range r.ranges {
+		// After a failed chunk, or on shutdown, no further chunk is read: the poll fails
+		// as a whole anyway.
+		if err := r.readRange(ctx, rng, r.registers[i]); err != nil {
+			return nil, err
+		}
 	}
 	received := r.clock.Now().UTC()
 
-	var results []datasource.DataPoint
-	for _, p := range r.settings.Points {
-		dp, err := r.dataPoint(p, pointRegisters(p, registers), received)
+	results := make([]datasource.DataPoint, 0, len(r.settings.Points))
+	for i, p := range r.settings.Points {
+		s := r.slots[i]
+		values := r.registers[s.rng][s.offset : s.offset+int(registerCount(p))]
+		dp, err := r.dataPoint(p, values, received)
 		if err != nil {
 			r.logger.Warn().Str("point", p.Name).Err(err).Msg("Failed to decode point")
 			continue
@@ -118,26 +123,9 @@ func (r *Reader) readRangeMode(ctx context.Context) ([]datasource.DataPoint, err
 	return results, nil
 }
 
-// readAllRanges reads the ranges one after the other and returns the first error of
-// any chunk. After a failed chunk, or on shutdown, no further chunk is read: the poll
-// fails as a whole anyway.
-func (r *Reader) readAllRanges(ctx context.Context) (map[uint16]uint16, error) {
-	registers := make(map[uint16]uint16)
-	for _, rng := range r.ranges {
-		if err := r.readRange(ctx, rng, registers); err != nil {
-			return nil, err
-		}
-	}
-	return registers, nil
-}
-
-// readRange reads one range in chunks of at most maxRegistersPerRead into registers;
-// it stops at the first failed chunk or when ctx ends.
-func (r *Reader) readRange(
-	ctx context.Context,
-	rng Range,
-	registers map[uint16]uint16,
-) error {
+// readRange reads one range in chunks of at most maxRegistersPerRead into registers
+// (the buffer of the range); it stops at the first failed chunk or when ctx ends.
+func (r *Reader) readRange(ctx context.Context, rng Range, registers []uint16) error {
 	// int arithmetic: a range ending at 65535 would overflow uint16.
 	for start := int(rng.Start); start <= int(rng.End); start += maxRegistersPerRead {
 		if ctx.Err() != nil {
@@ -149,27 +137,14 @@ func (r *Reader) readRange(
 		if err != nil {
 			return fmt.Errorf("range %d-%d, chunk at %d: %w", rng.Start, rng.End, start, err)
 		}
-		for i, v := range values {
-			registers[uint16(start+i)] = v
+		if len(values) != count {
+			// The poll would decode registers of the previous poll as new readings.
+			return fmt.Errorf("range %d-%d, chunk at %d: got %d registers, want %d",
+				rng.Start, rng.End, start, len(values), count)
 		}
+		copy(registers[start-int(rng.Start):], values)
 	}
 	return nil
-}
-
-// pointRegisters collects the registers of a point.
-func pointRegisters(p Point, registers map[uint16]uint16) []uint16 {
-	values := make([]uint16, registerCount(p))
-	for i := range registerCount(p) {
-		v, ok := registers[p.Register+i]
-		if !ok {
-			// New checked that the ranges cover every point, the library returns every
-			// register it was asked for, and a failed chunk fails the poll before this.
-			//nolint:forbidigo // invariant: every register of a point was read
-			panic(fmt.Sprintf("modbus: register %d not in range data", p.Register+i))
-		}
-		values[i] = v
-	}
-	return values
 }
 
 // stamp gives every point of a poll the same timestamp, so the poll is one snapshot
