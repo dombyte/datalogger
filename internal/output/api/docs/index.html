@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>datalogger API</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f5f1; --panel: #ffffff; --fg: #1c1d1f; --muted: #62666b; --line: #e2e0d9;
+  --code: #f1efe9; --accent: #c2630a; --get: #0f7b6c; --get-bg: #e2f3ef;
+  --ok: #1d7a3e; --err: #b0362a; --param: #8a4fbf;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141517; --panel: #1b1d20; --fg: #e6e6e3; --muted: #9a9ea3; --line: #2b2e32;
+    --code: #121315; --accent: #f0953a; --get: #4fd1b9; --get-bg: #163530;
+    --ok: #67d38c; --err: #f08174; --param: #c79bf2;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+code { font-size: 13px; background: var(--code); padding: .1em .35em; border-radius: 4px; }
+a { color: inherit; }
+a:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+}
+p { margin: .4rem 0 .9rem; }
+
+header { border-bottom: 1px solid var(--line); background: var(--panel); }
+.bar {
+  max-width: 72rem; margin: 0 auto; padding: 1.1rem 1.5rem;
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+}
+.logo { font: 700 1.15rem/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.logo span { color: var(--accent); }
+.tag {
+  font-size: 12px; border: 1px solid var(--line); border-radius: 999px;
+  padding: .15rem .6rem; color: var(--muted);
+}
+header nav { margin-left: auto; display: flex; gap: 1rem; font-size: 14px; }
+header nav a { color: var(--muted); text-decoration: none; }
+header nav a:hover { color: var(--accent); }
+
+.layout {
+  display: grid; grid-template-columns: 15rem minmax(0, 1fr);
+  max-width: 72rem; margin: 0 auto;
+}
+aside {
+  position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto;
+  padding: 1.5rem 1rem 1.5rem 1.5rem; font-size: 14px;
+}
+aside h4 {
+  margin: 1.2rem 0 .4rem; font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
+}
+aside h4:first-child { margin-top: 0; }
+aside a {
+  display: flex; gap: .5rem; align-items: baseline; padding: .25rem .5rem;
+  border-radius: 6px; text-decoration: none; color: var(--fg);
+}
+aside a:hover { background: var(--panel); }
+aside .mono { font-size: 12.5px; overflow-wrap: anywhere; }
+
+main { padding: 1.5rem; min-width: 0; }
+h1 { font-size: 1.7rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+.lead { color: var(--muted); max-width: 40rem; }
+h2 { font-size: 1.1rem; margin: 2.2rem 0 .6rem; scroll-margin-top: 1rem; }
+
+.facts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: .75rem; margin: 1rem 0;
+}
+.fact { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: .8rem 1rem; font-size: 14px; }
+.fact b { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px; color: var(--accent); margin-bottom: .2rem; }
+.fact span { color: var(--muted); }
+
+.endpoint {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  margin: 1rem 0 1.5rem; overflow: hidden; scroll-margin-top: 1rem;
+}
+.endpoint > .head {
+  display: flex; align-items: center; gap: .75rem; padding: .9rem 1.1rem;
+  border-bottom: 1px solid var(--line); flex-wrap: wrap;
+}
+.method {
+  font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .05em;
+  color: var(--get); background: var(--get-bg); padding: .35rem .5rem; border-radius: 5px;
+}
+.path { font: 600 15px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.path i { font-style: normal; color: var(--param); }
+.lock { margin-left: auto; font-size: 12px; color: var(--muted); }
+.body { padding: .3rem 1.1rem 1rem; }
+.body > p { color: var(--muted); }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; margin: .3rem 0 1rem; }
+th { text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); font-weight: 600; padding: .3rem .5rem .3rem 0; }
+td { border-top: 1px solid var(--line); padding: .45rem .5rem .45rem 0; vertical-align: top; }
+td:first-child { white-space: nowrap; width: 8rem; }
+
+details { border: 1px solid var(--line); border-radius: 8px; margin: .5rem 0; }
+summary {
+  cursor: pointer; padding: .5rem .8rem; font-size: 14px; list-style: none;
+  display: flex; gap: .6rem; align-items: center;
+}
+summary::-webkit-details-marker { display: none; }
+summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+details[open] summary::before { transform: rotate(90deg); }
+.code { font: 700 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.code.ok { color: var(--ok); }
+.code.err { color: var(--err); }
+summary span:last-child { color: var(--muted); }
+pre {
+  margin: 0; padding: .8rem 1rem; background: var(--code); overflow-x: auto;
+  font-size: 13px; line-height: 1.55; border-top: 1px solid var(--line);
+  border-radius: 0 0 8px 8px;
+}
+.curl { border: 1px solid var(--line); border-radius: 8px; margin-top: .8rem; }
+.curl pre { border-top: 0; border-radius: 8px; }
+.curl pre::before { content: "$ "; color: var(--muted); }
+
+@media (max-width: 760px) {
+  .layout { grid-template-columns: 1fr; }
+  aside {
+    position: static; max-height: none; padding: .75rem 1rem 0;
+    display: flex; flex-wrap: wrap; gap: .4rem;
+  }
+  aside h4 { display: none; }
+  aside a { background: var(--panel); border: 1px solid var(--line); }
+  main { padding: 1rem; }
+  .bar { padding: 1rem; }
+}
+</style>
+</head>
+<body>
+<header><div class="bar">
+  <div class="logo">data<span>logger</span></div>
+  <div class="tag">read-only API</div>
+  <nav>
+    <a href="openapi.json">openapi.json</a>
+    <a href="healthz">healthz</a>
+  </nav>
+</div></header>
+
+<div class="layout">
+<aside>
+  <h4>Overview</h4>
+  <a href="#auth">Authentication</a>
+  <a href="#values">Values</a>
+  <h4>Endpoints</h4>
+  <a href="#devices"><span class="method">GET</span><span class="mono">/api/devices</span></a>
+  <a href="#device"><span class="method">GET</span><span class="mono">…/{device}</span></a>
+  <a href="#point"><span class="method">GET</span><span class="mono">…/{device}/{point}</span></a>
+  <a href="#health"><span class="method">GET</span><span class="mono">/healthz</span></a>
+</aside>
+
+<main>
+<h1>Latest readings, over HTTP</h1>
+<p class="lead">The latest value of every point of the devices this output serves, as
+JSON. Values live in memory only: after a restart the API is empty until the first poll.
+The <a href="openapi.json">OpenAPI 3.1 description</a> can be imported into Postman,
+Bruno or any OpenAPI tool.</p>
+
+<h2 id="auth">Authentication</h2>
+<p>If the output has a <code>token</code>, every <code>/api/…</code> request needs the
+header <code>Authorization: Bearer &lt;token&gt;</code>, otherwise the answer is
+<span class="code err">401</span> <code>{"error": "unauthorized"}</code>. This page,
+<code>/openapi.json</code> and <code>/healthz</code> are always open.</p>
+
+<h2 id="values">Values</h2>
+<div class="facts">
+  <div class="fact"><b>value</b><span>Number, bool or string; <code>null</code> for NaN
+    and infinite values.</span></div>
+  <div class="fact"><b>timestamp</b><span>When the device answered: UTC, RFC 3339 with
+    nanoseconds.</span></div>
+  <div class="fact"><b>age_ms</b><span>Milliseconds since <code>timestamp</code>. A device
+    that stops answering keeps its values while their age grows.</span></div>
+</div>
+
+<h2>Endpoints</h2>
+
+<section class="endpoint" id="devices">
+  <div class="head">
+    <span class="method">GET</span><span class="path">/api/devices</span>
+    <span class="lock">token if set</span>
+  </div>
+  <div class="body">
+    <p>All served devices, sorted by name. <code>points</code> counts the points with a
+    value, <code>age_ms</code> is the age of the newest one (<code>null</code> before the
+    first reading).</p>
+    <details open>
+      <summary><span class="code ok">200</span><span>Devices</span></summary>
+<pre>{"devices": [
+  {"device": "inverter", "points": 3, "age_ms": 820},
+  {"device": "meter", "points": 0, "age_ms": null}
+]}</pre>
+    </details>
+    <details>
+      <summary><span class="code err">401</span><span>Missing or wrong token</span></summary>
+<pre>{"error": "unauthorized"}</pre>
+    </details>
+    <div class="curl"><pre>curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/devices</pre></div>
+  </div>
+</section>
+
+<section class="endpoint" id="device">
+  <div class="head">
+    <span class="method">GET</span><span class="path">/api/devices/<i>{device}</i></span>
+    <span class="lock">token if set</span>
+  </div>
+  <div class="body">
+    <p>The latest value of every point of a device; <code>points</code> is empty before the
+    first reading.</p>
+    <table>
+      <tr><th>Parameter</th><th>Description</th></tr>
+      <tr><td><code>device</code></td><td>Device name from the config.</td></tr>
+    </table>
+    <details open>
+      <summary><span class="code ok">200</span><span>Points of the device</span></summary>
+<pre>{"device": "inverter", "points": {
+  "power":       {"value": 1234.5, "unit": "W",
+                  "timestamp": "2026-10-05T10:15:02.123Z", "age_ms": 820},
+  "status_text": {"value": "running", "unit": "",
+                  "timestamp": "2026-10-05T10:15:02.123Z", "age_ms": 820}
+}}</pre>
+    </details>
+    <details>
+      <summary><span class="code err">404</span><span>Device not served</span></summary>
+<pre>{"error": "unknown device other"}</pre>
+    </details>
+    <div class="curl"><pre>curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/devices/inverter</pre></div>
+  </div>
+</section>
+
+<section class="endpoint" id="point">
+  <div class="head">
+    <span class="method">GET</span>
+    <span class="path">/api/devices/<i>{device}</i>/<i>{point}</i></span>
+    <span class="lock">token if set</span>
+  </div>
+  <div class="body">
+    <p>The latest value of one point.</p>
+    <table>
+      <tr><th>Parameter</th><th>Description</th></tr>
+      <tr><td><code>device</code></td><td>Device name from the config.</td></tr>
+      <tr><td><code>point</code></td><td>Point name of that device.</td></tr>
+    </table>
+    <details open>
+      <summary><span class="code ok">200</span><span>The point</span></summary>
+<pre>{"device": "inverter", "point": "power", "value": 1234.5, "unit": "W",
+ "timestamp": "2026-10-05T10:15:02.123Z", "age_ms": 820}</pre>
+    </details>
+    <details>
+      <summary><span class="code err">404</span><span>Device not served, or no value yet</span></summary>
+<pre>{"error": "unknown device other"}
+{"error": "no value for point power"}</pre>
+    </details>
+    <div class="curl"><pre>curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/devices/inverter/power</pre></div>
+  </div>
+</section>
+
+<section class="endpoint" id="health">
+  <div class="head">
+    <span class="method">GET</span><span class="path">/healthz</span>
+    <span class="lock">always open</span>
+  </div>
+  <div class="body">
+    <p><span class="code ok">200</span> with an empty body while the API is serving; for
+    container health checks and load balancers.</p>
+  </div>
+</section>
+</main>
+</div>
+</body>
+</html>
