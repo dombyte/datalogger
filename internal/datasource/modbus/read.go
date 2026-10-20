@@ -19,8 +19,8 @@ const maxRegistersPerRead = 125
 // the rest skipped; after a connection error and after maxTimeoutsInRow timeouts in a
 // row the rest is skipped too, so a device that stopped answering does not hold the
 // poll for points × timeout. The returned error is the first connection error, or the
-// first error if no point could be read. All points carry the receive time of the last
-// successful read.
+// first error if no point could be read. Every point carries the receive time of its
+// own read.
 func (r *Reader) readDirectMode(ctx context.Context) ([]datasource.DataPoint, error) {
 	var poll directPoll
 	for _, p := range r.settings.Points {
@@ -71,12 +71,8 @@ func (d *directPoll) add(dp datasource.DataPoint, err error) {
 	}
 }
 
-// result returns the points read, stamped with one time, and the error of the poll.
+// result returns the points read and the error of the poll.
 func (d *directPoll) result() ([]datasource.DataPoint, error) {
-	if len(d.results) > 0 {
-		// The reads ran in order, so the last result holds the latest receive time.
-		stamp(d.results, d.results[len(d.results)-1].Timestamp)
-	}
 	if d.connErr != nil {
 		return d.results, d.connErr
 	}
@@ -145,14 +141,6 @@ func (r *Reader) readRange(ctx context.Context, rng Range, registers []uint16) e
 		copy(registers[start-int(rng.Start):], values)
 	}
 	return nil
-}
-
-// stamp gives every point of a poll the same timestamp, so the poll is one snapshot
-// (one row in InfluxDB).
-func stamp(points []datasource.DataPoint, timestamp time.Time) {
-	for i := range points {
-		points[i].Timestamp = timestamp
-	}
 }
 
 // dataPoint decodes and scales the registers of a point.

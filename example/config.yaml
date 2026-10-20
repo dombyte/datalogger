@@ -229,7 +229,8 @@ devices:
 # =====================================================================================
 outputs:
   # ----- InfluxDB 3 --------------------------------------------------------------------
-  # Schema: one row per poll; table = device name, one column per point, no tags.
+  # Schema: one row per poll (Modbus direct mode: one per read); table = device name,
+  # one column per point, no tags.
   # At most 499 points per device (excluded points do not count).
   - name: influxdb
     type: influxdb
@@ -240,7 +241,7 @@ outputs:
       database: "datalogger"
       insecure: false
       timeout: 10s # per write request (default 10s)
-      batch_size: 10000 # write when this many polls are queued (default 10000)
+      batch_size: 10000 # write when this many rows are queued (default 10000)
       batch_timeout: 1s # ... or after this time (default 1s)
       max_retries: 3 # retries per batch before it is dropped (default 3)
       retry_delay: 1s # wait between retries (default 1s)

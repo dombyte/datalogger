@@ -27,7 +27,8 @@ Datalogger polls **devices** and forwards every reading to one or more **outputs
 - **Routing:** each output lists the devices it accepts; every reading of such a device is
   copied to that output, except the points it lists in `exclude_points`.
 - **Timestamps** are taken when the data is received from the device (not when the poll
-  starts), in UTC; all points of one poll share the receive time of its last read.
+  starts), in UTC: per read in Modbus direct mode; one per poll in Modbus range mode (its
+  last chunk) and for HTTP (the response).
 - **Runtime:** a single binary configured by one YAML file (`-config`), no database of its
   own; the only HTTP server is the optional `api` output. Shipped as binaries and a multi-arch `scratch` image on ghcr.io.
 
@@ -233,8 +234,9 @@ writer that failed, or a missed deadline (drain or hard).
   registers. Every point address must be covered by a range (checked at construction).
   **Any failed chunk fails the whole poll** (no partial data); no further chunk is read
   after it.
-- All points of a poll share one timestamp, the receive time of its last read (direct:
-  the last successful read; range: the last chunk), so a poll is one snapshot.
+- Timestamps: direct mode stamps every point with the receive time of its own read;
+  range mode stamps all points of a poll with the receive time of its last chunk (the
+  ranges are one block of registers, decoded together).
 - Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool` (others are rejected by
   validation); value = raw × `scale` + `offset`, always delivered as float64. `scale`
   defaults to 1 (an explicit 0 is treated as unset). 32-bit types need `count: 2` (high
@@ -280,16 +282,18 @@ writer that failed, or a missed deadline (drain or hard).
   does not.
 
 ### InfluxDB 3 writer
-- Schema: one line per poll; table = device name, one field per point (no tags, the unit
-  is not stored), timestamp = the poll's reading time. A point not read in a poll is
-  missing from its line (`NULL` in that row). The README documents queries on this
+- Schema: one line per timestamp of a poll; table = device name, one field per point
+  (no tags, the unit is not stored), timestamp = the reading time. A poll whose points
+  share one time (Modbus range mode, HTTP) is one line; Modbus direct mode stamps every
+  read on its own, so its poll is one line per read, `NULL` in the other columns. A
+  point not read in a poll is missing from its line (`NULL` in that row). The README documents queries on this
   schema; changing it is a breaking change (`!`).
 - Column types: a column keeps the type of its first value (InfluxDB rejects a line with
   another type, which would lose the whole poll). The writer remembers the first type of
   every column in this run and skips a value of another type: warned once per point,
   then debug, info when the type matches again. After a restart the server may hold
   another type; that line is rejected and logged as a partial write.
-- Batching: a full `batch_size` of lines (polls; default 10000) is written at once, a partial batch every
+- Batching: a full `batch_size` of lines (default 10000) is written at once, a partial batch every
   `batch_timeout` (default 1 s). Retries: `max_retries` (default 3) with `retry_delay`
   (default 1 s; a longer `Retry-After` of the server wins, at most 1 min: while the
   writer waits its input fills and drops polls), only for network errors, 5xx
@@ -441,9 +445,10 @@ writer that failed, or a missed deadline (drain or hard).
 - **Drop instead of block:** a full output channel drops the poll for that output only. A
   stalled output must not stop polling or starve other outputs. Tune with `buffer_size`.
 - **Receive-time timestamps in UTC:** readings are stamped when the device answered, so
-  slow polls do not shift data; UTC matches InfluxDB and keeps CSV unambiguous. One
-  timestamp per poll (its last read) keeps a poll one snapshot, one InfluxDB row, at the
-  cost of a few milliseconds between the reads of a poll.
+  slow polls do not shift data; UTC matches InfluxDB and keeps CSV unambiguous. A value
+  read on its own (Modbus direct mode) keeps its own time, even if that costs InfluxDB
+  one row per read; values decoded from one block (range mode) or one response (HTTP)
+  share the time of that block, one row per poll.
 - **Producers-first shutdown:** sources stop first, outputs drain afterwards, so no reading
   that was already taken is lost on a normal stop. A drain deadline (7 s) cancels the
   writers, so a hanging endpoint costs the queued data but never an unclean exit (files
@@ -469,11 +474,13 @@ writer that failed, or a missed deadline (drain or hard).
 - **Exclude instead of per-output transforms:** a decoded value is a separate point (e.g.
   `status` and `status_text` on the same register); outputs that cannot store it skip it
   with `exclude_points`, so every point has one value for all outputs.
-- **InfluxDB schema with one row per poll:** table = device, one column per point. A
-  query reads the columns it needs without filtering by point, several points come from
-  one query, rows shrink by the number of points per poll, and every point gets its own
-  column type (text next to numbers). The cost: at most 499 points per device, and a
-  poll needs one timestamp, which the readers provide.
+- **InfluxDB schema with one row per timestamp:** table = device, one column per point,
+  one row per poll whose points share a time. A query reads the columns it needs without
+  filtering by point, several points come from one query, rows shrink by the number of
+  points per poll, and every point gets its own column type (text next to numbers). The
+  cost: at most 499 points per device. Points with their own read time (Modbus direct
+  mode) get rows of their own rather than a time that is not theirs; queries that
+  aggregate with `date_bin` and skip `NULL` work on both.
 - **Config only from the YAML file, no env overrides:** the config is mostly lists of
   devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`,
   mounted read-only, serves as the secret file.

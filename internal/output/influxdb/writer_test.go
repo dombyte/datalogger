@@ -127,6 +127,31 @@ func TestWritesOneLinePerPoll(t *testing.T) {
 	h.stop()
 }
 
+// A poll whose points were read at different times (Modbus direct mode) is one line per
+// timestamp, so every value keeps its own reading time; points that share a time share
+// a line.
+func TestWritesOneLinePerTimestamp(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1})
+	h.expectWrites(nil)
+
+	at := func(dp datasource.DataPoint, d time.Duration) datasource.DataPoint {
+		dp.Timestamp = start.Add(d)
+		return dp
+	}
+	h.input <- []datasource.DataPoint{
+		at(point("voltage", 230.1, "V"), 20*time.Millisecond),
+		at(point("current", 4.2, "A"), 40*time.Millisecond),
+		at(point("power", 966.0, "W"), 40*time.Millisecond),
+	}
+
+	assert.Equal(t, []string{
+		"meter voltage=230.1 1790683200020000000\n",
+		"meter current=4.2,power=966 1790683200040000000\n",
+	}, h.write())
+	h.stop()
+}
+
 func TestFlushesPartialBatchEveryTimeout(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, influxdb.Settings{BatchSize: 100, BatchTimeout: time.Second})

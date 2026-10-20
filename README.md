@@ -70,8 +70,9 @@ outputs:
 ### How data flows
 
 - Every **device** is polled at once on startup, then every `poll_interval`. Each poll
-  is stamped with the time the device answered (its last read), in UTC; all points of a
-  poll share that time.
+  is stamped with the time the device answered, in UTC: Modbus `direct` mode stamps every
+  point with the time of its own read; Modbus `range` mode (last chunk) and HTTP (the
+  response) stamp all points of a poll with one time.
 - Every **output** lists the `devices` it receives. All their points are copied to it,
   except those listed in `exclude_points` (`device/point`).
 - Each output has its own queue of polls (`buffer_size`, default 1000): every poll of a
@@ -230,7 +231,8 @@ outputs:
 
 v2 drops the `device_specific:` and `output_specific:` levels: the type block moves up
 one level. The InfluxDB options `batch_size`, `batch_timeout`, `max_retries` and
-`retry_delay` move into the `influxdb:` block; `batch_size` now counts polls.
+`retry_delay` move into the `influxdb:` block; `batch_size` now counts rows (one per
+poll, one per read in Modbus direct mode).
 
 The [InfluxDB schema](#influxdb-schema) changes from one row per point to one row per
 poll. Write v2 into a **new database**: the tables of v1 have the columns `point`,
@@ -270,6 +272,9 @@ older data; rewrite the queries as shown below.
 ## InfluxDB schema
 
 One row per poll: the table is the device, every point is a column, there are no tags.
+Modbus devices in `direct` mode read every point on its own and keep its read time, so
+their polls are one row per point (the other columns are `NULL`); aggregate with
+`date_bin` and skip `NULL` values, as in the queries below.
 
 | Element | Content | Example |
 |---|---|---|
