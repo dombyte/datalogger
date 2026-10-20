@@ -336,7 +336,8 @@ writer that failed, or a missed deadline (drain or hard).
   when the file is empty. Rows are buffered and flushed when no further poll is queued
   (a single poll reaches the file at once, a backlog in large blocks) and on shutdown. A
   failed write or flush is logged and the file reopened; the rows buffered then are lost.
-- Rotation: when the file is older than `max_age` (checked after each row; the age of an
+- Rotation: when the file is older than `max_age` (checked after each poll, so a poll
+  stays in one file; the age of an
   existing file counts from the timestamp of its first row, so restarts do not reset it),
   it is renamed to `<file>.<YYYYMMDD-HHMMSS>` (UTC, like the timestamps in the file; one
   second later if that backup exists)
