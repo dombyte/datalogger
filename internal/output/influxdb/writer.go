@@ -131,6 +131,9 @@ func (w *Writer) loop(ctx context.Context, input <-chan []datasource.DataPoint) 
 	for {
 		select {
 		case <-ctx.Done():
+			if len(w.batch) > 0 {
+				w.logger.Warn().Int("lines", len(w.batch)).Msg("Dropping batch, output cancelled")
+			}
 			return
 		case points, ok := <-input:
 			if !ok {

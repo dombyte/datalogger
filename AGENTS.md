@@ -202,12 +202,17 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    (CSV flush/close, InfluxDB final batch, webhook queued polls, MQTT disconnect, API
    server shutdown) and
    stops.
-4. `main` bounds all of this with one hard deadline of **8 s** (below Docker's 10 s stop
-   timeout); after it the process exits 1. There is no second-signal force mode: a
-   second signal is ignored, the deadline is the force.
+   The buses finish their request in flight meanwhile.
+4. `main` gives the outputs a drain deadline of **7 s**: then `app` cancels the writers'
+   context, logs how many polls each still had queued, and the writers drop the rest
+   (InfluxDB: the open batch; retries and requests in flight end at once), close their
+   files and connections and stop; `Shutdown` returns `ErrDrainDeadline`. A bus still
+   busy at that point is not waited for. A hard deadline of **8 s** (below Docker's
+   10 s stop timeout) is the backstop; after it the process exits 1. There is no
+   second-signal force mode: a second signal is ignored, the deadlines are the force.
 
 Exit codes: 0 after a clean shutdown; 1 for startup errors, a stopped component, a
-writer that failed, or a missed deadline.
+writer that failed, or a missed deadline (drain or hard).
 
 ---
 
@@ -422,8 +427,10 @@ writer that failed, or a missed deadline.
   timestamp per poll (its last read) keeps a poll one snapshot, one InfluxDB row, at the
   cost of a few milliseconds between the reads of a poll.
 - **Producers-first shutdown:** sources stop first, outputs drain afterwards, so no reading
-  that was already taken is lost on a normal stop. One hard deadline (8 s, below Docker's
-  10 s) bounds it; a slow final InfluxDB retry can use most of it.
+  that was already taken is lost on a normal stop. A drain deadline (7 s) cancels the
+  writers, so a hanging endpoint costs the queued data but never an unclean exit (files
+  closed, connections ended); a hard deadline (8 s, below Docker's 10 s) is the
+  backstop.
 - **Soft vs. hard startup failures:** components connect lazily and retry, so one device
   or broker that is down does not stop the others; settings a client library rejects are
   configuration errors and fail startup, where they are noticed at once.

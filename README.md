@@ -259,8 +259,9 @@ older data; rewrite the queries as shown below.
   later) is retried with backoff and does not stop the others. Settings that cannot work
   at all (an invalid address, a port in use, a bad expression) stop the program at
   startup.
-- SIGINT/SIGTERM stop the devices first, then every output writes what is queued; this
-  is bounded by 8 seconds.
+- SIGINT/SIGTERM stop the devices first, then every output writes what is queued. After
+  7 seconds outputs that are still busy (an endpoint that hangs) are stopped: they drop
+  the rest, close their files and connections, and the program exits with 1.
 - Exit code 0 after a clean stop, 1 on configuration or startup errors, when a component
   stops unexpectedly, or when the shutdown takes too long. Run it with a restart policy
   (`restart: unless-stopped` in the compose file).
