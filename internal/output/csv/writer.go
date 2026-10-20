@@ -122,13 +122,21 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 	return done
 }
 
-// writePoll buffers one row per point. A failed row is logged and the file reopened;
-// the next row goes to the new file.
+// writePoll buffers one row per point, then rotates the file when it is older than
+// MaxAge, so the rows of a poll stay in one file. A failed row is logged and the file
+// reopened; the next row goes to the new file.
 func (w *Writer) writePoll(points []datasource.DataPoint) {
 	for _, dp := range points {
 		if err := w.write(dp); err != nil {
 			w.logger.Error().Str("device", dp.DeviceName).Str("point", dp.PointName).Err(err).
 				Msg("Failed to write CSV row")
+			w.failed = true
+			w.reopen()
+		}
+	}
+	if now := w.clock.Now(); w.rotationDue(now) {
+		if err := w.rotate(now); err != nil {
+			w.logger.Error().Err(err).Msg("Failed to rotate CSV file")
 			w.failed = true
 			w.reopen()
 		}
@@ -216,7 +224,7 @@ func (w *Writer) close() {
 	}
 }
 
-// write buffers one row and rotates the file when it is older than MaxAge.
+// write buffers one row.
 func (w *Writer) write(dp datasource.DataPoint) error {
 	err := w.csv.Write([]string{
 		w.timestamp(dp.Timestamp),
@@ -227,10 +235,6 @@ func (w *Writer) write(dp datasource.DataPoint) error {
 	})
 	if err != nil {
 		return fmt.Errorf("csv: write: %w", err)
-	}
-
-	if now := w.clock.Now(); w.rotationDue(now) {
-		return w.rotate(now)
 	}
 	return nil
 }

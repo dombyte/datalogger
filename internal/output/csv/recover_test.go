@@ -70,7 +70,7 @@ func TestRecoversAfterFailedRotation(t *testing.T) {
 
 	require.NoError(t, os.Remove(path)) // the rename of the rotation fails
 	clk.Advance(time.Hour)
-	require.NoError(t, w.write(row(1)), "a failed rotation keeps writing")
+	w.writePoll([]datasource.DataPoint{row(1)}) // a failed rotation keeps writing
 
 	w.writePoll([]datasource.DataPoint{row(2)})
 	w.close()
