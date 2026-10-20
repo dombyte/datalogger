@@ -333,6 +333,9 @@ writer that failed, or a missed deadline (drain or hard).
   and a new file is started. `max_backups`: 0 = keep none,
   > 0 = keep that many, < 0 = keep all; only files with exactly that name pattern are
   ever deleted.
+  If the rename fails (a file bind-mounted on its own, a read-only directory), the
+  writer keeps appending to the file and tries again after 1 minute; the first failure
+  is logged as an error, repeats at debug, the next rotation at info.
 - A path that cannot be opened fails startup.
 - The directory is created if missing. In the container, write below `/app/data`
   (mounted from `./data`).
