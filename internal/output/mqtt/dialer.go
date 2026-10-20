@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
 )
 
@@ -100,6 +101,9 @@ func (d *PahoDialer) Dial(ctx context.Context) (Publisher, error) {
 		return nil, err
 	}
 
+	// paho writes from several goroutines (publishes, pings, acknowledgements); a
+	// tls.Conn would interleave their frames, the wrapper serialises the writes.
+	conn = packets.NewThreadSafeConn(conn)
 	client := paho.NewClient(paho.ClientConfig{ClientID: d.settings.ClientID, Conn: conn})
 	connect := &paho.Connect{
 		ClientID:   d.settings.ClientID,
