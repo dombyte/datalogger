@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,6 +160,71 @@ func TestDialTLS(t *testing.T) {
 	require.NoError(t, err)
 	_, err = verified.Dial(context.Background())
 	assert.ErrorContains(t, err, "tls handshake", "the self-signed certificate is rejected")
+}
+
+// tlsTopicBroker is a TLS broker for one connection that forwards the topic of every
+// PUBLISH it reads; the channel is closed when it reads a broken packet.
+func tlsTopicBroker(t *testing.T) (string, <-chan string) {
+	t.Helper()
+	srv := httptest.NewUnstartedServer(nil) // only for its test certificate
+	srv.StartTLS()
+	certs := srv.TLS.Certificates
+	srv.Close()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	listener = tls.NewListener(listener, &tls.Config{Certificates: certs, MinVersion: tls.VersionTLS12})
+	t.Cleanup(func() { listener.Close() })
+
+	topics := make(chan string, 1000)
+	go func() {
+		defer close(topics)
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			cp, err := packets.ReadPacket(conn)
+			if err != nil || answer(conn, cp) != nil {
+				return
+			}
+			if p, ok := cp.Content.(*packets.Publish); ok {
+				topics <- p.Topic
+			}
+		}
+	}()
+	return listener.Addr().String(), topics
+}
+
+// Regression: paho writes a packet in several Write calls and from several goroutines;
+// on a tls.Conn, which only locks per Write, frames of parallel writes interleaved and
+// the broker read garbage. The connection now serialises whole packets.
+func TestParallelPublishesOverTLSStayIntact(t *testing.T) {
+	t.Parallel()
+	addr, topics := tlsTopicBroker(t)
+	d, err := mqtt.NewDialer(mqtt.ConnSettings{Address: "tls://" + addr, Insecure: true})
+	require.NoError(t, err)
+	session, err := d.Dial(context.Background())
+	require.NoError(t, err)
+
+	const senders, each = 16, 50
+	var wg sync.WaitGroup
+	for range senders {
+		wg.Go(func() {
+			for range each {
+				_, err := session.Publish(context.Background(),
+					&paho.Publish{Topic: "datalogger/meter/power", Payload: []byte(`{"value":1}`)})
+				assert.NoError(t, err)
+			}
+		})
+	}
+	wg.Wait()
+	for range senders * each {
+		topic, ok := <-topics
+		require.True(t, ok, "the broker read a broken packet")
+		require.Equal(t, "datalogger/meter/power", topic)
+	}
+	require.NoError(t, session.Disconnect(&paho.Disconnect{}))
 }
 
 func TestDialFailsWhenBrokerRejectsConnect(t *testing.T) {

@@ -1,6 +1,7 @@
 package modbus
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -10,32 +11,33 @@ import (
 	"github.com/simonvetter/modbus"
 )
 
-// Client is the part of an open Modbus connection the reader uses.
+// Client is the part of an open Modbus connection the reader uses. A read returns when
+// ctx ends, also while it is in flight.
 type Client interface {
-	ReadRegisters(addr, quantity uint16, regType modbus.RegType) ([]uint16, error)
+	ReadRegisters(
+		ctx context.Context, addr, quantity uint16, regType modbus.RegType,
+	) ([]uint16, error)
 	Close() error
 }
 
-// Dialer opens a new connection to the device.
+// Dialer opens a connection to the device; *BusDialer implements it.
 type Dialer interface {
-	Dial() (Client, error)
+	Dial(ctx context.Context) (Client, error)
 }
 
-// ConnSettings configures the connection to one device.
+// ConnSettings configures one connection: a TCP device or a serial port.
 type ConnSettings struct {
 	Address  string // tcp://host:port or rtu:///dev/ttyUSB0
-	SlaveID  uint8
-	Speed    int // RTU only
-	DataBits int // RTU only
+	Speed    int    // RTU only
+	DataBits int    // RTU only
 	Parity   string
 	StopBits int // RTU only
 	Timeout  time.Duration
 }
 
-// LibDialer dials with github.com/simonvetter/modbus.
+// LibDialer opens connections with github.com/simonvetter/modbus, for a Bus.
 type LibDialer struct {
-	conf    modbus.ClientConfiguration
-	slaveID uint8
+	conf modbus.ClientConfiguration
 }
 
 // NewDialer checks the connection settings without connecting. An error here is a
@@ -51,22 +53,11 @@ func NewDialer(s ConnSettings, logger zerolog.Logger) (*LibDialer, error) {
 			Timeout:  s.Timeout,
 			Logger:   log.New(debugWriter{logger}, "", 0),
 		},
-		slaveID: s.SlaveID,
 	}
 	if _, err := modbus.NewClient(&d.conf); err != nil {
 		return nil, fmt.Errorf("modbus: %w", err)
 	}
 	return d, nil
-}
-
-// Dial selects the slave ID and opens a connection.
-func (d *LibDialer) Dial() (Client, error) {
-	client := d.newClient()
-	setUnitID(client, d.slaveID)
-	if err := client.Open(); err != nil {
-		return nil, fmt.Errorf("open connection: %w", err)
-	}
-	return client, nil
 }
 
 // Open opens a connection without a fixed slave, for a Bus: it selects the slave per

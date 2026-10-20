@@ -97,3 +97,29 @@ func TestNoSyncIsSentWithTheWrite(t *testing.T) {
 		})
 	}
 }
+
+// Regression: the client sent accept_partial=false (an empty WriteOptions), so the server
+// rejected a whole batch for one bad line while the writer logged that it stored the
+// rest. Partial writes are accepted now (the library omits the parameter), in
+// nanoseconds on the v3 endpoint.
+func TestWritesAcceptPartialWrites(t *testing.T) {
+	t.Parallel()
+	got := make(chan *http.Request, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- r
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := influxdb.NewClient(influxdb.ConnSettings{
+		Address: srv.URL, Token: "t", Database: "d",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, client.Close()) })
+
+	require.NoError(t, client.Write(context.Background(), []byte("m value=1 1\n")))
+	r := <-got
+	assert.Equal(t, "/api/v3/write_lp", r.URL.Path)
+	assert.False(t, r.URL.Query().Has("accept_partial"), "the server default accepts partial writes")
+	assert.Equal(t, "nanosecond", r.URL.Query().Get("precision"))
+}

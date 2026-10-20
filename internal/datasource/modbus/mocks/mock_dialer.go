@@ -5,6 +5,8 @@
 package mocks
 
 import (
+	"context"
+
 	"github.com/dombyte/datalogger/internal/datasource/modbus"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -46,8 +48,8 @@ func (_m *MockDialer) EXPECT() *MockDialer_Expecter {
 }
 
 // Dial provides a mock function for the type MockDialer
-func (_mock *MockDialer) Dial() (modbus.Client, error) {
-	ret := _mock.Called()
+func (_mock *MockDialer) Dial(ctx context.Context) (modbus.Client, error) {
+	ret := _mock.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Dial")
@@ -55,18 +57,18 @@ func (_mock *MockDialer) Dial() (modbus.Client, error) {
 
 	var r0 modbus.Client
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func() (modbus.Client, error)); ok {
-		return returnFunc()
+	if returnFunc, ok := ret.Get(0).(func(context.Context) (modbus.Client, error)); ok {
+		return returnFunc(ctx)
 	}
-	if returnFunc, ok := ret.Get(0).(func() modbus.Client); ok {
-		r0 = returnFunc()
+	if returnFunc, ok := ret.Get(0).(func(context.Context) modbus.Client); ok {
+		r0 = returnFunc(ctx)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(modbus.Client)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func() error); ok {
-		r1 = returnFunc()
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -79,13 +81,20 @@ type MockDialer_Dial_Call struct {
 }
 
 // Dial is a helper method to define mock.On call
-func (_e *MockDialer_Expecter) Dial() *MockDialer_Dial_Call {
-	return &MockDialer_Dial_Call{Call: _e.mock.On("Dial")}
+//   - ctx context.Context
+func (_e *MockDialer_Expecter) Dial(ctx any) *MockDialer_Dial_Call {
+	return &MockDialer_Dial_Call{Call: _e.mock.On("Dial", ctx)}
 }
 
-func (_c *MockDialer_Dial_Call) Run(run func()) *MockDialer_Dial_Call {
+func (_c *MockDialer_Dial_Call) Run(run func(ctx context.Context)) *MockDialer_Dial_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
 	})
 	return _c
 }
@@ -95,7 +104,7 @@ func (_c *MockDialer_Dial_Call) Return(client modbus.Client, err error) *MockDia
 	return _c
 }
 
-func (_c *MockDialer_Dial_Call) RunAndReturn(run func() (modbus.Client, error)) *MockDialer_Dial_Call {
+func (_c *MockDialer_Dial_Call) RunAndReturn(run func(ctx context.Context) (modbus.Client, error)) *MockDialer_Dial_Call {
 	_c.Call.Return(run)
 	return _c
 }

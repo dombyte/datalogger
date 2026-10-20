@@ -355,10 +355,37 @@ func TestModbusConfigValidate(t *testing.T) {
 			config:  ModbusConfig{Address: "tcp://localhost:502", SlaveID: 1, RegisterMode: "range", Ranges: []string{"invalid"}},
 			wantErr: true,
 		},
+		// Regression: these were accepted and failed only at construction, or were
+		// ignored silently (a parity typo read without parity, ranges in direct mode).
 		{
 			name:    "range start > end",
 			config:  ModbusConfig{Address: "tcp://localhost:502", SlaveID: 1, RegisterMode: "range", Ranges: []string{"200-100"}},
-			wantErr: false, // parseRanges doesn't validate start > end, validateAddresses does
+			wantErr: true,
+		},
+		{
+			name:    "range not a number",
+			config:  ModbusConfig{Address: "tcp://localhost:502", SlaveID: 1, RegisterMode: "range", Ranges: []string{"a-100"}},
+			wantErr: true,
+		},
+		{
+			name:    "range end beyond last register",
+			config:  ModbusConfig{Address: "tcp://localhost:502", SlaveID: 1, RegisterMode: "range", Ranges: []string{"0-65536"}},
+			wantErr: true,
+		},
+		{
+			name:    "range up to last register",
+			config:  ModbusConfig{Address: "tcp://localhost:502", SlaveID: 1, RegisterMode: "range", Ranges: []string{"65000-65535"}},
+			wantErr: false,
+		},
+		{
+			name:    "ranges in direct mode",
+			config:  ModbusConfig{Address: "tcp://localhost:502", SlaveID: 1, RegisterMode: "direct", Ranges: []string{"0-10"}},
+			wantErr: true,
+		},
+		{
+			name:    "unknown parity",
+			config:  ModbusConfig{Address: "rtu:///dev/ttyUSB0", SlaveID: 1, RegisterMode: "direct", Parity: "X"},
+			wantErr: true,
 		},
 	}
 

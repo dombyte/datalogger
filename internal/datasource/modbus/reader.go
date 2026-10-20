@@ -70,8 +70,9 @@ type Deps struct {
 	Log      zerolog.Logger
 }
 
-// Reader polls one Modbus device. It connects on the first poll and reconnects after
-// connection errors, so an unreachable device recovers without a restart.
+// Reader polls one Modbus device through its Bus. It connects on the first poll and
+// reconnects after connection errors, so an unreachable device recovers without a
+// restart.
 type Reader struct {
 	settings Settings
 	dialer   Dialer
@@ -79,6 +80,11 @@ type Reader struct {
 	logger   zerolog.Logger
 	ranges   []Range
 	regType  modbus.RegType
+
+	// Range mode: the registers of each range, reused by every poll, and where each point
+	// (by index in Settings.Points) is in them.
+	registers [][]uint16
+	slots     []slot
 
 	client    Client // nil while disconnected
 	failCount int
@@ -105,11 +111,16 @@ func New(d Deps) (*Reader, error) {
 			return nil, fmt.Errorf("%w: %w", ErrInvalidSettings, err)
 		}
 		r.ranges = ranges
-		if err := r.checkCoverage(); err != nil {
+		if err := r.planSlots(); err != nil {
 			return nil, err
 		}
 	}
 	return r, nil
+}
+
+// slot is where the registers of a point are: in range rng, from offset on.
+type slot struct {
+	rng, offset int
 }
 
 // checkDeps reports missing dependencies and unusable settings.
@@ -145,26 +156,34 @@ func regType(points []Point) modbus.RegType {
 	return modbus.HOLDING_REGISTER
 }
 
-// checkCoverage checks that one configured range holds all registers of every point.
-func (r *Reader) checkCoverage() error {
-	for _, p := range r.settings.Points {
-		if !r.isCovered(p) {
+// planSlots finds a range that holds all registers of every point and allocates the
+// register buffer of every range.
+func (r *Reader) planSlots() error {
+	r.registers = make([][]uint16, len(r.ranges))
+	for i, rng := range r.ranges {
+		r.registers[i] = make([]uint16, int(rng.End)-int(rng.Start)+1)
+	}
+	r.slots = make([]slot, len(r.settings.Points))
+	for i, p := range r.settings.Points {
+		s, ok := r.slot(p)
+		if !ok {
 			return fmt.Errorf("%w: point '%s' register range %d-%d not covered by any range",
 				ErrInvalidSettings, p.Name, p.Register, pointEnd(p))
 		}
+		r.slots[i] = s
 	}
 	return nil
 }
 
-// isCovered reports whether one configured range holds all registers of the point.
-func (r *Reader) isCovered(p Point) bool {
+// slot returns the first range that holds all registers of the point.
+func (r *Reader) slot(p Point) (slot, bool) {
 	end := pointEnd(p)
-	for _, rng := range r.ranges {
+	for i, rng := range r.ranges {
 		if p.Register >= rng.Start && end <= rng.End {
-			return true
+			return slot{rng: i, offset: int(p.Register - rng.Start)}, true
 		}
 	}
-	return false
+	return slot{}, false
 }
 
 // pointEnd returns the last register of a point.
@@ -249,12 +268,12 @@ func send(dataCh chan<- []datasource.DataPoint, points []datasource.DataPoint) {
 // were read are returned even when err is set (direct mode).
 func (r *Reader) poll(ctx context.Context) ([]datasource.DataPoint, error) {
 	if r.client == nil {
-		client, err := r.dialer.Dial()
+		client, err := r.dialer.Dial(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("connect: %w", err)
 		}
 		r.client = client
-		r.logger.Info().Msg("Connected to Modbus device")
+		r.logger.Debug().Msg("Connected to Modbus device")
 	}
 
 	if r.settings.RangeMode {
@@ -277,7 +296,7 @@ func (r *Reader) handlePollError(err error) {
 		Stringer("retry_in", r.backoff).Msg("Modbus poll failed")
 
 	if r.client != nil && isConnectionError(err) {
-		r.logger.Warn().Msg("Connection lost, reconnecting on the next poll")
+		r.logger.Debug().Msg("Connection lost, reconnecting on the next poll")
 		r.disconnect()
 	}
 }

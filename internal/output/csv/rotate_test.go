@@ -37,9 +37,9 @@ func writeEvery(t *testing.T, s Settings, n int, step time.Duration) {
 	require.NoError(t, err)
 	for i := range n {
 		clk.Advance(step)
-		require.NoError(t, w.write(datasource.DataPoint{
+		w.writePoll([]datasource.DataPoint{{
 			DeviceName: "meter", PointName: "power", Value: float64(i), Timestamp: start,
-		}))
+		}})
 	}
 	w.close()
 }
@@ -111,10 +111,10 @@ func TestRestartKeepsRotationAge(t *testing.T) {
 		Clock:    clk, Log: zerolog.Nop(),
 	})
 	require.NoError(t, err)
-	require.NoError(t, w.write(datasource.DataPoint{
+	w.writePoll([]datasource.DataPoint{{
 		DeviceName: "meter", PointName: "power",
 		Value: 2.0, Timestamp: clk.Now(),
-	}))
+	}})
 	w.close()
 
 	assert.Equal(t, []string{"data.csv", "data.csv.20260929-140000"}, files(t, dir))
@@ -153,4 +153,46 @@ func TestRotationsInOneSecondKeepEveryBackup(t *testing.T) {
 		"data.csv.20260929-120001",
 		"data.csv.20260929-120002",
 	}, files(t, dir))
+}
+
+// Regression: backup names used the local time, so with a time zone the names did not
+// match the UTC timestamps in the file and did not sort by age across a DST change.
+func TestBackupNamesUseUTC(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.csv")
+	berlin := time.FixedZone("CEST", 2*60*60)
+	clk := clocktest.NewFake(start.In(berlin))
+	w, err := New(Deps{
+		Settings: Settings{FilePath: path, MaxAge: time.Hour, MaxBackups: -1},
+		Clock:    clk,
+		Log:      zerolog.Nop(),
+	})
+	require.NoError(t, err)
+
+	clk.Advance(time.Hour)
+	w.writePoll([]datasource.DataPoint{row(1)})
+	w.close()
+	assert.Equal(t, []string{"data.csv", "data.csv.20260929-130000"}, files(t, dir))
+}
+
+// Regression: the age was checked after every row, so a rotation split a poll between
+// two files (and read the clock once per row). It is checked once per poll now.
+func TestRotationKeepsPollInOneFile(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.csv")
+	clk := clocktest.NewFake(start)
+	w, err := New(Deps{
+		Settings: Settings{FilePath: path, MaxAge: time.Hour, MaxBackups: -1},
+		Clock:    clk, Log: zerolog.Nop(),
+	})
+	require.NoError(t, err)
+
+	clk.Advance(time.Hour)
+	w.writePoll([]datasource.DataPoint{row(1), row(2)})
+	w.close()
+	assert.Equal(t, header+"2026-09-29T12:00:00Z,meter,power,1,\n"+
+		"2026-09-29T12:00:00Z,meter,power,2,\n", read(t, path+".20260929-130000"))
+	assert.Equal(t, header, read(t, path))
 }

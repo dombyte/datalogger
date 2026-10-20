@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,13 +25,18 @@ const (
 	DefaultRetryDelay   = 1 * time.Second
 )
 
+// maxRetryAfter bounds the wait a Retry-After asks for: while the writer waits, its input
+// fills up and drops new polls, so a longer wait would lose more than a retry that
+// fails again.
+const maxRetryAfter = time.Minute
+
 // ErrMissingDependency is returned by New when a required dependency is missing.
 var ErrMissingDependency = errors.New("influxdb: missing dependency")
 
 // Settings configures a Writer; zero values use the defaults.
 type Settings struct {
 	Name         string
-	BatchSize    int // lines (polls) per write
+	BatchSize    int // lines per write: one per poll, one per read in Modbus direct mode
 	BatchTimeout time.Duration
 	MaxRetries   int
 	RetryDelay   time.Duration
@@ -44,14 +50,15 @@ type Deps struct {
 	Log      zerolog.Logger
 }
 
-// Writer batches polls and writes them with retries. Schema: one line per poll, table =
-// device, one field per point, no tags, timestamp = the poll's reading time.
+// Writer batches polls and writes them with retries. Schema: one line per timestamp of a
+// poll (one per poll, one per read in Modbus direct mode), table = device, one field per
+// point, no tags.
 type Writer struct {
 	settings Settings
 	client   Client
 	clock    clock.Clock
 	logger   zerolog.Logger
-	batch    []*influxdb3.Point // one line per poll
+	batch    []*influxdb3.Point // one line per timestamp of a poll
 	columns  map[column]*columnType
 	failed   bool // the previous batch failed
 	partial  bool // the server rejected lines of the previous batch
@@ -131,6 +138,9 @@ func (w *Writer) loop(ctx context.Context, input <-chan []datasource.DataPoint) 
 	for {
 		select {
 		case <-ctx.Done():
+			if len(w.batch) > 0 {
+				w.logger.Warn().Int("lines", len(w.batch)).Msg("Dropping batch, output cancelled")
+			}
 			return
 		case points, ok := <-input:
 			if !ok {
@@ -144,19 +154,46 @@ func (w *Writer) loop(ctx context.Context, input <-chan []datasource.DataPoint) 
 	}
 }
 
-// addAll appends the poll as one line to the batch and writes the batch when it is full.
+// addAll appends the poll to the batch, one line per timestamp, and writes the batch
+// when it is full.
 func (w *Writer) addAll(ctx context.Context, points []datasource.DataPoint) {
-	if row := w.newRow(points); row != nil {
-		w.batch = append(w.batch, row)
+	for _, group := range byTimestamp(points) {
+		if row := w.newRow(group); row != nil {
+			w.batch = append(w.batch, row)
+		}
 	}
 	if len(w.batch) >= w.settings.BatchSize {
 		w.flush(ctx)
 	}
 }
 
-// newRow maps a poll onto one line: table = device, one field per point, time = the
-// poll's timestamp (a reader sends one device's poll, all points stamped alike). It
-// returns nil when no point of the poll can be written.
+// byTimestamp splits a poll into the points of each timestamp, in the order the
+// timestamps first appear: a Modbus range-mode or HTTP poll has one timestamp, a
+// direct-mode poll one per read.
+func byTimestamp(points []datasource.DataPoint) [][]datasource.DataPoint {
+	first := points[0].Timestamp
+	if !slices.ContainsFunc(points, func(dp datasource.DataPoint) bool {
+		return !dp.Timestamp.Equal(first)
+	}) {
+		return [][]datasource.DataPoint{points}
+	}
+	var groups [][]datasource.DataPoint
+	index := make(map[int64]int) // UnixNano → group
+	for _, dp := range points {
+		key := dp.Timestamp.UnixNano()
+		i, ok := index[key]
+		if !ok {
+			i = len(groups)
+			index[key] = i
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], dp)
+	}
+	return groups
+}
+
+// newRow maps the points of one device and timestamp onto one line: table = device,
+// one field per point. It returns nil when no point can be written.
 func (w *Writer) newRow(points []datasource.DataPoint) *influxdb3.Point {
 	row := influxdb3.NewPointWithMeasurement(points[0].DeviceName).
 		SetTimestamp(points[0].Timestamp)
@@ -306,14 +343,17 @@ func (w *Writer) writeWithRetry(ctx context.Context) error {
 	return fmt.Errorf("after %d retries: %w", w.settings.MaxRetries, err)
 }
 
-// retryDelay returns RetryDelay, or the Retry-After of a 429 or 503 answer if that is
-// longer: retrying earlier only adds load to a server that is busy.
+// retryDelay returns RetryDelay, or the Retry-After of a 429 or 503 answer (at most
+// maxRetryAfter) if that is longer: retrying earlier only adds load to a server that
+// is busy. The webhook writer waits the same way.
 func (w *Writer) retryDelay(err error) time.Duration {
 	var serverErr *influxdb3.ServerError
 	if !errors.As(err, &serverErr) {
 		return w.settings.RetryDelay
 	}
-	return max(w.settings.RetryDelay, time.Duration(serverErr.RetryAfter)*time.Second)
+	// Capped before the conversion, which would overflow for huge values.
+	seconds := min(max(serverErr.RetryAfter, 0), int(maxRetryAfter/time.Second))
+	return max(w.settings.RetryDelay, time.Duration(seconds)*time.Second)
 }
 
 // retryable reports whether a write may succeed when repeated: network errors, server

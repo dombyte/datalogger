@@ -70,8 +70,9 @@ outputs:
 ### How data flows
 
 - Every **device** is polled at once on startup, then every `poll_interval`. Each poll
-  is stamped with the time the device answered (its last read), in UTC; all points of a
-  poll share that time.
+  is stamped with the time the device answered, in UTC: Modbus `direct` mode stamps every
+  point with the time of its own read; Modbus `range` mode (last chunk) and HTTP (the
+  response) stamp all points of a poll with one time.
 - Every **output** lists the `devices` it receives. All their points are copied to it,
   except those listed in `exclude_points` (`device/point`).
 - Each output has its own queue of polls (`buffer_size`, default 1000): every poll of a
@@ -117,7 +118,7 @@ devices:
 |---|---|
 | `influxdb` | InfluxDB 3.x, batched, with retries. `timeout` per write (default 10 s); `no_sync: true` lets InfluxDB answer before the write is in its WAL on disk (faster on slow storage, a crash can lose the last second). Schema [below](#influxdb-schema). |
 | `mqtt` | MQTT v5, one topic per point: `<topic>/<device>/<point>` (default topic `datalogger`), payload `{"value": 230.5, "unit": "V", "timestamp": "2026-10-05T10:15:02.123Z"}`. `tcp://` or TLS via `tls://`, `ssl://`, `mqtts://`. Points are dropped (and counted) while the broker is unreachable. |
-| `csv` | Columns `timestamp, device, point, value, unit`, written as soon as no further poll is queued. Rotated after `max_age` to `<file>.<YYYYMMDD-HHMMSS>`; `max_backups` 0 = keep none, > 0 = keep that many, < 0 = keep all. |
+| `csv` | Columns `timestamp, device, point, value, unit`, written as soon as no further poll is queued. Rotated after `max_age` to `<file>.<YYYYMMDD-HHMMSS>` (UTC); `max_backups` 0 = keep none, > 0 = keep that many, < 0 = keep all. |
 | `api` | Read-only JSON API with the latest value of every point, see [below](#http-api). |
 | `webhook` | Pushes readings as a JSON array to your HTTP endpoint, see [below](#webhook). |
 
@@ -172,7 +173,8 @@ Every request has a JSON array as body (`Content-Type: application/json`):
 - Each poll is sent at once. If your endpoint is slow and polls queue up, they are sent
   together, up to `max_batch` readings (default 1000) per request.
 - Any `2xx` answer is a success. Network errors, `5xx` and `429` are retried
-  (`max_retries`, default 3, `retry_delay`, default 1 s); other answers such as `401` or
+  (`max_retries`, default 3, `retry_delay`, default 1 s, or the endpoint's `Retry-After`
+  if that is longer, at most 1 minute); other answers such as `401` or
   `400` drop the batch at once. Dropped batches are logged with the status and the start
   of your endpoint's answer.
 - `timeout` per request (default 10 s), `insecure: true` skips certificate checks.
@@ -229,7 +231,8 @@ outputs:
 
 v2 drops the `device_specific:` and `output_specific:` levels: the type block moves up
 one level. The InfluxDB options `batch_size`, `batch_timeout`, `max_retries` and
-`retry_delay` move into the `influxdb:` block; `batch_size` now counts polls.
+`retry_delay` move into the `influxdb:` block; `batch_size` now counts rows (one per
+poll, one per read in Modbus direct mode).
 
 The [InfluxDB schema](#influxdb-schema) changes from one row per point to one row per
 poll. Write v2 into a **new database**: the tables of v1 have the columns `point`,
@@ -259,8 +262,9 @@ older data; rewrite the queries as shown below.
   later) is retried with backoff and does not stop the others. Settings that cannot work
   at all (an invalid address, a port in use, a bad expression) stop the program at
   startup.
-- SIGINT/SIGTERM stop the devices first, then every output writes what is queued; this
-  is bounded by 8 seconds.
+- SIGINT/SIGTERM stop the devices first, then every output writes what is queued. After
+  7 seconds outputs that are still busy (an endpoint that hangs) are stopped: they drop
+  the rest, close their files and connections, and the program exits with 1.
 - Exit code 0 after a clean stop, 1 on configuration or startup errors, when a component
   stops unexpectedly, or when the shutdown takes too long. Run it with a restart policy
   (`restart: unless-stopped` in the compose file).
@@ -268,6 +272,9 @@ older data; rewrite the queries as shown below.
 ## InfluxDB schema
 
 One row per poll: the table is the device, every point is a column, there are no tags.
+Modbus devices in `direct` mode read every point on its own and keep its read time, so
+their polls are one row per point (the other columns are `NULL`); aggregate with
+`date_bin` and skip `NULL` values, as in the queries below.
 
 | Element | Content | Example |
 |---|---|---|

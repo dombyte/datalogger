@@ -5,6 +5,8 @@
 package mocks
 
 import (
+	"context"
+
 	"github.com/simonvetter/modbus"
 	mock "github.com/stretchr/testify/mock"
 )
@@ -90,8 +92,8 @@ func (_c *MockClient_Close_Call) RunAndReturn(run func() error) *MockClient_Clos
 }
 
 // ReadRegisters provides a mock function for the type MockClient
-func (_mock *MockClient) ReadRegisters(addr uint16, quantity uint16, regType modbus.RegType) ([]uint16, error) {
-	ret := _mock.Called(addr, quantity, regType)
+func (_mock *MockClient) ReadRegisters(ctx context.Context, addr uint16, quantity uint16, regType modbus.RegType) ([]uint16, error) {
+	ret := _mock.Called(ctx, addr, quantity, regType)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReadRegisters")
@@ -99,18 +101,18 @@ func (_mock *MockClient) ReadRegisters(addr uint16, quantity uint16, regType mod
 
 	var r0 []uint16
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(uint16, uint16, modbus.RegType) ([]uint16, error)); ok {
-		return returnFunc(addr, quantity, regType)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint16, uint16, modbus.RegType) ([]uint16, error)); ok {
+		return returnFunc(ctx, addr, quantity, regType)
 	}
-	if returnFunc, ok := ret.Get(0).(func(uint16, uint16, modbus.RegType) []uint16); ok {
-		r0 = returnFunc(addr, quantity, regType)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint16, uint16, modbus.RegType) []uint16); ok {
+		r0 = returnFunc(ctx, addr, quantity, regType)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]uint16)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(uint16, uint16, modbus.RegType) error); ok {
-		r1 = returnFunc(addr, quantity, regType)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, uint16, uint16, modbus.RegType) error); ok {
+		r1 = returnFunc(ctx, addr, quantity, regType)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -123,31 +125,37 @@ type MockClient_ReadRegisters_Call struct {
 }
 
 // ReadRegisters is a helper method to define mock.On call
+//   - ctx context.Context
 //   - addr uint16
 //   - quantity uint16
 //   - regType modbus.RegType
-func (_e *MockClient_Expecter) ReadRegisters(addr any, quantity any, regType any) *MockClient_ReadRegisters_Call {
-	return &MockClient_ReadRegisters_Call{Call: _e.mock.On("ReadRegisters", addr, quantity, regType)}
+func (_e *MockClient_Expecter) ReadRegisters(ctx any, addr any, quantity any, regType any) *MockClient_ReadRegisters_Call {
+	return &MockClient_ReadRegisters_Call{Call: _e.mock.On("ReadRegisters", ctx, addr, quantity, regType)}
 }
 
-func (_c *MockClient_ReadRegisters_Call) Run(run func(addr uint16, quantity uint16, regType modbus.RegType)) *MockClient_ReadRegisters_Call {
+func (_c *MockClient_ReadRegisters_Call) Run(run func(ctx context.Context, addr uint16, quantity uint16, regType modbus.RegType)) *MockClient_ReadRegisters_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 uint16
+		var arg0 context.Context
 		if args[0] != nil {
-			arg0 = args[0].(uint16)
+			arg0 = args[0].(context.Context)
 		}
 		var arg1 uint16
 		if args[1] != nil {
 			arg1 = args[1].(uint16)
 		}
-		var arg2 modbus.RegType
+		var arg2 uint16
 		if args[2] != nil {
-			arg2 = args[2].(modbus.RegType)
+			arg2 = args[2].(uint16)
+		}
+		var arg3 modbus.RegType
+		if args[3] != nil {
+			arg3 = args[3].(modbus.RegType)
 		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
@@ -158,7 +166,7 @@ func (_c *MockClient_ReadRegisters_Call) Return(uint16s []uint16, err error) *Mo
 	return _c
 }
 
-func (_c *MockClient_ReadRegisters_Call) RunAndReturn(run func(addr uint16, quantity uint16, regType modbus.RegType) ([]uint16, error)) *MockClient_ReadRegisters_Call {
+func (_c *MockClient_ReadRegisters_Call) RunAndReturn(run func(ctx context.Context, addr uint16, quantity uint16, regType modbus.RegType) ([]uint16, error)) *MockClient_ReadRegisters_Call {
 	_c.Call.Return(run)
 	return _c
 }

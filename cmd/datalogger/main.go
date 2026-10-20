@@ -33,9 +33,15 @@ var (
 	GoVersion = "unknown"
 )
 
-// shutdownTimeout is the hard deadline for the whole shutdown; it stays below the
-// 10 s Docker waits before it kills the container.
-const shutdownTimeout = 8 * time.Second
+const (
+	// shutdownTimeout is the hard deadline for the whole shutdown; it stays below the
+	// 10 s Docker waits before it kills the container.
+	shutdownTimeout = 8 * time.Second
+
+	// drainTimeout is how long the outputs may drain; then they are cancelled and get
+	// the rest of shutdownTimeout to close their files and connections.
+	drainTimeout = 7 * time.Second
+)
 
 // errConfigRequired is returned when -config is missing.
 var errConfigRequired = errors.New("-config flag is required")
@@ -136,12 +142,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 // shutdown runs a.Shutdown with the hard deadline and returns the exit code.
 func shutdown(a *app.App, runErr error, logger zerolog.Logger) int {
+	ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- a.Shutdown() }()
+	go func() { done <- a.Shutdown(ctx) }()
 
 	select {
 	case err := <-done:
-		if err != nil || runErr != nil {
+		if err != nil || runErr != nil { // logged by the app
 			return 1
 		}
 		logger.Info().Msg("Shutdown complete")

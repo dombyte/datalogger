@@ -208,6 +208,34 @@ func TestStatusErrorBacksOffAndRecovers(t *testing.T) {
 	assert.Equal(t, "v", h.receive().PointName)
 }
 
+// Regression: a response without any of the points (an error document with status
+// 200) counted as a successful poll: it reset the backoff and logged a recovery, but
+// delivered nothing. It is a failed poll now, retried after the backoff.
+func TestResponseWithoutPointsFailsPoll(t *testing.T) {
+	t.Parallel()
+	var n atomic.Int32
+	calls := make(chan struct{}, 2)
+	srv := server(t, func(w nethttp.ResponseWriter, _ *nethttp.Request) {
+		calls <- struct{}{}
+		if n.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{"error": "busy"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"v": 1}`))
+	})
+	h := newHarness(t, settings(srv.URL, http.Point{Name: "v", JSONPath: "v", Scale: 1}),
+		http.NewClient(time.Second, false))
+
+	h.start()
+	<-calls
+	h.expectNothing()
+
+	h.advance(1, interval)
+	h.advance(2, 100*time.Millisecond) // the backoff of a failed poll
+	<-calls
+	assert.Equal(t, "v", h.receive().PointName)
+}
+
 func TestTransportErrorClosesIdleConnections(t *testing.T) {
 	t.Parallel()
 	client := mocks.NewMockClient(t)
@@ -315,4 +343,16 @@ func TestShutdownAbortsRequestInFlight(t *testing.T) {
 	h.start()
 	<-inFlight
 	h.stop()
+}
+
+// Regression: idle connections were kept forever, so a poll could reuse one the device
+// had just closed; a POST is not resent and the poll failed.
+func TestNewClient(t *testing.T) {
+	t.Parallel()
+	c := http.NewClient(3*time.Second, true)
+	assert.Equal(t, 3*time.Second, c.Timeout)
+	transport, ok := c.Transport.(*nethttp.Transport)
+	require.True(t, ok)
+	assert.True(t, transport.TLSClientConfig.InsecureSkipVerify)
+	assert.Equal(t, 30*time.Second, transport.IdleConnTimeout)
 }

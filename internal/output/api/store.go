@@ -3,6 +3,7 @@ package api
 import (
 	"maps"
 	"sync"
+	"time"
 
 	"github.com/dombyte/datalogger/internal/datasource"
 )
@@ -43,13 +44,27 @@ func (s *store) device(name string) (map[string]datasource.DataPoint, bool) {
 	return maps.Clone(points), ok
 }
 
-// devices returns a copy of the latest points of every served device.
-func (s *store) devices() map[string]map[string]datasource.DataPoint {
+// summary is the number of points of a device and the time of its newest one (zero
+// without points).
+type summary struct {
+	device string
+	points int
+	newest time.Time
+}
+
+// summaries returns the summary of every served device, without copying its points.
+func (s *store) summaries() []summary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make(map[string]map[string]datasource.DataPoint, len(s.latest))
+	out := make([]summary, 0, len(s.latest))
 	for name, points := range s.latest {
-		out[name] = maps.Clone(points)
+		sum := summary{device: name, points: len(points)}
+		for _, dp := range points {
+			if dp.Timestamp.After(sum.newest) {
+				sum.newest = dp.Timestamp
+			}
+		}
+		out = append(out, sum)
 	}
 	return out
 }

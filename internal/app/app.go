@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -30,8 +29,14 @@ const (
 	pathSeparator = "/"
 )
 
-// ErrComponentStopped is returned by Run when a reader or writer stops on its own.
-var ErrComponentStopped = errors.New("app: component stopped unexpectedly")
+var (
+	// ErrComponentStopped is returned by Run when a reader or writer stops on its own.
+	ErrComponentStopped = errors.New("app: component stopped unexpectedly")
+
+	// ErrDrainDeadline is returned by Shutdown when the writers were stopped before they
+	// had written everything that was queued.
+	ErrDrainDeadline = errors.New("app: outputs stopped at the shutdown deadline")
+)
 
 // source is a reader with the transformer that is applied to each of its polls.
 type source struct {
@@ -52,7 +57,7 @@ type outputRoute struct {
 type App struct {
 	sources []source
 	outputs []outputRoute
-	buses   []*modbus.Bus // serial ports, shared by the Modbus readers on them
+	buses   []*modbus.Bus // Modbus connections, one per serial port or TCP device
 	log     zerolog.Logger
 
 	cancelBuses   context.CancelFunc
@@ -91,7 +96,12 @@ func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) 
 	}
 
 	a := newApp(sources, outputs, log)
-	a.buses = slices.Collect(maps.Values(buses))
+	// A serial port's bus is shared by its devices: start it once.
+	for _, bus := range buses {
+		if !slices.Contains(a.buses, bus) {
+			a.buses = append(a.buses, bus)
+		}
+	}
 	return a, nil
 }
 
@@ -155,29 +165,65 @@ func (a *App) Run(ctx context.Context) error {
 }
 
 // Shutdown stops the readers first, lets the writers drain what is queued and waits
-// for them to finish. It returns the errors of writers that failed. The caller bounds
-// it with a deadline.
-func (a *App) Shutdown() error {
+// for them to finish. When ctx ends first, the writers are cancelled: they drop what is
+// left, close their resources and stop, so the process still exits cleanly. It returns
+// the errors of writers that failed and ErrDrainDeadline if ctx ended the drain.
+func (a *App) Shutdown(ctx context.Context) error {
 	a.stopping.Store(true)
 	a.log.Info().Msg("Stopping data sources")
 	a.cancelSources()
-	a.routers.Wait()
-	// After the readers: a reader in its last poll still uses its bus.
+	a.routers.Wait() // quick: readers abandon reads in flight
+	// After the readers: a reader in its last poll still uses its bus. The buses finish
+	// their request in flight while the outputs drain.
 	a.cancelBuses()
-	for _, done := range a.busesDone {
-		<-done
-	}
 
 	a.log.Info().Msg("Draining outputs")
 	for _, in := range a.inputs {
 		close(in)
 	}
-	a.writers.Wait()
+	err := a.drain(ctx)
 	a.cancelOutputs()
+	a.waitBuses(ctx)
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.writerErr
+	return errors.Join(a.writerErr, err)
+}
+
+// drain waits for the writers; when ctx ends first it cancels them, logs what was still
+// queued and waits for them to stop.
+func (a *App) drain(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		a.writers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+	}
+	for i, in := range a.inputs {
+		a.log.Warn().Str("output", a.outputs[i].writer.Name()).Int("queued_polls", len(in)).
+			Msg("Shutdown deadline reached, stopping output without draining")
+	}
+	a.cancelOutputs()
+	<-done
+	return ErrDrainDeadline
+}
+
+// waitBuses waits until the buses closed their connections, at most until ctx ends: a
+// bus may still finish a read nobody waits for, and the process exit closes its
+// connection too.
+func (a *App) waitBuses(ctx context.Context) {
+	for _, done := range a.busesDone {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			a.log.Warn().Msg("Modbus connection still busy at the shutdown deadline")
+			return
+		}
+	}
 }
 
 // startWriters starts every writer and returns its input channels by name. A writer

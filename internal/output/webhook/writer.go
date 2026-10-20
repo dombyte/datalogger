@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,11 @@ const (
 
 	// maxErrorBody is the part of an error response shown in the error message.
 	maxErrorBody = 256
+
+	// maxRetryAfter bounds the wait a Retry-After asks for: while the writer waits, its
+	// input fills up and drops new polls, so a longer wait would lose more than a retry
+	// that fails again.
+	maxRetryAfter = time.Minute
 )
 
 var (
@@ -70,8 +76,17 @@ type Writer struct {
 	client   Client
 	clock    clock.Clock
 	logger   zerolog.Logger
-	batch    [][]byte // JSON-encoded readings
-	failed   bool     // the previous batch failed
+	failed   bool // the previous batch failed
+
+	// The JSON array of the batch: "[" and the readings so far, without the closing "]";
+	// reused by every batch, so encoding a reading allocates nothing.
+	body    bytes.Buffer
+	enc     *json.Encoder // writes to body
+	reading int           // readings in body
+
+	// The points of one poll share their timestamp: the last one is formatted once.
+	lastTime  time.Time
+	lastStamp string
 }
 
 // reading is one element of the JSON array; the fields match the API and MQTT payloads.
@@ -108,13 +123,14 @@ func New(d Deps) (*Writer, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidSettings, err)
 	}
 
-	return &Writer{
+	w := &Writer{
 		settings: s,
 		client:   d.Client,
 		clock:    d.Clock,
 		logger:   d.Log.With().Str("component", "webhook").Str("output", s.Name).Logger(),
-		batch:    make([][]byte, 0, s.MaxBatch),
-	}, nil
+	}
+	w.enc = json.NewEncoder(&w.body)
+	return w, nil
 }
 
 // checkSettings checks the method and that the URL is an absolute http(s) URL; the
@@ -175,7 +191,7 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 func (w *Writer) addAll(ctx context.Context, points []datasource.DataPoint) {
 	for _, dp := range points {
 		w.add(dp)
-		if len(w.batch) >= w.settings.MaxBatch {
+		if w.reading >= w.settings.MaxBatch {
 			w.flush(ctx)
 		}
 	}
@@ -184,30 +200,54 @@ func (w *Writer) addAll(ctx context.Context, points []datasource.DataPoint) {
 // add encodes dp and appends it to the batch. A value JSON cannot encode is skipped:
 // it would fail the whole request, which holds the points of every queued poll.
 func (w *Writer) add(dp datasource.DataPoint) {
-	b, err := json.Marshal(reading{
+	mark := w.body.Len()
+	if w.reading == 0 {
+		w.body.WriteByte('[')
+	} else {
+		w.body.WriteByte(',')
+	}
+	// Encode writes nothing when it fails, and ends a value with a newline.
+	err := w.enc.Encode(reading{
 		Device:    dp.DeviceName,
 		Point:     dp.PointName,
 		Value:     dp.JSONValue(), // NaN and ±Inf have no JSON form: null
 		Unit:      dp.Unit,
-		Timestamp: dp.Timestamp.Format(time.RFC3339Nano),
+		Timestamp: w.timestamp(dp.Timestamp),
 	})
 	if err != nil {
+		w.body.Truncate(mark)
 		w.logger.Warn().Str("device", dp.DeviceName).Str("point", dp.PointName).Err(err).
 			Msg("Skipping point with a value JSON cannot encode")
 		return
 	}
-	w.batch = append(w.batch, b)
+	w.body.Truncate(w.body.Len() - 1)
+	w.reading++
+}
+
+// timestamp returns t formatted for a reading, reusing the last result for the same time.
+func (w *Writer) timestamp(t time.Time) string {
+	// == instead of Equal: the same instant in another location formats differently.
+	if t != w.lastTime || w.lastStamp == "" {
+		w.lastTime, w.lastStamp = t, t.Format(time.RFC3339Nano)
+	}
+	return w.lastStamp
 }
 
 // flush sends the batch with retries; after the last retry the batch is dropped.
 func (w *Writer) flush(ctx context.Context) {
-	if len(w.batch) == 0 {
+	if w.reading == 0 {
 		return
 	}
-	defer func() { w.batch = w.batch[:0] }()
+	defer func() {
+		w.body.Reset()
+		w.reading = 0
+	}()
 
-	log := w.logger.With().Int("points", len(w.batch)).Logger()
-	err := w.sendWithRetry(ctx)
+	log := w.logger.With().Int("points", w.reading).Logger()
+	w.body.WriteByte(']')
+	// A copy for the requests: the transport may still read a body after Do returned
+	// (an early answer), while body already takes the next batch.
+	err := w.sendWithRetry(ctx, bytes.Clone(w.body.Bytes()))
 	switch {
 	case err != nil:
 		log.Error().Err(err).Msg("Dropping batch after failed requests")
@@ -220,15 +260,16 @@ func (w *Writer) flush(ctx context.Context) {
 	}
 }
 
-// sendWithRetry sends the batch as a JSON array 1 + MaxRetries times, RetryDelay apart.
-func (w *Writer) sendWithRetry(ctx context.Context) error {
-	body := append([]byte("["), bytes.Join(w.batch, []byte(","))...)
-	body = append(body, ']')
+// sendWithRetry sends body, the JSON array of the batch, 1 + MaxRetries times,
+// RetryDelay apart.
+func (w *Writer) sendWithRetry(ctx context.Context, body []byte) error {
 	var err error
 	for attempt := range w.settings.MaxRetries + 1 {
 		if attempt > 0 {
-			w.logger.Warn().Int("attempt", attempt+1).Err(err).Msg("Retrying webhook request")
-			if !clock.Sleep(ctx, w.clock, w.settings.RetryDelay) {
+			delay := w.retryDelay(err)
+			w.logger.Warn().Int("attempt", attempt+1).Stringer("retry_in", delay).Err(err).
+				Msg("Retrying webhook request")
+			if !clock.Sleep(ctx, w.clock, delay) {
 				return fmt.Errorf("cancelled while retrying: %w", err)
 			}
 		}
@@ -267,7 +308,11 @@ func (w *Writer) send(ctx context.Context, body []byte) error {
 		// failed read only shortens the message.
 		msg, _ := io.ReadAll(io.LimitReader(rest, maxErrorBody)) //nolint:errcheck // see above
 		discard(rest)
-		return &statusError{code: resp.StatusCode, body: strings.TrimSpace(string(msg))}
+		return &statusError{
+			code:       resp.StatusCode,
+			body:       strings.TrimSpace(string(msg)),
+			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), w.clock.Now()),
+		}
 	}
 	discard(rest)
 	return nil
@@ -281,8 +326,9 @@ func discard(r io.Reader) {
 
 // statusError is a response outside 2xx.
 type statusError struct {
-	code int
-	body string // start of the response body
+	code       int
+	body       string        // start of the response body
+	retryAfter time.Duration // the Retry-After of the response, 0 without one
 }
 
 func (e *statusError) Error() string {
@@ -290,6 +336,33 @@ func (e *statusError) Error() string {
 		return fmt.Sprintf("HTTP status %d", e.code)
 	}
 	return fmt.Sprintf("HTTP status %d: %s", e.code, e.body)
+}
+
+// retryDelay returns RetryDelay, or the Retry-After of the answer (at most
+// maxRetryAfter) if that is longer: retrying earlier only adds load to a server that
+// is busy. The InfluxDB writer waits the same way.
+func (w *Writer) retryDelay(err error) time.Duration {
+	var statusErr *statusError
+	if !errors.As(err, &statusErr) {
+		return w.settings.RetryDelay
+	}
+	return max(w.settings.RetryDelay, statusErr.retryAfter)
+}
+
+// parseRetryAfter returns the wait of a Retry-After header (seconds or an HTTP date),
+// at most maxRetryAfter; 0 when it is missing or invalid.
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+		// Capped before the conversion, which would overflow for huge values.
+		return time.Duration(min(max(seconds, 0), int(maxRetryAfter/time.Second))) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return min(max(at.Sub(now), 0), maxRetryAfter)
+	}
+	return 0
 }
 
 // retryable reports whether a request may succeed when repeated: network errors,

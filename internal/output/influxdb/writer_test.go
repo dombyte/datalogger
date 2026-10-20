@@ -127,6 +127,31 @@ func TestWritesOneLinePerPoll(t *testing.T) {
 	h.stop()
 }
 
+// A poll whose points were read at different times (Modbus direct mode) is one line per
+// timestamp, so every value keeps its own reading time; points that share a time share
+// a line.
+func TestWritesOneLinePerTimestamp(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1})
+	h.expectWrites(nil)
+
+	at := func(dp datasource.DataPoint, d time.Duration) datasource.DataPoint {
+		dp.Timestamp = start.Add(d)
+		return dp
+	}
+	h.input <- []datasource.DataPoint{
+		at(point("voltage", 230.1, "V"), 20*time.Millisecond),
+		at(point("current", 4.2, "A"), 40*time.Millisecond),
+		at(point("power", 966.0, "W"), 40*time.Millisecond),
+	}
+
+	assert.Equal(t, []string{
+		"meter voltage=230.1 1790683200020000000\n",
+		"meter current=4.2,power=966 1790683200040000000\n",
+	}, h.write())
+	h.stop()
+}
+
 func TestFlushesPartialBatchEveryTimeout(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, influxdb.Settings{BatchSize: 100, BatchTimeout: time.Second})
@@ -310,6 +335,26 @@ func TestRetryWaitsForRetryAfter(t *testing.T) {
 	h.advance(2, time.Second) // ticker + retry wait: RetryDelay has passed
 	h.advance(2, 4*time.Second)
 	assert.Equal(t, start.Add(5*time.Second), <-retried)
+	h.stop()
+}
+
+// A Retry-After is waited for at most a minute: meanwhile the input fills and drops
+// new polls.
+func TestRetryAfterIsCapped(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 1, RetryDelay: time.Second})
+	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).
+		Return(&influxdb3.ServerError{StatusCode: 503, RetryAfter: 86400}).Once()
+	retried := make(chan time.Time, 1)
+	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).RunAndReturn(
+		func(context.Context, []*influxdb3.Point, ...influxdb3.WriteOption) error {
+			retried <- h.clock.Now()
+			return nil
+		}).Once()
+
+	h.input <- []datasource.DataPoint{point("power", 1.0, "")}
+	h.advance(2, time.Minute) // ticker + retry wait
+	assert.Equal(t, start.Add(time.Minute), <-retried)
 	h.stop()
 }
 

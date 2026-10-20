@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -289,16 +290,20 @@ func (m *ModbusConfig) Validate() error {
 		return errors.New("slave_id required")
 	}
 
+	if !slices.Contains([]string{"", "N", "E", "O"}, m.Parity) {
+		return fmt.Errorf("parity must be N, E or O, got %q", m.Parity)
+	}
+
 	if err := m.validateRegisterMode(); err != nil {
 		return err
 	}
 
 	if m.RegisterMode == "range" {
-		if err := m.validateRanges(); err != nil {
-			return err
-		}
+		return m.validateRanges()
 	}
-
+	if len(m.Ranges) > 0 {
+		return errors.New("ranges are only read with register_mode range")
+	}
 	return nil
 }
 
@@ -322,11 +327,30 @@ func (m *ModbusConfig) validateRanges() error {
 	}
 
 	for _, r := range m.Ranges {
-		if !strings.Contains(r, "-") {
-			return fmt.Errorf("range must be in format 'start-end': %s", r)
+		if err := validateRange(r); err != nil {
+			return fmt.Errorf("range %q: %w", r, err)
 		}
 	}
+	return nil
+}
 
+// validateRange checks a "start-end" range of register addresses (inclusive).
+func validateRange(r string) error {
+	startStr, endStr, ok := strings.Cut(r, "-")
+	if !ok {
+		return errors.New("must be start-end")
+	}
+	start, err := strconv.ParseUint(startStr, 10, 16)
+	if err != nil {
+		return fmt.Errorf("start must be a register 0-%d", lastRegister)
+	}
+	end, err := strconv.ParseUint(endStr, 10, 16)
+	if err != nil {
+		return fmt.Errorf("end must be a register 0-%d", lastRegister)
+	}
+	if start > end {
+		return errors.New("start must not be after end")
+	}
 	return nil
 }
 

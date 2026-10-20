@@ -136,7 +136,7 @@ func TestRoutesToListedOutputsAndDrainsOnShutdown(t *testing.T) {
 	require.Eventually(t, func() bool { return len(all.got()) == 3 }, time.Second, time.Millisecond)
 	cancel()
 	require.NoError(t, <-runErr)
-	require.NoError(t, a.Shutdown())
+	require.NoError(t, a.Shutdown(context.Background()))
 
 	assert.Len(t, all.got(), 3)
 	assert.Equal(t, []datasource.DataPoint{point("dev1"), point("dev1")}, onlyDev1.got())
@@ -158,7 +158,7 @@ func TestReaderThatStopsFailsRun(t *testing.T) {
 	err := <-runErr
 	require.ErrorIs(t, err, ErrComponentStopped)
 	assert.ErrorContains(t, err, "device dev1")
-	assert.NoError(t, a.Shutdown())
+	assert.NoError(t, a.Shutdown(context.Background()))
 }
 
 func TestWriterThatStopsFailsRunAndShutdown(t *testing.T) {
@@ -176,7 +176,40 @@ func TestWriterThatStopsFailsRunAndShutdown(t *testing.T) {
 
 	_, runErr := runApp(a)
 	require.ErrorIs(t, <-runErr, ErrComponentStopped)
-	assert.ErrorContains(t, a.Shutdown(), "output broken: disk full")
+	assert.ErrorContains(t, a.Shutdown(context.Background()), "output broken: disk full")
+}
+
+// Regression: a writer that could not drain (an endpoint that hangs) held the shutdown
+// until main's hard deadline killed the process with its files and connections open.
+// At the drain deadline the writers are cancelled and stop cleanly.
+func TestShutdownCancelsWritersAtDrainDeadline(t *testing.T) {
+	t.Parallel()
+	w := outmocks.NewMockWriter(t)
+	w.EXPECT().Name().Return("stuck").Maybe()
+	cancelled := make(chan struct{})
+	w.EXPECT().Start(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, _ <-chan []datasource.DataPoint) <-chan error {
+			done := make(chan error)
+			go func() {
+				defer close(done)
+				<-ctx.Done() // never drains its input
+				close(cancelled)
+			}()
+			return done
+		}).Once()
+	a := newApp(nil, []outputRoute{{writer: w, bufferSize: 1}}, zerolog.Nop())
+
+	cancel, runErr := runApp(a)
+	cancel()
+	require.NoError(t, <-runErr)
+	ctx, expire := context.WithCancel(context.Background())
+	expire() // the drain deadline has passed
+	require.ErrorIs(t, a.Shutdown(ctx), ErrDrainDeadline)
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("the writer was not cancelled")
+	}
 }
 
 func TestRouteDropsOnlyForFullOutput(t *testing.T) {
@@ -298,7 +331,7 @@ func TestRouteTransformsAndExcludesPerOutput(t *testing.T) {
 		time.Second, time.Millisecond)
 	cancel()
 	require.NoError(t, <-runErr)
-	require.NoError(t, a.Shutdown())
+	require.NoError(t, a.Shutdown(context.Background()))
 
 	assert.Equal(t, []datasource.DataPoint{
 		dp("dir", 0.0), dp("power", -1200.0), dp("status", "Generating"),
@@ -423,7 +456,7 @@ func stopWriter(t *testing.T, w output.Writer) {
 }
 
 // Modbus devices on one serial port share one bus with the largest timeout of its
-// devices; it runs and stops with the readers.
+// devices, a TCP device has its own; they run and stop with the readers.
 func TestNewSharesSerialPort(t *testing.T) {
 	t.Parallel()
 	device := func(name, address string, timeout time.Duration) config.Device {
@@ -443,12 +476,12 @@ func TestNewSharesSerialPort(t *testing.T) {
 		device("gateway", "tcp://127.0.0.1:1", time.Second),
 	}}, zerolog.New(zerolog.SyncWriter(&logs)), clocktest.NewFake(time.Now()))
 	require.NoError(t, err)
-	require.Len(t, a.buses, 1)
+	require.Len(t, a.buses, 2, "the serial port and the TCP device")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	require.NoError(t, a.Run(ctx))
-	require.NoError(t, a.Shutdown(), "the readers stop before their bus")
+	require.NoError(t, a.Shutdown(context.Background()), "the readers stop before their bus")
 	assert.Contains(t, logs.String(), // read after Shutdown: the readers log too
 		`"port":"`+port+`","devices":["meter","inverter"],"timeout":"3s"`)
 }

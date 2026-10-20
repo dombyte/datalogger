@@ -70,13 +70,48 @@ func TestRecoversAfterFailedRotation(t *testing.T) {
 
 	require.NoError(t, os.Remove(path)) // the rename of the rotation fails
 	clk.Advance(time.Hour)
-	require.ErrorContains(t, w.write(row(1)), "csv: rotate")
-	w.reopen() // what writePoll does after the error
+	w.writePoll([]datasource.DataPoint{row(1)}) // a failed rotation keeps writing
 
 	w.writePoll([]datasource.DataPoint{row(2)})
 	w.close()
 
 	assert.Equal(t, header+"2026-09-29T12:00:00Z,meter,power,2,\n", read(t, path))
+}
+
+// Regression: a file that could not be renamed (bind-mounted on its own, a read-only
+// directory) was closed, renamed and reopened after every row, with an error per row.
+// The rotation is retried once per rotateRetry; the repeats log at debug.
+func TestFailedRotationIsRetriedLater(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root can rename in a read-only directory")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.csv")
+	clk := clocktest.NewFake(start)
+	var logs bytes.Buffer
+	w, err := New(Deps{
+		Settings: Settings{FilePath: path, MaxAge: time.Hour, MaxBackups: -1},
+		Clock:    clk,
+		Log:      zerolog.New(&logs).Level(zerolog.InfoLevel),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(dir, 0o555)) // rename fails, appending works
+	t.Cleanup(func() { assert.NoError(t, os.Chmod(dir, 0o755)) })
+
+	clk.Advance(time.Hour)
+	w.writePoll([]datasource.DataPoint{row(1), row(2), row(3)})
+	assert.Equal(t, []string{"error"}, levels(&logs), "one attempt for three rows")
+	clk.Advance(rotateRetry)
+	w.writePoll([]datasource.DataPoint{row(4)})
+	assert.Equal(t, []string{"error"}, levels(&logs), "the retry fails at debug")
+
+	require.NoError(t, os.Chmod(dir, 0o755))
+	clk.Advance(rotateRetry)
+	w.writePoll([]datasource.DataPoint{row(5)})
+	w.close()
+	assert.Equal(t, []string{"error", "info"}, levels(&logs))
+	assert.Len(t, files(t, dir), 2, "rotated once the directory is writable")
 }
 
 func TestOldBackupThatCannotBeDeletedIsSkipped(t *testing.T) {

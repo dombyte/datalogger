@@ -16,6 +16,11 @@ const (
 
 	// DefaultTimeout bounds one write request when ConnSettings.Timeout is 0.
 	DefaultTimeout = 10 * time.Second
+
+	// idleConnTimeout closes a kept-alive connection that was idle this long, before
+	// most servers close it themselves: a request that reuses a connection the server
+	// is closing fails, and Go does not resend a POST.
+	idleConnTimeout = 30 * time.Second
 )
 
 // Client writes points to InfluxDB; *influxdb3.Client implements it.
@@ -39,22 +44,26 @@ type ConnSettings struct {
 // an error means the settings are unusable.
 func NewClient(s ConnSettings) (*influxdb3.Client, error) {
 	timeout := orDefault(s.Timeout, DefaultTimeout)
+	// From the library defaults, so an option set here is the only one changed: an empty
+	// WriteOptions turned AcceptPartial off, and the server then rejected a whole batch
+	// for one bad line.
+	options := influxdb3.DefaultWriteOptions
+	options.UseV2Api = false // v3 endpoint /api/v3/write_lp
+	options.GzipThreshold = gzipThreshold
+	options.NoSync = s.NoSync
 	cfg := influxdb3.ClientConfig{
 		Host:         s.Address,
 		Token:        s.Token,
 		Database:     s.Database,
 		WriteTimeout: timeout,
-		WriteOptions: &influxdb3.WriteOptions{
-			UseV2Api:      false, // v3 endpoint /api/v3/write_lp
-			GzipThreshold: gzipThreshold,
-			NoSync:        s.NoSync,
-		},
+		WriteOptions: &options,
 	}
 	if s.Insecure {
 		// The library applies WriteTimeout only to a client it creates itself.
 		cfg.HTTPClient = &http.Client{Timeout: timeout, Transport: &http.Transport{
 			Proxy:           http.ProxyFromEnvironment,
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: s.Insecure},
+			IdleConnTimeout: idleConnTimeout,
 		}}
 	}
 

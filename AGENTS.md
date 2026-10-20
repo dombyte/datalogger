@@ -27,7 +27,8 @@ Datalogger polls **devices** and forwards every reading to one or more **outputs
 - **Routing:** each output lists the devices it accepts; every reading of such a device is
   copied to that output, except the points it lists in `exclude_points`.
 - **Timestamps** are taken when the data is received from the device (not when the poll
-  starts), in UTC; all points of one poll share the receive time of its last read.
+  starts), in UTC: per read in Modbus direct mode; one per poll in Modbus range mode (its
+  last chunk) and for HTTP (the response).
 - **Runtime:** a single binary configured by one YAML file (`-config`), no database of its
   own; the only HTTP server is the optional `api` output. Shipped as binaries and a multi-arch `scratch` image on ghcr.io.
 
@@ -74,7 +75,7 @@ internal/config/         Config structs (viper/mapstructure), Load() (defaults +
 internal/clock/          Clock interface (Now, tickers, After) + Sleep; clocktest/ fake
 internal/datasource/     DataPoint type, DeviceReader interface
   modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, reconnect;
-                         Bus: one serial port shared by the devices on it
+                         Bus: one connection (TCP device or shared serial port)
   http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text
 internal/transform/      point expressions (expr-lang): compile at startup, Apply per poll
 internal/output/         Writer interface
@@ -171,7 +172,7 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    does not compile or names an unknown point or lookup, an API port that cannot be
    bound) ends the process with exit 1. **Connecting is not construction:** readers connect on their first poll, so a
    device that is down at startup does not stop the others and recovers on its own.
-3. `app.Run` starts the writers, then one `modbus.Bus` per serial port, then the readers
+3. `app.Run` starts the writers, then one `modbus.Bus` per Modbus connection, then the readers
    with one router each. Each reader polls at once, then every `poll_interval`.
 
 ### Failure handling
@@ -193,20 +194,26 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
 ### Shutdown (producers first)
 1. SIGINT/SIGTERM cancels the signal context (`signal.NotifyContext`); `Run` returns.
 2. `Shutdown` cancels the readers: no new poll starts and a backoff wait ends at once.
-   A Modbus read that is in flight finishes and starts no further read of its poll;
-   the points read so far are still delivered (range mode: only a complete poll is; an
-   HTTP request in flight is aborted, so it has no data yet). Each reader then closes its
-   data channel and the routers finish. Then the serial buses stop and close their ports.
+   A Modbus read that is in flight is abandoned (the reader stops waiting at once; its
+   bus finishes it alone) and no further read of its poll starts; the points read so far
+   are still delivered (range mode: only a complete poll is; an HTTP request in flight is
+   aborted, so it has no data yet). Each reader then closes its data channel and the
+   routers finish. Then the Modbus buses stop and close their connections.
 3. `app` closes the output input channels; each writer writes what is queued, flushes
    (CSV flush/close, InfluxDB final batch, webhook queued polls, MQTT disconnect, API
    server shutdown) and
    stops.
-4. `main` bounds all of this with one hard deadline of **8 s** (below Docker's 10 s stop
-   timeout); after it the process exits 1. There is no second-signal force mode: a
-   second signal is ignored, the deadline is the force.
+   The buses finish their request in flight meanwhile.
+4. `main` gives the outputs a drain deadline of **7 s**: then `app` cancels the writers'
+   context, logs how many polls each still had queued, and the writers drop the rest
+   (InfluxDB: the open batch; retries and requests in flight end at once), close their
+   files and connections and stop; `Shutdown` returns `ErrDrainDeadline`. A bus still
+   busy at that point is not waited for. A hard deadline of **8 s** (below Docker's
+   10 s stop timeout) is the backstop; after it the process exits 1. There is no
+   second-signal force mode: a second signal is ignored, the deadlines are the force.
 
 Exit codes: 0 after a clean shutdown; 1 for startup errors, a stopped component, a
-writer that failed, or a missed deadline.
+writer that failed, or a missed deadline (drain or hard).
 
 ---
 
@@ -227,24 +234,29 @@ writer that failed, or a missed deadline.
   registers. Every point address must be covered by a range (checked at construction).
   **Any failed chunk fails the whole poll** (no partial data); no further chunk is read
   after it.
-- All points of a poll share one timestamp, the receive time of its last read (direct:
-  the last successful read; range: the last chunk), so a poll is one snapshot.
+- Timestamps: direct mode stamps every point with the receive time of its own read;
+  range mode stamps all points of a poll with the receive time of its last chunk (the
+  ranges are one block of registers, decoded together).
 - Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool` (others are rejected by
   validation); value = raw × `scale` + `offset`, always delivered as float64. `scale`
   defaults to 1 (an explicit 0 is treated as unset). 32-bit types need `count: 2` (high
   word first); a smaller count is rejected by validation, as is a `count` above 125 or
   registers past 65535.
-- Requests are sent one at a time: they share the device's one connection, on which
-  the client library cannot run requests concurrently.
-- **Serial port (RTU):** every serial port has one `Bus`, created by `app` for all
-  devices with that `rtu://` address (an RS-485 bus with one `slave_id` each, or one
-  device split in two). Its goroutine is the only code that uses the port: readers send
-  their requests (slave, register, count) over a channel and it runs them one after the
-  other, so frames never mix. Devices on a port wait for each other: a slave that does
-  not answer holds the port for its timeout. The port opens on the first request and
-  reopens after a connection error; a timeout keeps it open. The port has one timeout,
-  the largest of its devices. Validation requires the same `speed`, `data_bits`,
-  `parity` and `stop_bits` on all devices of a port. TCP devices keep one connection each.
+- **Connections:** every Modbus connection has one `Bus`, created by `app`: one per TCP
+  device and one per serial port. Its goroutine is the only code that uses the
+  connection: readers send their requests (slave, register, count) over a channel and
+  it runs them one after the other (the client library cannot run requests
+  concurrently), so frames never mix. A reader whose context ends stops waiting for its
+  request at once, also while it is in flight: the library cannot cancel a request, so
+  the bus finishes it alone and skips requests whose caller has gone. The connection
+  opens on the first request and reopens after a connection error; a timeout keeps it
+  open.
+- **Serial port (RTU):** all devices with one `rtu://` address share its bus (an RS-485
+  bus with one `slave_id` each, or one device split in two). Devices on a port wait for
+  each other: a slave that does not answer holds the port for its timeout. The port has
+  one timeout, the largest of its devices. Validation requires the same `speed`,
+  `data_bits`, `parity` and `stop_bits` on all devices of a port. TCP devices keep one
+  connection each.
 
 ### HTTP reader
 - `method` GET (default) or POST with `body`; `headers` are sent as given; `insecure`
@@ -264,23 +276,27 @@ writer that failed, or a missed deadline.
   `type` (`"N/A"` for `int64`, a negative number for `uint*`); gjson would deliver 0 or
   false, which looks like a reading. Such a point is warned about once, further failures
   are logged at debug, and an info line follows when it can be read again.
-- One request per poll; points are parsed in order.
+- One request per poll; points are parsed in order. A response from which no point can
+  be extracted fails the poll (backoff, failure log), like a status error.
 - A request that cannot be built (bad URL, method) fails startup; an unreachable endpoint
   does not.
 
 ### InfluxDB 3 writer
-- Schema: one line per poll; table = device name, one field per point (no tags, the unit
-  is not stored), timestamp = the poll's reading time. A point not read in a poll is
-  missing from its line (`NULL` in that row). The README documents queries on this
+- Schema: one line per timestamp of a poll; table = device name, one field per point
+  (no tags, the unit is not stored), timestamp = the reading time. A poll whose points
+  share one time (Modbus range mode, HTTP) is one line; Modbus direct mode stamps every
+  read on its own, so its poll is one line per read, `NULL` in the other columns. A
+  point not read in a poll is missing from its line (`NULL` in that row). The README documents queries on this
   schema; changing it is a breaking change (`!`).
 - Column types: a column keeps the type of its first value (InfluxDB rejects a line with
   another type, which would lose the whole poll). The writer remembers the first type of
   every column in this run and skips a value of another type: warned once per point,
   then debug, info when the type matches again. After a restart the server may hold
   another type; that line is rejected and logged as a partial write.
-- Batching: a full `batch_size` of lines (polls; default 10000) is written at once, a partial batch every
+- Batching: a full `batch_size` of lines (default 10000) is written at once, a partial batch every
   `batch_timeout` (default 1 s). Retries: `max_retries` (default 3) with `retry_delay`
-  (default 1 s; a longer `Retry-After` of the server wins), only for network errors, 5xx
+  (default 1 s; a longer `Retry-After` of the server wins, at most 1 min: while the
+  writer waits its input fills and drops polls), only for network errors, 5xx
   and 429; after that, or at once for other
   HTTP errors (bad token, unknown database), the batch is dropped and logged. A partial
   write (the server rejects single lines and stores the rest) counts as written: the
@@ -289,7 +305,9 @@ writer that failed, or a missed deadline.
   input is closed on shutdown. The client does not connect at startup.
 - A value line protocol cannot store (anything but float64, int64, uint64, bool,
   string) is skipped with a warning, so it cannot fail the batch of every device.
-- Uses the v3 write API; gzip above 1000 bytes; `timeout` per write request (default
+- Uses the v3 write API with partial writes accepted (the client starts from the
+  library's default write options; `accept_partial=false` would make one bad line
+  reject the whole batch); gzip above 1000 bytes; `timeout` per write request (default
   10 s, also with `insecure`, which skips certificate checks). `no_sync` makes InfluxDB
   answer before the write is in its WAL on disk (faster on slow storage; a crash can
   lose the last WAL flush).
@@ -300,12 +318,20 @@ writer that failed, or a missed deadline.
   name; `insecure` uses TLS without verification (also for `tcp://`). MQTT v5, keep-alive
   30 s, clean start, 10 s connect timeout, 10 s publish timeout (QoS 1/2 wait for the
   acknowledgement; a timed-out publish counts as a publish error).
-- Connects on the first point and reconnects after a publish error or a lost connection,
+- Connects on the first poll and reconnects after a publish error or a lost connection,
   with backoff (1 s doubling to 30 s; the first redial after a publish error is
   immediate, the backoff is reset by the next successful publish). A message the broker
   rejects with an error reason code (e.g. ACL) is logged and the session kept. Points
   that arrive while no connection is possible are **dropped**; the count is logged on
   the next successful connect.
+- Publishing: with QoS 1/2 the points of a poll are published in parallel (at most 64
+  waiting for their acknowledgement; the broker's receive maximum may limit them more),
+  so a poll costs about one round trip, not one per point. The next poll starts when
+  all are answered, so the messages of a topic stay in order. QoS 0 publishes in order
+  and skips the rest of a poll after a failed publish. A poll with failed publishes
+  drops the session once.
+- The connection serialises whole packets (`packets.NewThreadSafeConn`): paho writes
+  from several goroutines and a `tls.Conn` would interleave their frames.
 - Topic: `<topic>/<device>/<point>` (`topic` default `datalogger`); payload
   `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}` (NaN/±Inf values are
   `null`, as in the API); `qos` 0–2, `retain`.
@@ -317,12 +343,17 @@ writer that failed, or a missed deadline.
   when the file is empty. Rows are buffered and flushed when no further poll is queued
   (a single poll reaches the file at once, a backlog in large blocks) and on shutdown. A
   failed write or flush is logged and the file reopened; the rows buffered then are lost.
-- Rotation: when the file is older than `max_age` (checked after each row; the age of an
+- Rotation: when the file is older than `max_age` (checked after each poll, so a poll
+  stays in one file; the age of an
   existing file counts from the timestamp of its first row, so restarts do not reset it),
-  it is renamed to `<file>.<YYYYMMDD-HHMMSS>` (one second later if that backup exists)
+  it is renamed to `<file>.<YYYYMMDD-HHMMSS>` (UTC, like the timestamps in the file; one
+  second later if that backup exists)
   and a new file is started. `max_backups`: 0 = keep none,
   > 0 = keep that many, < 0 = keep all; only files with exactly that name pattern are
   ever deleted.
+  If the rename fails (a file bind-mounted on its own, a read-only directory), the
+  writer keeps appending to the file and tries again after 1 minute; the first failure
+  is logged as an error, repeats at debug, the next rotation at info.
 - A path that cannot be opened fails startup.
 - The directory is created if missing. In the container, write below `/app/data`
   (mounted from `./data`).
@@ -357,7 +388,8 @@ writer that failed, or a missed deadline.
   request, up to `max_batch` readings (default 1000; a larger poll is split). No timer:
   a single poll is never delayed.
 - Any 2xx is a success. Retries: `max_retries` (default 3) with `retry_delay` (default
-  1 s), only for transport errors, 5xx and 429; after that, or at once for other
+  1 s; a longer `Retry-After`, seconds or a date, wins, at most 1 min, as for InfluxDB),
+  only for transport errors, 5xx and 429; after that, or at once for other
   statuses (bad token, rejected payload), the batch is dropped and logged with the status
   and the start of the response body; the next success logs the recovery. Up to 64 KiB of
   every response is read so the connection is reused.
@@ -392,7 +424,9 @@ writer that failed, or a missed deadline.
   closes the connection); Modbus devices on one serial port have the same serial
   settings; a device of an InfluxDB output sends at most 499 points that
   are not excluded (a table holds 500 columns, one of them `time`) and none named
-  `time`; `poll_interval` > 0; `timeout` > 0.
+  `time`; `poll_interval` > 0; `timeout` > 0;
+  Modbus `parity` is N, E or O; `ranges` are only allowed in range mode and each is
+  `start-end` with registers 0–65535 and start ≤ end.
 - Every device and output has a `type` and the block of that type, named like it
   (`modbus:`, `http:`, `influxdb:`, `mqtt:`, `csv:`, `api:`, `webhook:`) and holding
   every setting only that type uses; validation requires that block and rejects a block
@@ -413,12 +447,15 @@ writer that failed, or a missed deadline.
 - **Drop instead of block:** a full output channel drops the poll for that output only. A
   stalled output must not stop polling or starve other outputs. Tune with `buffer_size`.
 - **Receive-time timestamps in UTC:** readings are stamped when the device answered, so
-  slow polls do not shift data; UTC matches InfluxDB and keeps CSV unambiguous. One
-  timestamp per poll (its last read) keeps a poll one snapshot, one InfluxDB row, at the
-  cost of a few milliseconds between the reads of a poll.
+  slow polls do not shift data; UTC matches InfluxDB and keeps CSV unambiguous. A value
+  read on its own (Modbus direct mode) keeps its own time, even if that costs InfluxDB
+  one row per read; values decoded from one block (range mode) or one response (HTTP)
+  share the time of that block, one row per poll.
 - **Producers-first shutdown:** sources stop first, outputs drain afterwards, so no reading
-  that was already taken is lost on a normal stop. One hard deadline (8 s, below Docker's
-  10 s) bounds it; a slow final InfluxDB retry can use most of it.
+  that was already taken is lost on a normal stop. A drain deadline (7 s) cancels the
+  writers, so a hanging endpoint costs the queued data but never an unclean exit (files
+  closed, connections ended); a hard deadline (8 s, below Docker's 10 s) is the
+  backstop.
 - **Soft vs. hard startup failures:** components connect lazily and retry, so one device
   or broker that is down does not stop the others; settings a client library rejects are
   configuration errors and fail startup, where they are noticed at once.
@@ -439,11 +476,13 @@ writer that failed, or a missed deadline.
 - **Exclude instead of per-output transforms:** a decoded value is a separate point (e.g.
   `status` and `status_text` on the same register); outputs that cannot store it skip it
   with `exclude_points`, so every point has one value for all outputs.
-- **InfluxDB schema with one row per poll:** table = device, one column per point. A
-  query reads the columns it needs without filtering by point, several points come from
-  one query, rows shrink by the number of points per poll, and every point gets its own
-  column type (text next to numbers). The cost: at most 499 points per device, and a
-  poll needs one timestamp, which the readers provide.
+- **InfluxDB schema with one row per timestamp:** table = device, one column per point,
+  one row per poll whose points share a time. A query reads the columns it needs without
+  filtering by point, several points come from one query, rows shrink by the number of
+  points per poll, and every point gets its own column type (text next to numbers). The
+  cost: at most 499 points per device. Points with their own read time (Modbus direct
+  mode) get rows of their own rather than a time that is not theirs; queries that
+  aggregate with `date_bin` and skip `NULL` work on both.
 - **Config only from the YAML file, no env overrides:** the config is mostly lists of
   devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`,
   mounted read-only, serves as the secret file.
@@ -452,12 +491,15 @@ writer that failed, or a missed deadline.
   values live in a mutex-guarded map inside the writer: its goroutine is the only
   writer, the HTTP handlers of the same component read copies, so nothing is shared
   between components. The port is bound in the factory so a port in use fails startup.
-- **Serial bus goroutine instead of a shared client:** devices on one RS-485 port must
+- **Bus goroutine instead of a shared client:** devices on one RS-485 port must
   not send at the same time, and the client library keeps the slave ID as state of the
   connection. A mutex around a shared client would hold a lock across I/O (section
   9.1); a goroutine that owns the port and takes requests over a channel keeps the
   hand-over by channel. Sharing is automatic, without an option: separate connections
-  to one port never work.
+  to one port never work. TCP devices use a bus of their own for the same reason the
+  port does at shutdown: the library cannot cancel a read, and a reader that waits for
+  one would hold the shutdown for up to the device timeout; a reader on a bus stops
+  waiting when its context ends.
 - **Hand-written fake clock instead of a mock:** `clock.Clock`/`clock.Ticker` are faked by
   `clocktest.Fake`, not by mockery. Tests need time that moves consistently across tickers
   and `After` (`Advance`); call expectations cannot model that.
@@ -689,6 +731,8 @@ The required CI checks MUST be green before a PR is merged.
 - Every outgoing call has a timeout (device `timeout`, MQTT connect/publish timeout,
   webhook and InfluxDB client); clients verify certificates unless the documented
   `insecure` option is set.
+- HTTP clients close connections idle for 30 s, before most servers close them: a
+  request on a connection the server is closing fails, and Go does not resend a POST.
 - Secrets only in the gitignored `config.yaml` (section 8), never committed or logged.
 - Dependencies: Renovate plus `govulncheck` in CI and in `make check`.
 

@@ -45,6 +45,7 @@ type request struct {
 	url    string
 	header http.Header
 	body   []map[string]any
+	raw    string
 }
 
 // newHarness starts a writer with the queued polls already in its input.
@@ -79,6 +80,12 @@ func newHarness(t *testing.T, s webhook.Settings, queued ...[]datasource.DataPoi
 // silent is a status code answered with an empty body.
 type silent int
 
+// busy is a status code answered with a Retry-After header.
+type busy struct {
+	code       int
+	retryAfter string
+}
+
 // expect answers the next requests in order: an int is a status code with a short
 // body, a silent one without body, an error a transport error.
 func (h *harness) expect(answers ...any) {
@@ -89,13 +96,17 @@ func (h *harness) expect(answers ...any) {
 				if err, ok := answer.(error); ok {
 					return nil, err
 				}
-				body := " bad token \n"
+				body, header := " bad token \n", http.Header{}
 				code, ok := answer.(int)
 				if s, isSilent := answer.(silent); !ok && isSilent {
 					code, body = int(s), ""
 				}
+				if b, isBusy := answer.(busy); isBusy {
+					code = b.code
+					header.Set("Retry-After", b.retryAfter)
+				}
 				return &http.Response{
-					StatusCode: code, Body: io.NopCloser(strings.NewReader(body)),
+					StatusCode: code, Header: header, Body: io.NopCloser(strings.NewReader(body)),
 				}, nil
 			}).Once()
 	}
@@ -108,6 +119,7 @@ func (h *harness) record(req *http.Request) request {
 	require.NoError(h.t, json.Unmarshal(body, &readings))
 	return request{
 		method: req.Method, url: req.URL.String(), header: req.Header, body: readings,
+		raw: string(body),
 	}
 }
 
@@ -209,6 +221,22 @@ func TestSendsPollAsJSONArray(t *testing.T) {
 	}, r.body)
 }
 
+// The body format is a public interface: a compact array, keys in field order. A point
+// skipped in the middle of a batch leaves no gap in it.
+func TestBodyBytes(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, webhook.Settings{})
+	h.expect(http.StatusOK)
+
+	h.input <- []datasource.DataPoint{point("a", 1.0), point("odd", make(chan int)), point("b", true)}
+	r := h.request()
+	h.stop()
+
+	const stamp = `"timestamp":"2026-10-15T08:23:20.123Z"`
+	assert.Equal(t, `[{"device":"meter","point":"a","value":1,"unit":"W",`+stamp+`},`+
+		`{"device":"meter","point":"b","value":true,"unit":"W",`+stamp+`}]`, r.raw)
+}
+
 func TestSendsJSONContentTypeAndPUT(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, webhook.Settings{Method: "put"})
@@ -260,6 +288,49 @@ func TestRetriesServerErrorsRateLimitsAndTransportErrors(t *testing.T) {
 	h.stop()
 
 	assert.NotContains(t, h.logs.String(), "secret", "tokens in the URL are not logged")
+}
+
+// Regression: the webhook ignored Retry-After and retried a busy endpoint after
+// retry_delay; it waits like the InfluxDB writer now: the longer of the two, the
+// Retry-After (seconds or a date) at most a minute.
+func TestRetryWaitsForRetryAfter(t *testing.T) {
+	t.Parallel()
+	retryAt := start.Add(4 * time.Second).Truncate(time.Second) // dates have seconds only
+	tests := []struct {
+		name       string
+		retryAfter string
+		wait       time.Duration
+	}{
+		{name: "seconds", retryAfter: "5", wait: 5 * time.Second},
+		{name: "date", retryAfter: retryAt.Format(http.TimeFormat), wait: retryAt.Sub(start)},
+		{name: "shorter than retry_delay", retryAfter: "0", wait: time.Second},
+		{name: "invalid", retryAfter: "soon", wait: time.Second},
+		{name: "capped", retryAfter: "86400", wait: time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, webhook.Settings{MaxRetries: 1, RetryDelay: time.Second})
+			h.expect(busy{code: http.StatusTooManyRequests, retryAfter: tt.retryAfter},
+				http.StatusOK)
+
+			h.input <- []datasource.DataPoint{point("power", 1.0)}
+			h.request()
+			if tt.wait > time.Second {
+				h.advance(tt.wait - time.Nanosecond)
+				select {
+				case r := <-h.requests:
+					t.Fatalf("retried before the Retry-After: %v", r)
+				case <-time.After(20 * time.Millisecond):
+				}
+				h.advance(time.Nanosecond)
+			} else {
+				h.advance(tt.wait)
+			}
+			h.request()
+			h.stop()
+		})
+	}
 }
 
 func TestDropsAfterRetriesAndLogsRecovery(t *testing.T) {
@@ -347,6 +418,8 @@ func TestNewClient(t *testing.T) {
 	transport, ok := c.Transport.(*http.Transport)
 	require.True(t, ok)
 	assert.True(t, transport.TLSClientConfig.InsecureSkipVerify)
+	assert.Equal(t, 30*time.Second, transport.IdleConnTimeout,
+		"idle connections close before most servers close them")
 
 	assert.Equal(t, 3*time.Second, webhook.NewClient(3*time.Second, false).Timeout)
 }

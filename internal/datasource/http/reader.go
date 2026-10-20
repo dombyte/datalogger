@@ -43,6 +43,9 @@ var (
 
 	// ErrInvalidSettings is returned by New for settings the reader cannot work with.
 	ErrInvalidSettings = errors.New("http: invalid settings")
+
+	// errNoPoints fails a poll whose response holds none of the points.
+	errNoPoints = errors.New("no point could be extracted from the response")
 )
 
 // Settings configures a Reader.
@@ -215,7 +218,13 @@ func (r *Reader) poll(ctx context.Context) ([]datasource.DataPoint, error) {
 		return nil, fmt.Errorf("response larger than %d bytes", maxBodySize)
 	}
 
-	return r.parsePoints(body, r.clock.Now().UTC()), nil
+	points := r.parsePoints(body, r.clock.Now().UTC())
+	if len(points) == 0 {
+		// An answer without any point (an error document with status 200) is no reading:
+		// the poll fails and backs off like any other failure.
+		return nil, errNoPoints
+	}
+	return points, nil
 }
 
 // newRequest builds the configured request.

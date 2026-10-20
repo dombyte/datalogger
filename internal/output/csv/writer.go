@@ -26,6 +26,11 @@ const (
 
 	// backupTimeFormat is the suffix of rotated files: <file>.<YYYYMMDD-HHMMSS>.
 	backupTimeFormat = "20060102-150405"
+
+	// rotateRetry is how long a rotation whose rename failed waits before it is tried
+	// again: a file that cannot be renamed (bind-mounted on its own, a read-only
+	// directory) would otherwise be closed, renamed and reopened after every row.
+	rotateRetry = time.Minute
 )
 
 // ErrMissingDependency is returned by New when a required dependency is missing.
@@ -57,6 +62,11 @@ type Writer struct {
 	csv      *stdcsv.Writer
 	opened   time.Time // for rotation
 	failed   bool      // the previous write failed
+
+	// After a failed rotation: no new attempt before retryRotation; rotateFailed logs
+	// repeats at debug and the recovery at info.
+	retryRotation time.Time
+	rotateFailed  bool
 
 	// The points of one poll often share their timestamp: the last one is formatted once.
 	lastTime  time.Time
@@ -112,13 +122,21 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 	return done
 }
 
-// writePoll buffers one row per point. A failed row is logged and the file reopened;
-// the next row goes to the new file.
+// writePoll buffers one row per point, then rotates the file when it is older than
+// MaxAge, so the rows of a poll stay in one file. A failed row is logged and the file
+// reopened; the next row goes to the new file.
 func (w *Writer) writePoll(points []datasource.DataPoint) {
 	for _, dp := range points {
 		if err := w.write(dp); err != nil {
 			w.logger.Error().Str("device", dp.DeviceName).Str("point", dp.PointName).Err(err).
 				Msg("Failed to write CSV row")
+			w.failed = true
+			w.reopen()
+		}
+	}
+	if now := w.clock.Now(); w.rotationDue(now) {
+		if err := w.rotate(now); err != nil {
+			w.logger.Error().Err(err).Msg("Failed to rotate CSV file")
 			w.failed = true
 			w.reopen()
 		}
@@ -206,7 +224,7 @@ func (w *Writer) close() {
 	}
 }
 
-// write buffers one row and rotates the file when it is older than MaxAge.
+// write buffers one row.
 func (w *Writer) write(dp datasource.DataPoint) error {
 	err := w.csv.Write([]string{
 		w.timestamp(dp.Timestamp),
@@ -218,11 +236,14 @@ func (w *Writer) write(dp datasource.DataPoint) error {
 	if err != nil {
 		return fmt.Errorf("csv: write: %w", err)
 	}
-
-	if w.settings.MaxAge > 0 && w.clock.Now().Sub(w.opened) >= w.settings.MaxAge {
-		return w.rotate()
-	}
 	return nil
+}
+
+// rotationDue reports whether the file is older than MaxAge and no failed rotation
+// waits for its retry.
+func (w *Writer) rotationDue(now time.Time) bool {
+	return w.settings.MaxAge > 0 && now.Sub(w.opened) >= w.settings.MaxAge &&
+		!now.Before(w.retryRotation)
 }
 
 // timestamp returns t formatted for a row, reusing the last result for the same time.
@@ -246,17 +267,18 @@ func (w *Writer) writeHeader() error {
 }
 
 // rotate renames the file to <file>.<timestamp>, removes backups beyond MaxBackups and
-// starts a new file.
-func (w *Writer) rotate() error {
+// starts a new file. If the rename fails, it keeps appending to the file and tries
+// again after rotateRetry.
+func (w *Writer) rotate(now time.Time) error {
 	w.close()
 
 	backup := w.backupName()
 	if err := os.Rename(w.settings.FilePath, backup); err != nil {
-		return fmt.Errorf("csv: rotate: %w", err)
+		w.rotationFailed(now, err)
+	} else {
+		w.rotated(backup)
+		w.removeOldBackups()
 	}
-	w.logger.Debug().Str("backup", backup).Msg("CSV file rotated")
-
-	w.removeOldBackups()
 
 	if err := w.open(); err != nil {
 		return fmt.Errorf("csv: open after rotation: %w", err)
@@ -264,10 +286,36 @@ func (w *Writer) rotate() error {
 	return nil
 }
 
-// backupName returns <file>.<YYYYMMDD-HHMMSS> for now, one second later for every
-// backup of that name that exists already: Rename would replace it.
+// rotationFailed schedules the retry of a rotation and logs the failure: an error the
+// first time, then at debug until a rotation works again.
+func (w *Writer) rotationFailed(now time.Time, err error) {
+	w.retryRotation = now.Add(rotateRetry)
+	level := zerolog.ErrorLevel
+	if w.rotateFailed {
+		level = zerolog.DebugLevel
+	}
+	w.rotateFailed = true
+	w.logger.WithLevel(level).Err(err).Stringer("retry_in", rotateRetry).
+		Msg("Failed to rotate CSV file, appending to it")
+}
+
+// rotated logs a rotation, at info after failed ones.
+func (w *Writer) rotated(backup string) {
+	if w.rotateFailed {
+		w.rotateFailed = false
+		w.logger.Info().Str("backup", backup).
+			Msg("CSV file rotated (recovered from previous error)")
+		return
+	}
+	w.logger.Debug().Str("backup", backup).Msg("CSV file rotated")
+}
+
+// backupName returns <file>.<YYYYMMDD-HHMMSS> for now in UTC, like the timestamps in
+// the file, one second later for every backup of that name that exists already: Rename
+// would replace it. In local time the names would not sort by age across a DST change,
+// and removeOldBackups could delete a newer backup.
 func (w *Writer) backupName() string {
-	for t := w.clock.Now(); ; t = t.Add(time.Second) {
+	for t := w.clock.Now().UTC(); ; t = t.Add(time.Second) {
 		backup := w.settings.FilePath + "." + t.Format(backupTimeFormat)
 		if _, err := os.Lstat(backup); errors.Is(err, os.ErrNotExist) {
 			return backup
