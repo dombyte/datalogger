@@ -305,7 +305,9 @@ writer that failed, or a missed deadline (drain or hard).
   input is closed on shutdown. The client does not connect at startup.
 - A value line protocol cannot store (anything but float64, int64, uint64, bool,
   string) is skipped with a warning, so it cannot fail the batch of every device.
-- Uses the v3 write API; gzip above 1000 bytes; `timeout` per write request (default
+- Uses the v3 write API with partial writes accepted (the client starts from the
+  library's default write options; `accept_partial=false` would make one bad line
+  reject the whole batch); gzip above 1000 bytes; `timeout` per write request (default
   10 s, also with `insecure`, which skips certificate checks). `no_sync` makes InfluxDB
   answer before the write is in its WAL on disk (faster on slow storage; a crash can
   lose the last WAL flush).
