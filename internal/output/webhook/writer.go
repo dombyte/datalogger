@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +35,11 @@ const (
 
 	// maxErrorBody is the part of an error response shown in the error message.
 	maxErrorBody = 256
+
+	// maxRetryAfter bounds the wait a Retry-After asks for: while the writer waits, its
+	// input fills up and drops new polls, so a longer wait would lose more than a retry
+	// that fails again.
+	maxRetryAfter = time.Minute
 )
 
 var (
@@ -260,8 +266,10 @@ func (w *Writer) sendWithRetry(ctx context.Context, body []byte) error {
 	var err error
 	for attempt := range w.settings.MaxRetries + 1 {
 		if attempt > 0 {
-			w.logger.Warn().Int("attempt", attempt+1).Err(err).Msg("Retrying webhook request")
-			if !clock.Sleep(ctx, w.clock, w.settings.RetryDelay) {
+			delay := w.retryDelay(err)
+			w.logger.Warn().Int("attempt", attempt+1).Stringer("retry_in", delay).Err(err).
+				Msg("Retrying webhook request")
+			if !clock.Sleep(ctx, w.clock, delay) {
 				return fmt.Errorf("cancelled while retrying: %w", err)
 			}
 		}
@@ -300,7 +308,11 @@ func (w *Writer) send(ctx context.Context, body []byte) error {
 		// failed read only shortens the message.
 		msg, _ := io.ReadAll(io.LimitReader(rest, maxErrorBody)) //nolint:errcheck // see above
 		discard(rest)
-		return &statusError{code: resp.StatusCode, body: strings.TrimSpace(string(msg))}
+		return &statusError{
+			code:       resp.StatusCode,
+			body:       strings.TrimSpace(string(msg)),
+			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), w.clock.Now()),
+		}
 	}
 	discard(rest)
 	return nil
@@ -314,8 +326,9 @@ func discard(r io.Reader) {
 
 // statusError is a response outside 2xx.
 type statusError struct {
-	code int
-	body string // start of the response body
+	code       int
+	body       string        // start of the response body
+	retryAfter time.Duration // the Retry-After of the response, 0 without one
 }
 
 func (e *statusError) Error() string {
@@ -323,6 +336,33 @@ func (e *statusError) Error() string {
 		return fmt.Sprintf("HTTP status %d", e.code)
 	}
 	return fmt.Sprintf("HTTP status %d: %s", e.code, e.body)
+}
+
+// retryDelay returns RetryDelay, or the Retry-After of the answer (at most
+// maxRetryAfter) if that is longer: retrying earlier only adds load to a server that
+// is busy. The InfluxDB writer waits the same way.
+func (w *Writer) retryDelay(err error) time.Duration {
+	var statusErr *statusError
+	if !errors.As(err, &statusErr) {
+		return w.settings.RetryDelay
+	}
+	return max(w.settings.RetryDelay, statusErr.retryAfter)
+}
+
+// parseRetryAfter returns the wait of a Retry-After header (seconds or an HTTP date),
+// at most maxRetryAfter; 0 when it is missing or invalid.
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+		// Capped before the conversion, which would overflow for huge values.
+		return time.Duration(min(max(seconds, 0), int(maxRetryAfter/time.Second))) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return min(max(at.Sub(now), 0), maxRetryAfter)
+	}
+	return 0
 }
 
 // retryable reports whether a request may succeed when repeated: network errors,

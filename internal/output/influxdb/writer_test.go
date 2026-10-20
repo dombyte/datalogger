@@ -313,6 +313,26 @@ func TestRetryWaitsForRetryAfter(t *testing.T) {
 	h.stop()
 }
 
+// A Retry-After is waited for at most a minute: meanwhile the input fills and drops
+// new polls.
+func TestRetryAfterIsCapped(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 1, RetryDelay: time.Second})
+	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).
+		Return(&influxdb3.ServerError{StatusCode: 503, RetryAfter: 86400}).Once()
+	retried := make(chan time.Time, 1)
+	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).RunAndReturn(
+		func(context.Context, []*influxdb3.Point, ...influxdb3.WriteOption) error {
+			retried <- h.clock.Now()
+			return nil
+		}).Once()
+
+	h.input <- []datasource.DataPoint{point("power", 1.0, "")}
+	h.advance(2, time.Minute) // ticker + retry wait
+	assert.Equal(t, start.Add(time.Minute), <-retried)
+	h.stop()
+}
+
 // InfluxDB keeps one type per column and rejects a line with a value of another type,
 // which would lose the whole poll; only that value is skipped.
 func TestSkipsValueOfAnotherColumnType(t *testing.T) {
