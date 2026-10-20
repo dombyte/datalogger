@@ -630,9 +630,10 @@ func (h *harness) readTakes(call *mocks.MockClient_ReadRegisters_Call, values []
 	}).Once()
 }
 
-// All points of a poll share one timestamp, the receive time of the last read, so the
-// poll is one snapshot (one InfluxDB row) although its reads arrive at different times.
-func TestPollHasOneTimestamp(t *testing.T) {
+// Regression: direct mode stamped every point with the time of the last read of its
+// poll. Each read keeps its own receive time now; range mode reads one block of
+// registers, so all its points share the receive time of the last chunk.
+func TestPollTimestamps(t *testing.T) {
 	t.Parallel()
 	points := []modbus.Point{
 		{Name: "a", Register: 10, Type: "uint16", Scale: 1},
@@ -641,9 +642,14 @@ func TestPollHasOneTimestamp(t *testing.T) {
 	tests := []struct {
 		name   string
 		ranges []string
+		want   map[string]time.Time
 	}{
-		{name: "direct mode"},
-		{name: "range mode", ranges: []string{"10-10", "20-20"}},
+		{name: "direct mode", want: map[string]time.Time{
+			"a": start.Add(10 * time.Millisecond), "b": start.Add(20 * time.Millisecond),
+		}},
+		{name: "range mode", ranges: []string{"10-10", "20-20"}, want: map[string]time.Time{
+			"a": start.Add(20 * time.Millisecond), "b": start.Add(20 * time.Millisecond),
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -653,15 +659,17 @@ func TestPollHasOneTimestamp(t *testing.T) {
 			h := newHarness(t, s)
 			h.dialer.EXPECT().Dial(mock.Anything).Return(h.client, nil).Once()
 			for _, reg := range []uint16{10, 20} {
-				h.readTakes(h.client.EXPECT().ReadRegisters(mock.Anything, reg, uint16(1), lib.HOLDING_REGISTER),
-					[]uint16{1}, 10*time.Millisecond)
+				h.readTakes(h.client.EXPECT().ReadRegisters(mock.Anything, reg, uint16(1),
+					lib.HOLDING_REGISTER), []uint16{1}, 10*time.Millisecond)
 			}
 			h.client.EXPECT().Close().Return(nil).Once()
 
 			h.start()
+			got := map[string]time.Time{}
 			for _, dp := range h.receivePoll() {
-				assert.Equal(t, start.Add(20*time.Millisecond), dp.Timestamp, dp.PointName)
+				got[dp.PointName] = dp.Timestamp
 			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

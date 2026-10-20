@@ -70,8 +70,9 @@ outputs:
 ### How data flows
 
 - Every **device** is polled at once on startup, then every `poll_interval`. Each poll
-  is stamped with the time the device answered (its last read), in UTC; all points of a
-  poll share that time.
+  is stamped with the time the device answered, in UTC: Modbus `direct` mode stamps every
+  point with the time of its own read; Modbus `range` mode (last chunk) and HTTP (the
+  response) stamp all points of a poll with one time.
 - Every **output** lists the `devices` it receives. All their points are copied to it,
   except those listed in `exclude_points` (`device/point`).
 - Each output has its own queue of polls (`buffer_size`, default 1000): every poll of a
