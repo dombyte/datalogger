@@ -306,10 +306,12 @@ func (w *Writer) rotated(backup string) {
 	w.logger.Debug().Str("backup", backup).Msg("CSV file rotated")
 }
 
-// backupName returns <file>.<YYYYMMDD-HHMMSS> for now, one second later for every
-// backup of that name that exists already: Rename would replace it.
+// backupName returns <file>.<YYYYMMDD-HHMMSS> for now in UTC, like the timestamps in
+// the file, one second later for every backup of that name that exists already: Rename
+// would replace it. In local time the names would not sort by age across a DST change,
+// and removeOldBackups could delete a newer backup.
 func (w *Writer) backupName() string {
-	for t := w.clock.Now(); ; t = t.Add(time.Second) {
+	for t := w.clock.Now().UTC(); ; t = t.Add(time.Second) {
 		backup := w.settings.FilePath + "." + t.Format(backupTimeFormat)
 		if _, err := os.Lstat(backup); errors.Is(err, os.ErrNotExist) {
 			return backup

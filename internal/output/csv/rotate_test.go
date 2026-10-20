@@ -154,3 +154,24 @@ func TestRotationsInOneSecondKeepEveryBackup(t *testing.T) {
 		"data.csv.20260929-120002",
 	}, files(t, dir))
 }
+
+// Regression: backup names used the local time, so with a time zone the names did not
+// match the UTC timestamps in the file and did not sort by age across a DST change.
+func TestBackupNamesUseUTC(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.csv")
+	berlin := time.FixedZone("CEST", 2*60*60)
+	clk := clocktest.NewFake(start.In(berlin))
+	w, err := New(Deps{
+		Settings: Settings{FilePath: path, MaxAge: time.Hour, MaxBackups: -1},
+		Clock:    clk,
+		Log:      zerolog.Nop(),
+	})
+	require.NoError(t, err)
+
+	clk.Advance(time.Hour)
+	require.NoError(t, w.write(row(1)))
+	w.close()
+	assert.Equal(t, []string{"data.csv", "data.csv.20260929-130000"}, files(t, dir))
+}
