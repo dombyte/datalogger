@@ -274,7 +274,8 @@ writer that failed, or a missed deadline (drain or hard).
   `type` (`"N/A"` for `int64`, a negative number for `uint*`); gjson would deliver 0 or
   false, which looks like a reading. Such a point is warned about once, further failures
   are logged at debug, and an info line follows when it can be read again.
-- One request per poll; points are parsed in order.
+- One request per poll; points are parsed in order. A response from which no point can
+  be extracted fails the poll (backoff, failure log), like a status error.
 - A request that cannot be built (bad URL, method) fails startup; an unreachable endpoint
   does not.
 
