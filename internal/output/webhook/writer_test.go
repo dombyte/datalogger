@@ -45,6 +45,7 @@ type request struct {
 	url    string
 	header http.Header
 	body   []map[string]any
+	raw    string
 }
 
 // newHarness starts a writer with the queued polls already in its input.
@@ -108,6 +109,7 @@ func (h *harness) record(req *http.Request) request {
 	require.NoError(h.t, json.Unmarshal(body, &readings))
 	return request{
 		method: req.Method, url: req.URL.String(), header: req.Header, body: readings,
+		raw: string(body),
 	}
 }
 
@@ -207,6 +209,22 @@ func TestSendsPollAsJSONArray(t *testing.T) {
 			"timestamp": "2026-10-15T08:23:20.123Z",
 		},
 	}, r.body)
+}
+
+// The body format is a public interface: a compact array, keys in field order. A point
+// skipped in the middle of a batch leaves no gap in it.
+func TestBodyBytes(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, webhook.Settings{})
+	h.expect(http.StatusOK)
+
+	h.input <- []datasource.DataPoint{point("a", 1.0), point("odd", make(chan int)), point("b", true)}
+	r := h.request()
+	h.stop()
+
+	const stamp = `"timestamp":"2026-10-15T08:23:20.123Z"`
+	assert.Equal(t, `[{"device":"meter","point":"a","value":1,"unit":"W",`+stamp+`},`+
+		`{"device":"meter","point":"b","value":true,"unit":"W",`+stamp+`}]`, r.raw)
 }
 
 func TestSendsJSONContentTypeAndPUT(t *testing.T) {
