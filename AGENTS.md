@@ -291,7 +291,8 @@ writer that failed, or a missed deadline (drain or hard).
   another type; that line is rejected and logged as a partial write.
 - Batching: a full `batch_size` of lines (polls; default 10000) is written at once, a partial batch every
   `batch_timeout` (default 1 s). Retries: `max_retries` (default 3) with `retry_delay`
-  (default 1 s; a longer `Retry-After` of the server wins), only for network errors, 5xx
+  (default 1 s; a longer `Retry-After` of the server wins, at most 1 min: while the
+  writer waits its input fills and drops polls), only for network errors, 5xx
   and 429; after that, or at once for other
   HTTP errors (bad token, unknown database), the batch is dropped and logged. A partial
   write (the server rejects single lines and stores the rest) counts as written: the
@@ -381,7 +382,8 @@ writer that failed, or a missed deadline (drain or hard).
   request, up to `max_batch` readings (default 1000; a larger poll is split). No timer:
   a single poll is never delayed.
 - Any 2xx is a success. Retries: `max_retries` (default 3) with `retry_delay` (default
-  1 s), only for transport errors, 5xx and 429; after that, or at once for other
+  1 s; a longer `Retry-After`, seconds or a date, wins, at most 1 min, as for InfluxDB),
+  only for transport errors, 5xx and 429; after that, or at once for other
   statuses (bad token, rejected payload), the batch is dropped and logged with the status
   and the start of the response body; the next success logs the recovery. Up to 64 KiB of
   every response is read so the connection is reused.

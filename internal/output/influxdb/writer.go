@@ -24,6 +24,11 @@ const (
 	DefaultRetryDelay   = 1 * time.Second
 )
 
+// maxRetryAfter bounds the wait a Retry-After asks for: while the writer waits, its input
+// fills up and drops new polls, so a longer wait would lose more than a retry that
+// fails again.
+const maxRetryAfter = time.Minute
+
 // ErrMissingDependency is returned by New when a required dependency is missing.
 var ErrMissingDependency = errors.New("influxdb: missing dependency")
 
@@ -309,14 +314,17 @@ func (w *Writer) writeWithRetry(ctx context.Context) error {
 	return fmt.Errorf("after %d retries: %w", w.settings.MaxRetries, err)
 }
 
-// retryDelay returns RetryDelay, or the Retry-After of a 429 or 503 answer if that is
-// longer: retrying earlier only adds load to a server that is busy.
+// retryDelay returns RetryDelay, or the Retry-After of a 429 or 503 answer (at most
+// maxRetryAfter) if that is longer: retrying earlier only adds load to a server that
+// is busy. The webhook writer waits the same way.
 func (w *Writer) retryDelay(err error) time.Duration {
 	var serverErr *influxdb3.ServerError
 	if !errors.As(err, &serverErr) {
 		return w.settings.RetryDelay
 	}
-	return max(w.settings.RetryDelay, time.Duration(serverErr.RetryAfter)*time.Second)
+	// Capped before the conversion, which would overflow for huge values.
+	seconds := min(max(serverErr.RetryAfter, 0), int(maxRetryAfter/time.Second))
+	return max(w.settings.RetryDelay, time.Duration(seconds)*time.Second)
 }
 
 // retryable reports whether a write may succeed when repeated: network errors, server
