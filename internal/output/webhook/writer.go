@@ -70,8 +70,17 @@ type Writer struct {
 	client   Client
 	clock    clock.Clock
 	logger   zerolog.Logger
-	batch    [][]byte // JSON-encoded readings
-	failed   bool     // the previous batch failed
+	failed   bool // the previous batch failed
+
+	// The JSON array of the batch: "[" and the readings so far, without the closing "]";
+	// reused by every batch, so encoding a reading allocates nothing.
+	body    bytes.Buffer
+	enc     *json.Encoder // writes to body
+	reading int           // readings in body
+
+	// The points of one poll share their timestamp: the last one is formatted once.
+	lastTime  time.Time
+	lastStamp string
 }
 
 // reading is one element of the JSON array; the fields match the API and MQTT payloads.
@@ -108,13 +117,14 @@ func New(d Deps) (*Writer, error) {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidSettings, err)
 	}
 
-	return &Writer{
+	w := &Writer{
 		settings: s,
 		client:   d.Client,
 		clock:    d.Clock,
 		logger:   d.Log.With().Str("component", "webhook").Str("output", s.Name).Logger(),
-		batch:    make([][]byte, 0, s.MaxBatch),
-	}, nil
+	}
+	w.enc = json.NewEncoder(&w.body)
+	return w, nil
 }
 
 // checkSettings checks the method and that the URL is an absolute http(s) URL; the
@@ -175,7 +185,7 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 func (w *Writer) addAll(ctx context.Context, points []datasource.DataPoint) {
 	for _, dp := range points {
 		w.add(dp)
-		if len(w.batch) >= w.settings.MaxBatch {
+		if w.reading >= w.settings.MaxBatch {
 			w.flush(ctx)
 		}
 	}
@@ -184,30 +194,54 @@ func (w *Writer) addAll(ctx context.Context, points []datasource.DataPoint) {
 // add encodes dp and appends it to the batch. A value JSON cannot encode is skipped:
 // it would fail the whole request, which holds the points of every queued poll.
 func (w *Writer) add(dp datasource.DataPoint) {
-	b, err := json.Marshal(reading{
+	mark := w.body.Len()
+	if w.reading == 0 {
+		w.body.WriteByte('[')
+	} else {
+		w.body.WriteByte(',')
+	}
+	// Encode writes nothing when it fails, and ends a value with a newline.
+	err := w.enc.Encode(reading{
 		Device:    dp.DeviceName,
 		Point:     dp.PointName,
 		Value:     dp.JSONValue(), // NaN and ±Inf have no JSON form: null
 		Unit:      dp.Unit,
-		Timestamp: dp.Timestamp.Format(time.RFC3339Nano),
+		Timestamp: w.timestamp(dp.Timestamp),
 	})
 	if err != nil {
+		w.body.Truncate(mark)
 		w.logger.Warn().Str("device", dp.DeviceName).Str("point", dp.PointName).Err(err).
 			Msg("Skipping point with a value JSON cannot encode")
 		return
 	}
-	w.batch = append(w.batch, b)
+	w.body.Truncate(w.body.Len() - 1)
+	w.reading++
+}
+
+// timestamp returns t formatted for a reading, reusing the last result for the same time.
+func (w *Writer) timestamp(t time.Time) string {
+	// == instead of Equal: the same instant in another location formats differently.
+	if t != w.lastTime || w.lastStamp == "" {
+		w.lastTime, w.lastStamp = t, t.Format(time.RFC3339Nano)
+	}
+	return w.lastStamp
 }
 
 // flush sends the batch with retries; after the last retry the batch is dropped.
 func (w *Writer) flush(ctx context.Context) {
-	if len(w.batch) == 0 {
+	if w.reading == 0 {
 		return
 	}
-	defer func() { w.batch = w.batch[:0] }()
+	defer func() {
+		w.body.Reset()
+		w.reading = 0
+	}()
 
-	log := w.logger.With().Int("points", len(w.batch)).Logger()
-	err := w.sendWithRetry(ctx)
+	log := w.logger.With().Int("points", w.reading).Logger()
+	w.body.WriteByte(']')
+	// A copy for the requests: the transport may still read a body after Do returned
+	// (an early answer), while body already takes the next batch.
+	err := w.sendWithRetry(ctx, bytes.Clone(w.body.Bytes()))
 	switch {
 	case err != nil:
 		log.Error().Err(err).Msg("Dropping batch after failed requests")
@@ -220,10 +254,9 @@ func (w *Writer) flush(ctx context.Context) {
 	}
 }
 
-// sendWithRetry sends the batch as a JSON array 1 + MaxRetries times, RetryDelay apart.
-func (w *Writer) sendWithRetry(ctx context.Context) error {
-	body := append([]byte("["), bytes.Join(w.batch, []byte(","))...)
-	body = append(body, ']')
+// sendWithRetry sends body, the JSON array of the batch, 1 + MaxRetries times,
+// RetryDelay apart.
+func (w *Writer) sendWithRetry(ctx context.Context, body []byte) error {
 	var err error
 	for attempt := range w.settings.MaxRetries + 1 {
 		if attempt > 0 {
