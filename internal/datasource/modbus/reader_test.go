@@ -314,6 +314,27 @@ func TestRangeModeFailedChunkFailsPoll(t *testing.T) {
 	}
 }
 
+// A chunk with fewer registers than requested fails the poll: the registers it lacks
+// would hold the values of the previous poll.
+func TestRangeModeShortChunkFailsPoll(t *testing.T) {
+	t.Parallel()
+	s := settings(modbus.Point{Name: "p", Register: 0, Type: "uint16", Scale: 1})
+	s.RangeMode, s.Ranges = true, []string{"0-9"}
+	h := newHarness(t, s)
+	h.dialer.EXPECT().Dial(mock.Anything).Return(h.client, nil).Once()
+	failed := signal(h.client.EXPECT().ReadRegisters(mock.Anything, uint16(0), uint16(10),
+		lib.HOLDING_REGISTER).Return(make([]uint16, 9), nil).Once())
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.start()
+	<-failed
+	select {
+	case points := <-h.data:
+		t.Fatalf("unexpected data points %v", points)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestStopClosesChannelsAndConnection(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, settings(modbus.Point{Name: "p", Register: 1, Type: "uint16", Scale: 1}))

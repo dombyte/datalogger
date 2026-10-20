@@ -81,6 +81,11 @@ type Reader struct {
 	ranges   []Range
 	regType  modbus.RegType
 
+	// Range mode: the registers of each range, reused by every poll, and where each point
+	// (by index in Settings.Points) is in them.
+	registers [][]uint16
+	slots     []slot
+
 	client    Client // nil while disconnected
 	failCount int
 	backoff   time.Duration
@@ -106,11 +111,16 @@ func New(d Deps) (*Reader, error) {
 			return nil, fmt.Errorf("%w: %w", ErrInvalidSettings, err)
 		}
 		r.ranges = ranges
-		if err := r.checkCoverage(); err != nil {
+		if err := r.planSlots(); err != nil {
 			return nil, err
 		}
 	}
 	return r, nil
+}
+
+// slot is where the registers of a point are: in range rng, from offset on.
+type slot struct {
+	rng, offset int
 }
 
 // checkDeps reports missing dependencies and unusable settings.
@@ -146,26 +156,34 @@ func regType(points []Point) modbus.RegType {
 	return modbus.HOLDING_REGISTER
 }
 
-// checkCoverage checks that one configured range holds all registers of every point.
-func (r *Reader) checkCoverage() error {
-	for _, p := range r.settings.Points {
-		if !r.isCovered(p) {
+// planSlots finds a range that holds all registers of every point and allocates the
+// register buffer of every range.
+func (r *Reader) planSlots() error {
+	r.registers = make([][]uint16, len(r.ranges))
+	for i, rng := range r.ranges {
+		r.registers[i] = make([]uint16, int(rng.End)-int(rng.Start)+1)
+	}
+	r.slots = make([]slot, len(r.settings.Points))
+	for i, p := range r.settings.Points {
+		s, ok := r.slot(p)
+		if !ok {
 			return fmt.Errorf("%w: point '%s' register range %d-%d not covered by any range",
 				ErrInvalidSettings, p.Name, p.Register, pointEnd(p))
 		}
+		r.slots[i] = s
 	}
 	return nil
 }
 
-// isCovered reports whether one configured range holds all registers of the point.
-func (r *Reader) isCovered(p Point) bool {
+// slot returns the first range that holds all registers of the point.
+func (r *Reader) slot(p Point) (slot, bool) {
 	end := pointEnd(p)
-	for _, rng := range r.ranges {
+	for i, rng := range r.ranges {
 		if p.Register >= rng.Start && end <= rng.End {
-			return true
+			return slot{rng: i, offset: int(p.Register - rng.Start)}, true
 		}
 	}
-	return false
+	return slot{}, false
 }
 
 // pointEnd returns the last register of a point.
