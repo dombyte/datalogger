@@ -86,31 +86,20 @@ func (w *Writer) authorize(next http.Handler) http.Handler {
 // handleDevices lists the served devices, sorted by name.
 func (w *Writer) handleDevices(rw http.ResponseWriter, _ *http.Request) {
 	now := w.clock.Now()
-	resp := devicesResponse{Devices: []deviceSummary{}}
-	for name, points := range w.store.devices() {
-		resp.Devices = append(resp.Devices, deviceSummary{
-			Device: name, Points: len(points), AgeMS: newestAge(points, now),
-		})
+	summaries := w.store.summaries()
+	resp := devicesResponse{Devices: make([]deviceSummary, 0, len(summaries))}
+	for _, s := range summaries {
+		d := deviceSummary{Device: s.device, Points: s.points}
+		if s.points > 0 {
+			age := now.Sub(s.newest).Milliseconds()
+			d.AgeMS = &age
+		}
+		resp.Devices = append(resp.Devices, d)
 	}
 	slices.SortFunc(resp.Devices, func(a, b deviceSummary) int {
 		return cmp.Compare(a.Device, b.Device)
 	})
 	w.writeJSON(rw, http.StatusOK, resp)
-}
-
-// newestAge returns the age of the newest point in ms, nil if there is none.
-func newestAge(points map[string]datasource.DataPoint, now time.Time) *int64 {
-	if len(points) == 0 {
-		return nil
-	}
-	var newest time.Time
-	for _, dp := range points {
-		if dp.Timestamp.After(newest) {
-			newest = dp.Timestamp
-		}
-	}
-	age := now.Sub(newest).Milliseconds()
-	return &age
 }
 
 // handleDevice returns the latest value of every point of a device.
