@@ -407,7 +407,9 @@ writer that failed, or a missed deadline (drain or hard).
   closes the connection); Modbus devices on one serial port have the same serial
   settings; a device of an InfluxDB output sends at most 499 points that
   are not excluded (a table holds 500 columns, one of them `time`) and none named
-  `time`; `poll_interval` > 0; `timeout` > 0.
+  `time`; `poll_interval` > 0; `timeout` > 0;
+  Modbus `parity` is N, E or O; `ranges` are only allowed in range mode and each is
+  `start-end` with registers 0–65535 and start ≤ end.
 - Every device and output has a `type` and the block of that type, named like it
   (`modbus:`, `http:`, `influxdb:`, `mqtt:`, `csv:`, `api:`, `webhook:`) and holding
   every setting only that type uses; validation requires that block and rejects a block
