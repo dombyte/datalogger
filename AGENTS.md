@@ -280,16 +280,18 @@ writer that failed, or a missed deadline (drain or hard).
   does not.
 
 ### InfluxDB 3 writer
-- Schema: one line per poll; table = device name, one field per point (no tags, the unit
-  is not stored), timestamp = the poll's reading time. A point not read in a poll is
-  missing from its line (`NULL` in that row). The README documents queries on this
+- Schema: one line per timestamp of a poll; table = device name, one field per point
+  (no tags, the unit is not stored), timestamp = the reading time. A poll whose points
+  share one time (Modbus range mode, HTTP) is one line; Modbus direct mode stamps every
+  read on its own, so its poll is one line per read, `NULL` in the other columns. A
+  point not read in a poll is missing from its line (`NULL` in that row). The README documents queries on this
   schema; changing it is a breaking change (`!`).
 - Column types: a column keeps the type of its first value (InfluxDB rejects a line with
   another type, which would lose the whole poll). The writer remembers the first type of
   every column in this run and skips a value of another type: warned once per point,
   then debug, info when the type matches again. After a restart the server may hold
   another type; that line is rejected and logged as a partial write.
-- Batching: a full `batch_size` of lines (polls; default 10000) is written at once, a partial batch every
+- Batching: a full `batch_size` of lines (default 10000) is written at once, a partial batch every
   `batch_timeout` (default 1 s). Retries: `max_retries` (default 3) with `retry_delay`
   (default 1 s; a longer `Retry-After` of the server wins, at most 1 min: while the
   writer waits its input fills and drops polls), only for network errors, 5xx
@@ -469,11 +471,13 @@ writer that failed, or a missed deadline (drain or hard).
 - **Exclude instead of per-output transforms:** a decoded value is a separate point (e.g.
   `status` and `status_text` on the same register); outputs that cannot store it skip it
   with `exclude_points`, so every point has one value for all outputs.
-- **InfluxDB schema with one row per poll:** table = device, one column per point. A
-  query reads the columns it needs without filtering by point, several points come from
-  one query, rows shrink by the number of points per poll, and every point gets its own
-  column type (text next to numbers). The cost: at most 499 points per device, and a
-  poll needs one timestamp, which the readers provide.
+- **InfluxDB schema with one row per timestamp:** table = device, one column per point,
+  one row per poll whose points share a time. A query reads the columns it needs without
+  filtering by point, several points come from one query, rows shrink by the number of
+  points per poll, and every point gets its own column type (text next to numbers). The
+  cost: at most 499 points per device. Points with their own read time (Modbus direct
+  mode) get rows of their own rather than a time that is not theirs; queries that
+  aggregate with `date_bin` and skip `NULL` work on both.
 - **Config only from the YAML file, no env overrides:** the config is mostly lists of
   devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`,
   mounted read-only, serves as the secret file.

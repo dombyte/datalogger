@@ -230,7 +230,8 @@ outputs:
 
 v2 drops the `device_specific:` and `output_specific:` levels: the type block moves up
 one level. The InfluxDB options `batch_size`, `batch_timeout`, `max_retries` and
-`retry_delay` move into the `influxdb:` block; `batch_size` now counts polls.
+`retry_delay` move into the `influxdb:` block; `batch_size` now counts rows (one per
+poll, one per read in Modbus direct mode).
 
 The [InfluxDB schema](#influxdb-schema) changes from one row per point to one row per
 poll. Write v2 into a **new database**: the tables of v1 have the columns `point`,
@@ -270,6 +271,9 @@ older data; rewrite the queries as shown below.
 ## InfluxDB schema
 
 One row per poll: the table is the device, every point is a column, there are no tags.
+Modbus devices in `direct` mode read every point on its own and keep its read time, so
+their polls are one row per point (the other columns are `NULL`); aggregate with
+`date_bin` and skip `NULL` values, as in the queries below.
 
 | Element | Content | Example |
 |---|---|---|
