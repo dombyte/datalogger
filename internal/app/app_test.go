@@ -423,7 +423,7 @@ func stopWriter(t *testing.T, w output.Writer) {
 }
 
 // Modbus devices on one serial port share one bus with the largest timeout of its
-// devices; it runs and stops with the readers.
+// devices, a TCP device has its own; they run and stop with the readers.
 func TestNewSharesSerialPort(t *testing.T) {
 	t.Parallel()
 	device := func(name, address string, timeout time.Duration) config.Device {
@@ -443,7 +443,7 @@ func TestNewSharesSerialPort(t *testing.T) {
 		device("gateway", "tcp://127.0.0.1:1", time.Second),
 	}}, zerolog.New(zerolog.SyncWriter(&logs)), clocktest.NewFake(time.Now()))
 	require.NoError(t, err)
-	require.Len(t, a.buses, 1)
+	require.Len(t, a.buses, 2, "the serial port and the TCP device")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

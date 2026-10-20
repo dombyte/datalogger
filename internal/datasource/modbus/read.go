@@ -15,19 +15,20 @@ import (
 const maxRegistersPerRead = 125
 
 // readDirectMode reads every point with its own request, one after the other. A
-// failed point is logged and skipped. Reads not yet started are skipped on shutdown,
-// after a connection error and after maxTimeoutsInRow timeouts in a row, so a device
-// that stopped answering does not hold the poll for points × timeout. The returned
-// error is the first connection error, or the first error if no point could be read.
-// All points carry the receive time of the last successful read.
+// failed point is logged and skipped. On shutdown the read in flight is abandoned and
+// the rest skipped; after a connection error and after maxTimeoutsInRow timeouts in a
+// row the rest is skipped too, so a device that stopped answering does not hold the
+// poll for points × timeout. The returned error is the first connection error, or the
+// first error if no point could be read. All points carry the receive time of the last
+// successful read.
 func (r *Reader) readDirectMode(ctx context.Context) ([]datasource.DataPoint, error) {
 	var poll directPoll
 	for _, p := range r.settings.Points {
 		if poll.skip(ctx) {
 			break
 		}
-		dp, err := r.readPoint(p)
-		if err != nil {
+		dp, err := r.readPoint(ctx, p)
+		if err != nil && ctx.Err() == nil {
 			r.logger.Warn().Str("point", p.Name).Err(err).Msg("Failed to read point")
 		}
 		poll.add(dp, err)
@@ -86,8 +87,8 @@ func (d *directPoll) result() ([]datasource.DataPoint, error) {
 }
 
 // readPoint reads, decodes and scales one point, stamped with the receive time.
-func (r *Reader) readPoint(p Point) (datasource.DataPoint, error) {
-	values, err := r.client.ReadRegisters(p.Register, registerCount(p), r.regType)
+func (r *Reader) readPoint(ctx context.Context, p Point) (datasource.DataPoint, error) {
+	values, err := r.client.ReadRegisters(ctx, p.Register, registerCount(p), r.regType)
 	if err != nil {
 		return datasource.DataPoint{}, fmt.Errorf("register %d, count %d: %w",
 			p.Register, registerCount(p), err)
@@ -144,7 +145,7 @@ func (r *Reader) readRange(
 		}
 		count := min(int(rng.End)-start+1, maxRegistersPerRead)
 
-		values, err := r.client.ReadRegisters(uint16(start), uint16(count), r.regType)
+		values, err := r.client.ReadRegisters(ctx, uint16(start), uint16(count), r.regType)
 		if err != nil {
 			return fmt.Errorf("range %d-%d, chunk at %d: %w", rng.Start, rng.End, start, err)
 		}

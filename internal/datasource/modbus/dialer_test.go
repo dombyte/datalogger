@@ -21,23 +21,23 @@ func TestNewDialerRejectsBadAddress(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestDialConnectsAndFailsWhenNothingListens(t *testing.T) {
+func TestOpenConnectsAndFailsWhenNothingListens(t *testing.T) {
 	t.Parallel()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	addr := listener.Addr().String()
 
 	d, err := modbus.NewDialer(modbus.ConnSettings{
-		Address: "tcp://" + addr, SlaveID: 1, Timeout: time.Second,
+		Address: "tcp://" + addr, Timeout: time.Second,
 	}, zerolog.Nop())
 	require.NoError(t, err, "NewDialer does not connect")
 
-	client, err := d.Dial()
+	client, err := d.Open()
 	require.NoError(t, err)
 	require.NoError(t, client.Close())
 
 	require.NoError(t, listener.Close())
-	_, err = d.Dial()
+	_, err = d.Open()
 	assert.Error(t, err)
 }
 
@@ -45,10 +45,10 @@ func TestNewDialerAcceptsRTUParities(t *testing.T) {
 	t.Parallel()
 	for _, parity := range []string{"N", "E", "O"} {
 		_, err := modbus.NewDialer(modbus.ConnSettings{
-			Address: "rtu:///dev/ttyUSB0", SlaveID: 1, Speed: 9600, DataBits: 8,
+			Address: "rtu:///dev/ttyUSB0", Speed: 9600, DataBits: 8,
 			Parity: parity, StopBits: 1, Timeout: time.Second,
 		}, zerolog.Nop())
-		assert.NoError(t, err, "parity %s; the serial port is only opened on Dial", parity)
+		assert.NoError(t, err, "parity %s; the serial port is only opened on Open", parity)
 	}
 }
 

@@ -70,8 +70,9 @@ type Deps struct {
 	Log      zerolog.Logger
 }
 
-// Reader polls one Modbus device. It connects on the first poll and reconnects after
-// connection errors, so an unreachable device recovers without a restart.
+// Reader polls one Modbus device through its Bus. It connects on the first poll and
+// reconnects after connection errors, so an unreachable device recovers without a
+// restart.
 type Reader struct {
 	settings Settings
 	dialer   Dialer
@@ -249,12 +250,12 @@ func send(dataCh chan<- []datasource.DataPoint, points []datasource.DataPoint) {
 // were read are returned even when err is set (direct mode).
 func (r *Reader) poll(ctx context.Context) ([]datasource.DataPoint, error) {
 	if r.client == nil {
-		client, err := r.dialer.Dial()
+		client, err := r.dialer.Dial(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("connect: %w", err)
 		}
 		r.client = client
-		r.logger.Info().Msg("Connected to Modbus device")
+		r.logger.Debug().Msg("Connected to Modbus device")
 	}
 
 	if r.settings.RangeMode {
@@ -277,7 +278,7 @@ func (r *Reader) handlePollError(err error) {
 		Stringer("retry_in", r.backoff).Msg("Modbus poll failed")
 
 	if r.client != nil && isConnectionError(err) {
-		r.logger.Warn().Msg("Connection lost, reconnecting on the next poll")
+		r.logger.Debug().Msg("Connection lost, reconnecting on the next poll")
 		r.disconnect()
 	}
 }

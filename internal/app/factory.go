@@ -26,53 +26,83 @@ import (
 // rtuScheme starts the address of a Modbus device on a serial port.
 const rtuScheme = "rtu://"
 
-// createBuses creates one Bus per serial port of the Modbus devices, by address. The
-// port has one timeout for all requests: the largest of its devices, so no device is
-// cut off before its own timeout.
+// createBuses creates the Bus of every Modbus device: one per serial port, shared by
+// the devices on it, and one per TCP device. A serial port has one timeout for all
+// requests: the largest of its devices, so no device is cut off before its own timeout.
+// It returns the bus of each device by name.
 func createBuses(devices []config.Device, log zerolog.Logger) (map[string]*modbus.Bus, error) {
-	ports := make(map[string]modbus.ConnSettings)
-	users := make(map[string][]string)
-	for _, d := range devices {
-		if d.Type != "modbus" || !strings.HasPrefix(d.Modbus.Address, rtuScheme) {
-			continue
+	conns, users := modbusConnections(devices)
+	byKey := make(map[string]*modbus.Bus, len(conns))
+	for _, key := range slices.Sorted(maps.Keys(conns)) {
+		bus, err := createBus(conns[key], users[key], log)
+		if err != nil {
+			return nil, err
 		}
-		s, ok := ports[d.Modbus.Address]
-		if !ok {
-			s = modbusConnSettings(d) // validation checked that the serial settings match
-		}
-		s.Timeout = max(s.Timeout, d.Timeout)
-		ports[d.Modbus.Address] = s
-		users[d.Modbus.Address] = append(users[d.Modbus.Address], d.Name)
+		byKey[key] = bus
 	}
 
-	buses := make(map[string]*modbus.Bus, len(ports))
-	for _, port := range slices.Sorted(maps.Keys(ports)) {
-		bus, err := createBus(port, ports[port], log)
-		if err != nil {
-			return nil, fmt.Errorf("serial port %s: %w", port, err)
+	buses := make(map[string]*modbus.Bus)
+	for _, d := range devices {
+		if d.Type == "modbus" {
+			buses[d.Name] = byKey[connKey(d)]
 		}
-		log.Info().Str("port", port).Strs("devices", users[port]).
-			Stringer("timeout", ports[port].Timeout).Msg("Modbus devices share serial port")
-		buses[port] = bus
 	}
 	return buses, nil
 }
 
-// createBus creates the Bus of one serial port.
-func createBus(port string, s modbus.ConnSettings, log zerolog.Logger) (*modbus.Bus, error) {
-	opener, err := modbus.NewDialer(s, log)
-	if err != nil {
-		return nil, err
+// modbusConnections returns the settings and the device names of every Modbus
+// connection, by connection key.
+func modbusConnections(
+	devices []config.Device,
+) (map[string]modbus.ConnSettings, map[string][]string) {
+	conns := make(map[string]modbus.ConnSettings)
+	users := make(map[string][]string)
+	for _, d := range devices {
+		if d.Type != "modbus" {
+			continue
+		}
+		key := connKey(d)
+		s, ok := conns[key]
+		if !ok {
+			s = modbusConnSettings(d) // validation checked that the serial settings match
+		}
+		s.Timeout = max(s.Timeout, d.Timeout)
+		conns[key] = s
+		users[key] = append(users[key], d.Name)
 	}
-	return modbus.NewBus(modbus.BusDeps{Port: port, Opener: opener, Log: log})
+	return conns, users
 }
 
-// modbusConnSettings maps a device config onto the connection settings of its device.
+// connKey identifies the connection of a Modbus device: devices on one serial port
+// share it, every TCP device has its own.
+func connKey(d config.Device) string {
+	if strings.HasPrefix(d.Modbus.Address, rtuScheme) {
+		return d.Modbus.Address
+	}
+	return "device " + d.Name // never an rtu:// address
+}
+
+// createBus creates the Bus of one connection, used by the named devices.
+func createBus(s modbus.ConnSettings, devices []string, log zerolog.Logger) (*modbus.Bus, error) {
+	serial := strings.HasPrefix(s.Address, rtuScheme)
+	opener, err := modbus.NewDialer(s, log)
+	switch {
+	case err != nil && serial:
+		return nil, fmt.Errorf("serial port %s: %w", s.Address, err)
+	case err != nil:
+		return nil, fmt.Errorf("device %s: %w", devices[0], err)
+	case serial:
+		log.Info().Str("port", s.Address).Strs("devices", devices).
+			Stringer("timeout", s.Timeout).Msg("Modbus devices share serial port")
+	}
+	return modbus.NewBus(modbus.BusDeps{Address: s.Address, Opener: opener, Log: log})
+}
+
+// modbusConnSettings maps a device config onto the settings of its connection.
 func modbusConnSettings(d config.Device) modbus.ConnSettings {
 	m := d.Modbus
 	return modbus.ConnSettings{
 		Address:  m.Address,
-		SlaveID:  m.SlaveID,
 		Speed:    m.Speed,
 		DataBits: m.DataBits,
 		Parity:   m.Parity,
@@ -121,7 +151,7 @@ func createReader(
 ) (datasource.DeviceReader, error) {
 	switch d.Type {
 	case "modbus":
-		return createModbusReader(d, buses[d.Modbus.Address], log, clk)
+		return createModbusReader(d, buses[d.Name], log, clk)
 	case "http":
 		return createHTTPReader(d, log, clk)
 	default:
@@ -161,9 +191,7 @@ func createWriter(
 	}
 }
 
-// createModbusReader maps a device config onto a Modbus reader and its dialer: its own
-// connection, or its slave on bus (nil for a TCP device). An error is a configuration
-// error; an unreachable device is not one (it reconnects).
+// createModbusReader maps a device config onto a Modbus reader of its slave on bus.
 func createModbusReader(
 	d config.Device,
 	bus *modbus.Bus,
@@ -171,17 +199,6 @@ func createModbusReader(
 	clk clock.Clock,
 ) (datasource.DeviceReader, error) {
 	m := d.Modbus
-	var dialer modbus.Dialer
-	if bus != nil {
-		dialer = bus.Dialer(m.SlaveID)
-	} else {
-		libDialer, err := modbus.NewDialer(modbusConnSettings(d), log)
-		if err != nil {
-			return nil, err
-		}
-		dialer = libDialer
-	}
-
 	return modbus.New(modbus.Deps{
 		Settings: modbus.Settings{
 			Name:         d.Name,
@@ -190,7 +207,7 @@ func createModbusReader(
 			Ranges:       m.Ranges,
 			Points:       modbusPoints(d.Points),
 		},
-		Dialer: dialer,
+		Dialer: bus.Dialer(m.SlaveID),
 		Clock:  clk,
 		Log:    log,
 	})

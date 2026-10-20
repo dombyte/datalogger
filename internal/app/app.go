@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -52,7 +51,7 @@ type outputRoute struct {
 type App struct {
 	sources []source
 	outputs []outputRoute
-	buses   []*modbus.Bus // serial ports, shared by the Modbus readers on them
+	buses   []*modbus.Bus // Modbus connections, one per serial port or TCP device
 	log     zerolog.Logger
 
 	cancelBuses   context.CancelFunc
@@ -91,7 +90,12 @@ func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) 
 	}
 
 	a := newApp(sources, outputs, log)
-	a.buses = slices.Collect(maps.Values(buses))
+	// A serial port's bus is shared by its devices: start it once.
+	for _, bus := range buses {
+		if !slices.Contains(a.buses, bus) {
+			a.buses = append(a.buses, bus)
+		}
+	}
 	return a, nil
 }
 

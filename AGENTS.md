@@ -74,7 +74,7 @@ internal/config/         Config structs (viper/mapstructure), Load() (defaults +
 internal/clock/          Clock interface (Now, tickers, After) + Sleep; clocktest/ fake
 internal/datasource/     DataPoint type, DeviceReader interface
   modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, reconnect;
-                         Bus: one serial port shared by the devices on it
+                         Bus: one connection (TCP device or shared serial port)
   http/                  HTTP reader: GET/POST, headers/body, JSON (gjson) / text
 internal/transform/      point expressions (expr-lang): compile at startup, Apply per poll
 internal/output/         Writer interface
@@ -171,7 +171,7 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    does not compile or names an unknown point or lookup, an API port that cannot be
    bound) ends the process with exit 1. **Connecting is not construction:** readers connect on their first poll, so a
    device that is down at startup does not stop the others and recovers on its own.
-3. `app.Run` starts the writers, then one `modbus.Bus` per serial port, then the readers
+3. `app.Run` starts the writers, then one `modbus.Bus` per Modbus connection, then the readers
    with one router each. Each reader polls at once, then every `poll_interval`.
 
 ### Failure handling
@@ -193,10 +193,11 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
 ### Shutdown (producers first)
 1. SIGINT/SIGTERM cancels the signal context (`signal.NotifyContext`); `Run` returns.
 2. `Shutdown` cancels the readers: no new poll starts and a backoff wait ends at once.
-   A Modbus read that is in flight finishes and starts no further read of its poll;
-   the points read so far are still delivered (range mode: only a complete poll is; an
-   HTTP request in flight is aborted, so it has no data yet). Each reader then closes its
-   data channel and the routers finish. Then the serial buses stop and close their ports.
+   A Modbus read that is in flight is abandoned (the reader stops waiting at once; its
+   bus finishes it alone) and no further read of its poll starts; the points read so far
+   are still delivered (range mode: only a complete poll is; an HTTP request in flight is
+   aborted, so it has no data yet). Each reader then closes its data channel and the
+   routers finish. Then the Modbus buses stop and close their connections.
 3. `app` closes the output input channels; each writer writes what is queued, flushes
    (CSV flush/close, InfluxDB final batch, webhook queued polls, MQTT disconnect, API
    server shutdown) and
@@ -234,17 +235,21 @@ writer that failed, or a missed deadline.
   defaults to 1 (an explicit 0 is treated as unset). 32-bit types need `count: 2` (high
   word first); a smaller count is rejected by validation, as is a `count` above 125 or
   registers past 65535.
-- Requests are sent one at a time: they share the device's one connection, on which
-  the client library cannot run requests concurrently.
-- **Serial port (RTU):** every serial port has one `Bus`, created by `app` for all
-  devices with that `rtu://` address (an RS-485 bus with one `slave_id` each, or one
-  device split in two). Its goroutine is the only code that uses the port: readers send
-  their requests (slave, register, count) over a channel and it runs them one after the
-  other, so frames never mix. Devices on a port wait for each other: a slave that does
-  not answer holds the port for its timeout. The port opens on the first request and
-  reopens after a connection error; a timeout keeps it open. The port has one timeout,
-  the largest of its devices. Validation requires the same `speed`, `data_bits`,
-  `parity` and `stop_bits` on all devices of a port. TCP devices keep one connection each.
+- **Connections:** every Modbus connection has one `Bus`, created by `app`: one per TCP
+  device and one per serial port. Its goroutine is the only code that uses the
+  connection: readers send their requests (slave, register, count) over a channel and
+  it runs them one after the other (the client library cannot run requests
+  concurrently), so frames never mix. A reader whose context ends stops waiting for its
+  request at once, also while it is in flight: the library cannot cancel a request, so
+  the bus finishes it alone and skips requests whose caller has gone. The connection
+  opens on the first request and reopens after a connection error; a timeout keeps it
+  open.
+- **Serial port (RTU):** all devices with one `rtu://` address share its bus (an RS-485
+  bus with one `slave_id` each, or one device split in two). Devices on a port wait for
+  each other: a slave that does not answer holds the port for its timeout. The port has
+  one timeout, the largest of its devices. Validation requires the same `speed`,
+  `data_bits`, `parity` and `stop_bits` on all devices of a port. TCP devices keep one
+  connection each.
 
 ### HTTP reader
 - `method` GET (default) or POST with `body`; `headers` are sent as given; `insecure`
@@ -452,12 +457,15 @@ writer that failed, or a missed deadline.
   values live in a mutex-guarded map inside the writer: its goroutine is the only
   writer, the HTTP handlers of the same component read copies, so nothing is shared
   between components. The port is bound in the factory so a port in use fails startup.
-- **Serial bus goroutine instead of a shared client:** devices on one RS-485 port must
+- **Bus goroutine instead of a shared client:** devices on one RS-485 port must
   not send at the same time, and the client library keeps the slave ID as state of the
   connection. A mutex around a shared client would hold a lock across I/O (section
   9.1); a goroutine that owns the port and takes requests over a channel keeps the
   hand-over by channel. Sharing is automatic, without an option: separate connections
-  to one port never work.
+  to one port never work. TCP devices use a bus of their own for the same reason the
+  port does at shutdown: the library cannot cancel a read, and a reader that waits for
+  one would hold the shutdown for up to the device timeout; a reader on a bus stops
+  waiting when its context ends.
 - **Hand-written fake clock instead of a mock:** `clock.Clock`/`clock.Ticker` are faked by
   `clocktest.Fake`, not by mockery. Tests need time that moves consistently across tickers
   and `After` (`Advance`); call expectations cannot model that.
