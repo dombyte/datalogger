@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
@@ -24,7 +25,14 @@ const (
 
 	// reasonCodeFailure is the first MQTT v5 reason code that reports an error.
 	reasonCodeFailure = 0x80
+
+	// maxInflight bounds the publishes of one poll that wait for their acknowledgement
+	// at the same time (QoS 1 and 2); the broker's receive maximum may limit them more.
+	maxInflight = 64
 )
+
+// errNotSent is the result of a QoS 0 publish skipped after a failure in its poll.
+var errNotSent = errors.New("not sent after a failed publish")
 
 // ErrMissingDependency is returned by New when a required dependency is missing.
 var ErrMissingDependency = errors.New("mqtt: missing dependency")
@@ -58,6 +66,12 @@ type Writer struct {
 	backoff  time.Duration
 	nextDial time.Time
 	dropped  int
+	topics   map[topicKey]string // topic of every point published so far
+}
+
+// topicKey identifies the topic of a point.
+type topicKey struct {
+	device, point string
 }
 
 // New creates a Writer; it does not connect.
@@ -77,6 +91,7 @@ func New(d Deps) (*Writer, error) {
 		dialer:   d.Dialer,
 		clock:    d.Clock,
 		logger:   d.Log.With().Str("component", "mqtt").Str("output", d.Settings.Name).Logger(),
+		topics:   make(map[topicKey]string),
 	}, nil
 }
 
@@ -100,40 +115,108 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 				if !ok {
 					return
 				}
-				for _, dp := range points {
-					w.publish(ctx, dp)
-				}
+				w.publishPoll(ctx, points)
 			}
 		}
 	}()
 	return done
 }
 
-// publish sends one point, connecting first if needed.
-func (w *Writer) publish(ctx context.Context, dp datasource.DataPoint) {
+// publishPoll publishes the points of one poll, connecting first if needed. With QoS 1
+// and 2 the publishes run in parallel, up to maxInflight: a poll costs about one round
+// trip to the broker instead of one per point. The next poll starts when all are
+// answered, so the messages of a topic stay in order.
+func (w *Writer) publishPoll(ctx context.Context, points []datasource.DataPoint) {
 	if !w.connected(ctx) {
-		w.dropped++
+		w.dropped += len(points)
 		return
 	}
+	msgs := w.messages(points)
+	var results []result
+	if w.settings.QoS == 0 {
+		results = w.publishInOrder(ctx, msgs)
+	} else {
+		results = w.publishParallel(ctx, msgs)
+	}
+	w.handleResults(msgs, results)
+}
 
-	topic, payload, err := w.message(dp)
-	if err != nil {
-		w.logger.Error().Err(err).Str("topic", topic).Msg("Failed to encode MQTT payload")
-		return
-	}
+// result is the outcome of one publish.
+type result struct {
+	resp *paho.PublishResponse
+	err  error
+}
 
-	resp, err := w.session.Publish(ctx, &paho.Publish{
-		Topic:   topic,
-		Payload: payload,
-		QoS:     w.settings.QoS,
-		Retain:  w.settings.Retain,
-	})
-	if err != nil {
-		w.publishFailed(topic, resp, err)
+// publishInOrder publishes one message after the other (QoS 0 waits for nothing, so
+// parallel publishes would only add goroutines). After a failure the rest is not sent:
+// it would fail on the same connection.
+func (w *Writer) publishInOrder(ctx context.Context, msgs []*paho.Publish) []result {
+	results := make([]result, len(msgs))
+	for i, msg := range msgs {
+		resp, err := w.session.Publish(ctx, msg)
+		results[i] = result{resp: resp, err: err}
+		if err != nil {
+			for j := i + 1; j < len(msgs); j++ {
+				results[j] = result{err: errNotSent}
+			}
+			break
+		}
+	}
+	return results
+}
+
+// publishParallel publishes the messages concurrently, at most maxInflight at a time,
+// and waits for all of them.
+func (w *Writer) publishParallel(ctx context.Context, msgs []*paho.Publish) []result {
+	results := make([]result, len(msgs))
+	session := w.session
+	slots := make(chan struct{}, maxInflight)
+	var wg sync.WaitGroup
+	for i, msg := range msgs {
+		slots <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-slots }()
+			resp, err := session.Publish(ctx, msg)
+			results[i] = result{resp: resp, err: err}
+		})
+	}
+	wg.Wait()
+	return results
+}
+
+// handleResults logs the publishes of a poll. A message the broker rejected (PUBACK or
+// PUBREC with an error reason code, e.g. the ACL denies the topic) keeps the session;
+// any other failure drops it, once per poll. The first redial is immediate, repeated
+// failures without a successful publish back off like failed dials, so a broker that
+// closes the connection on every publish is not redialed for every poll.
+func (w *Writer) handleResults(msgs []*paho.Publish, results []result) {
+	var failed int
+	var firstErr error
+	var firstTopic string
+	for i, r := range results {
+		topic := msgs[i].Topic
+		switch {
+		case r.err == nil:
+			w.backoff = 0
+			w.logger.Debug().Str("topic", topic).Msg("Published MQTT message")
+		case r.resp != nil && r.resp.ReasonCode >= reasonCodeFailure:
+			w.logger.Error().Err(r.err).Str("topic", topic).Uint8("reason_code", r.resp.ReasonCode).
+				Msg("Broker rejected MQTT message")
+		default:
+			if failed == 0 {
+				firstErr, firstTopic = r.err, topic
+			}
+			failed++
+		}
+	}
+	if failed == 0 {
 		return
 	}
-	w.backoff = 0
-	w.logger.Debug().Str("topic", topic).Msg("Published MQTT message")
+	w.logger.Error().Err(firstErr).Str("topic", firstTopic).Int("failed", failed).
+		Msg("Failed to publish, reconnecting")
+	w.disconnect()
+	w.nextDial = w.clock.Now().Add(w.backoff)
+	w.backoff = nextBackoff(w.backoff)
 }
 
 // payload is the JSON message of one point. The keys are in alphabetical order, as
@@ -144,32 +227,37 @@ type payload struct {
 	Value     any    `json:"value"`
 }
 
-// message returns the topic and the JSON payload of dp.
-func (w *Writer) message(dp datasource.DataPoint) (string, []byte, error) {
-	topic := w.settings.Topic + "/" + dp.DeviceName + "/" + dp.PointName
-	b, err := json.Marshal(payload{
-		Timestamp: dp.Timestamp.Format(time.RFC3339Nano),
-		Unit:      dp.Unit,
-		Value:     dp.JSONValue(), // NaN and ±Inf have no JSON form: null
-	})
-	return topic, b, err
+// messages returns the publish of every point; a point whose value cannot be encoded
+// is logged and skipped.
+func (w *Writer) messages(points []datasource.DataPoint) []*paho.Publish {
+	msgs := make([]*paho.Publish, 0, len(points))
+	for _, dp := range points {
+		topic := w.topic(dp)
+		b, err := json.Marshal(payload{
+			Timestamp: dp.Timestamp.Format(time.RFC3339Nano),
+			Unit:      dp.Unit,
+			Value:     dp.JSONValue(), // NaN and ±Inf have no JSON form: null
+		})
+		if err != nil {
+			w.logger.Error().Err(err).Str("topic", topic).Msg("Failed to encode MQTT payload")
+			continue
+		}
+		msgs = append(msgs, &paho.Publish{
+			Topic: topic, Payload: b, QoS: w.settings.QoS, Retain: w.settings.Retain,
+		})
+	}
+	return msgs
 }
 
-// publishFailed handles a failed publish. A broker that rejected the message (PUBACK or
-// PUBREC with an error reason code, e.g. the ACL denies the topic) keeps the session;
-// any other error drops it. The first redial is immediate, repeated failures without a
-// successful publish back off like failed dials, so a broker that closes the
-// connection on every publish is not redialed for every point.
-func (w *Writer) publishFailed(topic string, resp *paho.PublishResponse, err error) {
-	if resp != nil && resp.ReasonCode >= reasonCodeFailure {
-		w.logger.Error().Err(err).Str("topic", topic).Uint8("reason_code", resp.ReasonCode).
-			Msg("Broker rejected MQTT message")
-		return
+// topic returns <topic>/<device>/<point>, built once per point.
+func (w *Writer) topic(dp datasource.DataPoint) string {
+	key := topicKey{device: dp.DeviceName, point: dp.PointName}
+	topic, ok := w.topics[key]
+	if !ok {
+		topic = w.settings.Topic + "/" + dp.DeviceName + "/" + dp.PointName
+		w.topics[key] = topic
 	}
-	w.logger.Error().Err(err).Str("topic", topic).Msg("Failed to publish, reconnecting")
-	w.disconnect()
-	w.nextDial = w.clock.Now().Add(w.backoff)
-	w.backoff = nextBackoff(w.backoff)
+	return topic
 }
 
 // nextBackoff doubles the backoff, from initialBackoff up to maxBackoff.

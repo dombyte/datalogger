@@ -311,12 +311,20 @@ writer that failed, or a missed deadline (drain or hard).
   name; `insecure` uses TLS without verification (also for `tcp://`). MQTT v5, keep-alive
   30 s, clean start, 10 s connect timeout, 10 s publish timeout (QoS 1/2 wait for the
   acknowledgement; a timed-out publish counts as a publish error).
-- Connects on the first point and reconnects after a publish error or a lost connection,
+- Connects on the first poll and reconnects after a publish error or a lost connection,
   with backoff (1 s doubling to 30 s; the first redial after a publish error is
   immediate, the backoff is reset by the next successful publish). A message the broker
   rejects with an error reason code (e.g. ACL) is logged and the session kept. Points
   that arrive while no connection is possible are **dropped**; the count is logged on
   the next successful connect.
+- Publishing: with QoS 1/2 the points of a poll are published in parallel (at most 64
+  waiting for their acknowledgement; the broker's receive maximum may limit them more),
+  so a poll costs about one round trip, not one per point. The next poll starts when
+  all are answered, so the messages of a topic stay in order. QoS 0 publishes in order
+  and skips the rest of a poll after a failed publish. A poll with failed publishes
+  drops the session once.
+- The connection serialises whole packets (`packets.NewThreadSafeConn`): paho writes
+  from several goroutines and a `tls.Conn` would interleave their frames.
 - Topic: `<topic>/<device>/<point>` (`topic` default `datalogger`); payload
   `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}` (NaN/±Inf values are
   `null`, as in the API); `qos` 0–2, `retain`.

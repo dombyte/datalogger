@@ -279,3 +279,99 @@ func TestSkipsPointThatCannotBeEncoded(t *testing.T) {
 	assert.Equal(t, "logger/meter/power", (<-pubs).Topic, "skipped, the session stays")
 	assert.Empty(t, pubs)
 }
+
+// writer starts a writer with qos on the dialer; stop it by closing the input.
+func writer(t *testing.T, qos byte, dialer mqtt.Dialer) (chan []datasource.DataPoint, <-chan error) {
+	t.Helper()
+	w, err := mqtt.New(mqtt.Deps{
+		Settings: mqtt.Settings{Name: "broker", Topic: "logger", QoS: qos},
+		Dialer:   dialer, Clock: clocktest.NewFake(start), Log: zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	input := make(chan []datasource.DataPoint)
+	return input, w.Start(context.Background(), input)
+}
+
+// pollOf returns a poll with the named points.
+func pollOf(names ...string) []datasource.DataPoint {
+	points := make([]datasource.DataPoint, len(names))
+	for i, name := range names {
+		points[i] = datasource.DataPoint{DeviceName: "meter", PointName: name, Timestamp: start}
+	}
+	return points
+}
+
+// With QoS 1 the points of a poll wait for their acknowledgements together, so a poll
+// costs one round trip instead of one per point; the next poll starts when all of them
+// are answered, so the messages of a topic stay in order.
+func TestQoS1PublishesPollInParallelAndPollsInOrder(t *testing.T) {
+	t.Parallel()
+	dialer := mocks.NewMockDialer(t)
+	p, _ := session(t)
+	dialer.EXPECT().Dial(mock.Anything).Return(p, nil).Once()
+	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
+	firstPoll := make(chan string, 3)
+	release := make(chan struct{})
+	var secondPoll []string
+	p.EXPECT().Publish(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+			if pub.Topic == "logger/meter/later" {
+				secondPoll = append(secondPoll, pub.Topic)
+				return &paho.PublishResponse{}, nil
+			}
+			firstPoll <- pub.Topic
+			<-release // acknowledged only when all three are in flight
+			return &paho.PublishResponse{}, nil
+		})
+
+	input, done := writer(t, 1, dialer)
+	input <- pollOf("a", "b", "c")
+	topics := []string{<-firstPoll, <-firstPoll, <-firstPoll}
+	assert.ElementsMatch(t, []string{"logger/meter/a", "logger/meter/b", "logger/meter/c"}, topics,
+		"all points of the poll are in flight at once")
+
+	second := make(chan struct{})
+	go func() {
+		input <- pollOf("later")
+		close(second)
+	}()
+	select {
+	case <-second:
+		t.Fatal("the next poll was taken before the first was acknowledged")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	<-second
+	close(input)
+	for err := range done {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, []string{"logger/meter/later"}, secondPoll)
+}
+
+// With QoS 0 there is nothing to wait for: the points are published in order, and after
+// a failed publish the rest of the poll is not sent on the broken connection.
+func TestQoS0PublishesInOrderAndStopsAfterFailure(t *testing.T) {
+	t.Parallel()
+	dialer := mocks.NewMockDialer(t)
+	p, _ := session(t)
+	dialer.EXPECT().Dial(mock.Anything).Return(p, nil).Once()
+	var topics []string
+	p.EXPECT().Publish(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, pub *paho.Publish) (*paho.PublishResponse, error) {
+			topics = append(topics, pub.Topic)
+			if pub.Topic == "logger/meter/b" {
+				return nil, errors.New("broken pipe")
+			}
+			return &paho.PublishResponse{}, nil
+		}).Times(2)
+	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once() // once for the poll
+
+	input, done := writer(t, 0, dialer)
+	input <- pollOf("a", "b", "c", "d")
+	close(input)
+	for err := range done {
+		require.NoError(t, err)
+	}
+	assert.Equal(t, []string{"logger/meter/a", "logger/meter/b"}, topics)
+}
