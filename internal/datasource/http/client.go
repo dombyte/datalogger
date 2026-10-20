@@ -6,6 +6,11 @@ import (
 	"time"
 )
 
+// idleConnTimeout closes a kept-alive connection that was idle this long, before most
+// servers close it themselves: a request that reuses a connection the server is closing
+// fails, and Go does not resend a POST.
+const idleConnTimeout = 30 * time.Second
+
 // Client sends the poll requests; *http.Client implements it.
 type Client interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -19,6 +24,7 @@ func NewClient(timeout time.Duration, insecure bool) *http.Client {
 		Transport: &http.Transport{
 			Proxy:           http.ProxyFromEnvironment,
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
+			IdleConnTimeout: idleConnTimeout,
 		},
 		Timeout: timeout,
 	}

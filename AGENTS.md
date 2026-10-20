@@ -722,6 +722,8 @@ The required CI checks MUST be green before a PR is merged.
 - Every outgoing call has a timeout (device `timeout`, MQTT connect/publish timeout,
   webhook and InfluxDB client); clients verify certificates unless the documented
   `insecure` option is set.
+- HTTP clients close connections idle for 30 s, before most servers close them: a
+  request on a connection the server is closing fails, and Go does not resend a POST.
 - Secrets only in the gitignored `config.yaml` (section 8), never committed or logged.
 - Dependencies: Renovate plus `govulncheck` in CI and in `make check`.
 
