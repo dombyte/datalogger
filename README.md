@@ -140,6 +140,8 @@ outputs:
 | `GET /api/devices/{device}` | `{"device": "inverter", "points": {"power": {"value": 1234.5, "unit": "W", "timestamp": "2026-10-05T10:15:02.123Z", "age_ms": 820}}}` |
 | `GET /api/devices/{device}/{point}` | `{"device": "inverter", "point": "power", "value": 1234.5, "unit": "W", "timestamp": "…", "age_ms": 820}` |
 | `GET /healthz` | `200` (no token needed) |
+| `GET /` | This documentation as a web page (no token needed) |
+| `GET /openapi.json` | OpenAPI 3.1 description, e.g. for Postman or Bruno (no token needed) |
 
 - `age_ms` is the time since the device answered. A device that stops answering keeps
   its last values while their age grows.

@@ -361,7 +361,12 @@ writer that failed, or a missed deadline (drain or hard).
 ### API output
 - `listen` (`host:port`, required) is bound at startup; a port in use fails startup.
   `token` (optional) requires `Authorization: Bearer <token>` on `/api/…` (compared in
-  constant time, never logged); `/healthz` is always open.
+  constant time, never logged); `/healthz` and the documentation are always open.
+- Documentation: `GET /` is an HTML page (no JavaScript, nothing loaded from elsewhere),
+  `GET /openapi.json` an OpenAPI 3.1 spec; both are static files in `api/docs`, embedded
+  in the binary and naming no device or point. A test requests every path of the spec
+  and decodes its examples into the response types, so a change to a route or field
+  must update the spec.
 - Keeps the latest point per device and point in memory (nothing persisted); points of
   devices not in `devices` are ignored, `exclude_points` never arrive.
 - `GET /api/devices` → `{"devices": [{"device", "points": <count>, "age_ms": <newest> |
@@ -486,6 +491,9 @@ writer that failed, or a missed deadline (drain or hard).
 - **Config only from the YAML file, no env overrides:** the config is mostly lists of
   devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`,
   mounted read-only, serves as the secret file.
+- **API docs as static files, no Swagger UI:** three routes need no generator; a
+  plain page and a hand-written spec are embedded, work offline and need no vendored
+  JavaScript that Renovate cannot track. Tests keep the spec and the handlers in step.
 - **API output serves latest values only:** no history, no staleness setting; `age_ms`
   lets the client decide what is too old, and history belongs in InfluxDB or CSV. The
   values live in a mutex-guarded map inside the writer: its goroutine is the only
@@ -538,7 +546,7 @@ writer that failed, or a missed deadline (drain or hard).
   (build them in a constructor). Allowed package-level variables: `Err…` sentinels and the
   linker-set build info in `main` (`Version`, `Commit`, `BuildDate`, `GoVersion`, marked
   `//nolint:gochecknoglobals // written by the linker at build time`). No `init()` with
-  side effects.
+  side effects. Files embedded with `//go:embed` are allowed (the linter exempts them).
 - **Lifecycle:** every goroutine has an owner that starts it, can stop it and waits for
   it. Waiting loops use the injected `clock.Clock`, capture `now` once per iteration and
   derive everything from it. Every channel has a documented owner (the sender closes)

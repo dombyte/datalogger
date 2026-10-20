@@ -50,7 +50,8 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
-// routes returns the handler of the server; /healthz needs no token.
+// routes returns the handler of the server; /healthz and the documentation need no
+// token.
 func (w *Writer) routes() http.Handler {
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/devices", w.handleDevices)
@@ -61,6 +62,8 @@ func (w *Writer) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(rw http.ResponseWriter, _ *http.Request) {
 		rw.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("GET /{$}", w.serveDoc(indexHTML, "text/html; charset=utf-8"))
+	mux.HandleFunc("GET /openapi.json", w.serveDoc(openAPISpec, "application/json"))
 	mux.Handle("/api/", w.authorize(api))
 	return mux
 }

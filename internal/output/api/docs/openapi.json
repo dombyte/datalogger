@@ -1,0 +1,228 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "datalogger API",
+    "version": "1",
+    "description": "Read-only API with the latest value of every point of the devices this output serves. Values live in memory only: after a restart the API is empty until the first poll."
+  },
+  "security": [{ "bearer": [] }, {}],
+  "paths": {
+    "/api/devices": {
+      "get": {
+        "summary": "List the served devices",
+        "description": "All devices of this output, sorted by name.",
+        "operationId": "listDevices",
+        "responses": {
+          "200": {
+            "description": "The served devices.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Devices" },
+                "example": {
+                  "devices": [
+                    { "device": "inverter", "points": 3, "age_ms": 820 },
+                    { "device": "meter", "points": 0, "age_ms": null }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/api/devices/{device}": {
+      "get": {
+        "summary": "Latest values of a device",
+        "description": "The latest value of every point of a device; `points` is empty before the first reading.",
+        "operationId": "getDevice",
+        "parameters": [{ "$ref": "#/components/parameters/device" }],
+        "responses": {
+          "200": {
+            "description": "The latest value of every point.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Device" },
+                "example": {
+                  "device": "inverter",
+                  "points": {
+                    "power": {
+                      "value": 1234.5,
+                      "unit": "W",
+                      "timestamp": "2026-10-05T10:15:02.123Z",
+                      "age_ms": 820
+                    },
+                    "status_text": {
+                      "value": "running",
+                      "unit": "",
+                      "timestamp": "2026-10-05T10:15:02.123Z",
+                      "age_ms": 820
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/devices/{device}/{point}": {
+      "get": {
+        "summary": "Latest value of a point",
+        "operationId": "getPoint",
+        "parameters": [
+          { "$ref": "#/components/parameters/device" },
+          { "$ref": "#/components/parameters/point" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The latest value of the point.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SinglePoint" },
+                "example": {
+                  "device": "inverter",
+                  "point": "power",
+                  "value": 1234.5,
+                  "unit": "W",
+                  "timestamp": "2026-10-05T10:15:02.123Z",
+                  "age_ms": 820
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Health check",
+        "description": "200 while the API is serving; needs no token.",
+        "operationId": "health",
+        "security": [{}],
+        "responses": { "200": { "description": "The API is serving." } }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Required on /api/… if the output has a `token`."
+      }
+    },
+    "parameters": {
+      "device": {
+        "name": "device",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      },
+      "point": {
+        "name": "point",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "A token is configured and the request has none or a wrong one.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": "unauthorized" }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "The device is not served, or the point has no value yet.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": "unknown device other" }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Value": {
+        "description": "The reading: a number, bool or string; null for NaN and ±Inf.",
+        "type": ["number", "boolean", "string", "null"]
+      },
+      "Point": {
+        "type": "object",
+        "required": ["value", "unit", "timestamp", "age_ms"],
+        "properties": {
+          "value": { "$ref": "#/components/schemas/Value" },
+          "unit": { "type": "string" },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the device answered (UTC, RFC 3339 with nanoseconds)."
+          },
+          "age_ms": {
+            "type": "integer",
+            "description": "Milliseconds between `timestamp` and this request."
+          }
+        }
+      },
+      "SinglePoint": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": ["device", "point"],
+            "properties": {
+              "device": { "type": "string" },
+              "point": { "type": "string" }
+            }
+          },
+          { "$ref": "#/components/schemas/Point" }
+        ]
+      },
+      "Device": {
+        "type": "object",
+        "required": ["device", "points"],
+        "properties": {
+          "device": { "type": "string" },
+          "points": {
+            "type": "object",
+            "additionalProperties": { "$ref": "#/components/schemas/Point" }
+          }
+        }
+      },
+      "DeviceSummary": {
+        "type": "object",
+        "required": ["device", "points", "age_ms"],
+        "properties": {
+          "device": { "type": "string" },
+          "points": { "type": "integer", "description": "Number of points with a value." },
+          "age_ms": {
+            "type": ["integer", "null"],
+            "description": "Age of the newest point; null before the first reading."
+          }
+        }
+      },
+      "Devices": {
+        "type": "object",
+        "required": ["devices"],
+        "properties": {
+          "devices": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/DeviceSummary" }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": { "error": { "type": "string" } }
+      }
+    }
+  }
+}
