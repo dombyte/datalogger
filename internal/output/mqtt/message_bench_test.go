@@ -2,22 +2,24 @@ package mqtt
 
 import (
 	"testing"
-	"time"
 
-	"github.com/dombyte/datalogger/internal/datasource"
+	"github.com/rs/zerolog"
 )
 
-// BenchmarkMessage encodes the topic and payload of one point.
-func BenchmarkMessage(b *testing.B) {
-	w := &Writer{settings: Settings{Name: "broker", Topic: "datalogger"}}
-	dp := datasource.DataPoint{
-		DeviceName: "meter", PointName: "voltage", Value: 230.5, Unit: "V",
-		Timestamp: time.Date(2026, 10, 5, 10, 15, 2, 123000000, time.UTC),
+// BenchmarkMessages encodes the topics and payloads of a poll of 20 points.
+func BenchmarkMessages(b *testing.B) {
+	w, err := New(Deps{
+		Settings: Settings{Name: "broker", Topic: "datalogger"},
+		Dialer:   ackDialer{}, Clock: realClock{}, Log: zerolog.Nop(),
+	})
+	if err != nil {
+		b.Fatal(err)
 	}
+	points := poll(20)
 
 	for b.Loop() {
-		if _, _, err := w.message(dp); err != nil {
-			b.Fatal(err)
+		if msgs := w.messages(points); len(msgs) != len(points) {
+			b.Fatal("points skipped")
 		}
 	}
 }
