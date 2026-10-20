@@ -16,6 +16,11 @@ const (
 
 	// DefaultTimeout bounds one write request when ConnSettings.Timeout is 0.
 	DefaultTimeout = 10 * time.Second
+
+	// idleConnTimeout closes a kept-alive connection that was idle this long, before
+	// most servers close it themselves: a request that reuses a connection the server
+	// is closing fails, and Go does not resend a POST.
+	idleConnTimeout = 30 * time.Second
 )
 
 // Client writes points to InfluxDB; *influxdb3.Client implements it.
@@ -55,6 +60,7 @@ func NewClient(s ConnSettings) (*influxdb3.Client, error) {
 		cfg.HTTPClient = &http.Client{Timeout: timeout, Transport: &http.Transport{
 			Proxy:           http.ProxyFromEnvironment,
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: s.Insecure},
+			IdleConnTimeout: idleConnTimeout,
 		}}
 	}
 

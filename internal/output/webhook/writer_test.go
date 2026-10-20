@@ -418,6 +418,8 @@ func TestNewClient(t *testing.T) {
 	transport, ok := c.Transport.(*http.Transport)
 	require.True(t, ok)
 	assert.True(t, transport.TLSClientConfig.InsecureSkipVerify)
+	assert.Equal(t, 30*time.Second, transport.IdleConnTimeout,
+		"idle connections close before most servers close them")
 
 	assert.Equal(t, 3*time.Second, webhook.NewClient(3*time.Second, false).Timeout)
 }

@@ -344,3 +344,15 @@ func TestShutdownAbortsRequestInFlight(t *testing.T) {
 	<-inFlight
 	h.stop()
 }
+
+// Regression: idle connections were kept forever, so a poll could reuse one the device
+// had just closed; a POST is not resent and the poll failed.
+func TestNewClient(t *testing.T) {
+	t.Parallel()
+	c := http.NewClient(3*time.Second, true)
+	assert.Equal(t, 3*time.Second, c.Timeout)
+	transport, ok := c.Transport.(*nethttp.Transport)
+	require.True(t, ok)
+	assert.True(t, transport.TLSClientConfig.InsecureSkipVerify)
+	assert.Equal(t, 30*time.Second, transport.IdleConnTimeout)
+}
