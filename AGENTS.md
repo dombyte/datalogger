@@ -642,12 +642,13 @@ writer that failed, or a missed deadline (drain or hard).
   action `version:`) and bumped deliberately, the same locally and in CI.
 - **Renovate** (`renovate.json`) updates dependencies for exactly the ecosystems used here:
   `gomod`, `dockerfile`, `docker-compose`, `github-actions`; every gomod update runs
-  `go mod tidy`. Every pinned version in the repo is tracked. A pin no built-in manager
-  sees needs a `customManagers` regex, added in the same change that adds the pin; today
-  that is only the golangci-lint `version:` of the CI action (the `github-actions`
-  manager tracks the action, not that input). Updates that need manual work (Go module majors, golangci-lint
-  majors) are disabled with a `description` saying why. Text that only describes a
-  pinning pattern must not match such a regex. GitHub vulnerability alerts stay enabled;
+  `go mod tidy`. Every pinned version in the repo is tracked, the golangci-lint
+  `version:` of the CI action included (the `github-actions` manager reads that input).
+  A pin no built-in manager sees needs a `customManagers` regex, added in the same change
+  that adds the pin; today there is none, and a regex for a pin a built-in manager already
+  tracks opens a duplicate PR per update. Updates that need manual work (Go module
+  majors, golangci-lint majors) are disabled with a `description` saying why. Text that
+  only describes a pinning pattern must not match such a regex. GitHub vulnerability alerts stay enabled;
   Renovate's `vulnerabilityAlerts` reads them.
 - **Images:** `Dockerfile` (dev) and `Dockerfile.goreleaser` build `scratch` images with
   CA certs and tzdata from pinned base images; `.dockerignore`/`.gitignore` keep local
