@@ -151,17 +151,26 @@ func (w *Writer) stop(ctx context.Context, serveErr <-chan error) error {
 		}
 	case <-ctx.Done():
 		w.closeServer()
-		<-shutdown // returns once Close removed the connections
+		w.awaitShutdown(shutdown)
 	case <-w.clock.After(shutdownGrace):
 		w.logger.Warn().Stringer("grace", shutdownGrace).Msg("API requests still running, closing")
 		w.closeServer()
-		<-shutdown
+		w.awaitShutdown(shutdown)
 	}
 
 	if err := <-serveErr; !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("api: serve: %w", err)
 	}
 	return nil
+}
+
+// awaitShutdown waits for Shutdown after closeServer: it returns once Close removed the
+// connections. An error then only reports what Close already did (e.g. the listener it
+// closed), so it is logged at debug.
+func (w *Writer) awaitShutdown(shutdown <-chan error) {
+	if err := <-shutdown; err != nil {
+		w.logger.Debug().Err(err).Msg("API shutdown after close")
+	}
 }
 
 // closeServer closes the listener and all connections at once.

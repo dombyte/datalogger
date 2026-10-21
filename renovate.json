@@ -4,8 +4,7 @@
     "gomod",
     "dockerfile",
     "docker-compose",
-    "github-actions",
-    "custom.regex"
+    "github-actions"
   ],
   "extends": [
     "config:recommended",
@@ -86,20 +85,5 @@
     ]
   },
   "separateMinorPatch": true,
-  "stopUpdatingLabel": "renovate/stop_updating",
-  "customManagers": [
-    {
-      "description": "golangci-lint version pinned in the CI action (`version: vX.Y`); the github-actions manager only tracks the action itself",
-      "customType": "regex",
-      "managerFilePatterns": [
-        "/^\\.github/workflows/.+\\.ya?ml$/"
-      ],
-      "matchStrings": [
-        "golangci/golangci-lint-action@\\S+\\s+with:\\s+version:\\s*(?<currentValue>v\\d+\\.\\d+(?:\\.\\d+)?)"
-      ],
-      "depNameTemplate": "golangci/golangci-lint",
-      "datasourceTemplate": "github-releases",
-      "versioningTemplate": "semver-coerced"
-    }
-  ]
+  "stopUpdatingLabel": "renovate/stop_updating"
 }
