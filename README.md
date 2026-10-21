@@ -9,10 +9,25 @@ Datalogger polls devices (Modbus TCP/RTU, HTTP APIs) and forwards every reading 
 or more outputs (InfluxDB 3.x, MQTT, CSV files, a read-only HTTP API, a webhook). It is
 a single binary configured by one YAML file.
 
+- **Devices:** Modbus TCP and RTU (single registers or register ranges, several devices
+  on one serial port), HTTP APIs (JSON via gjson paths, or plain text).
+- **Outputs:** InfluxDB 3.x (one row per poll, a column per point), MQTT v5, CSV files
+  with rotation, a read-only HTTP API with the latest values, webhooks.
+- **Transforms:** expressions per point (sign, bit fields, status texts from lookup
+  tables, values that depend on other points).
+- **Robust:** devices and outputs reconnect with backoff on their own; a slow output
+  never blocks the devices or the other outputs; on stop, queued readings are written.
+- **Runs anywhere:** Docker image (amd64, arm64, armv7), `.deb`/`.rpm` packages with a
+  systemd service, or a single static binary for Linux and macOS.
+
+> **Coming from v1?** The config format and the InfluxDB schema changed; see
+> [Upgrading from v1](#upgrading-from-v1).
+
 ## Installation
 
-**Docker Compose** (images for linux/amd64, arm64 and arm/v7 on
-`ghcr.io/dombyte/datalogger`):
+### Docker Compose
+
+Images for linux/amd64, arm64 and arm/v7 on `ghcr.io/dombyte/datalogger`:
 
 ```bash
 mkdir datalogger && cd datalogger
@@ -24,13 +39,11 @@ docker compose up -d
 
 The compose file mounts `./config.yaml` read-only and `./data` to `/app/data` (write CSV
 files below `/app/data`). Publish a port only if you use the `api` output. Pin a version
-tag (`vX.Y.Z`, `vX.Y`, `vX`) instead of `latest` if you want controlled upgrades.
+tag (`vX.Y.Z`, `vX.Y`, `v2`) instead of `latest` if you want controlled upgrades.
 
-> **v2 pre-release:** this README and `example/config.yaml` on `main` describe v2. Until
-> v2.0.0 is released, `latest` is still v1 and does not read this config; use the newest
-> `v2.0.0-rcN` tag from the [releases](https://github.com/dombyte/datalogger/releases).
+### Package (.deb / .rpm)
 
-**Package (.deb / .rpm)** for Linux (amd64, arm64, armv7) from the
+For Linux (amd64, arm64, armv7) from the
 [releases](https://github.com/dombyte/datalogger/releases), with a systemd service:
 
 ```bash
@@ -54,14 +67,18 @@ CSV paths such as `./data/data.csv` land there. The `api` output needs a port ab
 An upgrade restarts a running service; removing the package stops it and keeps the
 config, the data and the user.
 
-**Binary:** download the archive for Linux (amd64, arm64, armv7) or macOS (amd64,
-arm64) from the [releases](https://github.com/dombyte/datalogger/releases) and run:
+### Binary
+
+Download the archive for Linux (amd64, arm64, armv7) or macOS (amd64, arm64) from the
+[releases](https://github.com/dombyte/datalogger/releases) and run:
 
 ```bash
 datalogger -config config.yaml [-debug]   # -version prints the build info
 ```
 
-**From source** (Go, see `go.mod` for the version): `make build`.
+### From source
+
+With Go (version in `go.mod`): `make build` builds `./datalogger` with version info.
 
 ## Configuration
 
@@ -259,40 +276,6 @@ outputs:
 - An expression that does not compile, or names an unknown point or lookup, stops the
   program at startup. One that fails while running skips the point and is logged.
 
-### Upgrading from v1
-
-v2 drops the `device_specific:` and `output_specific:` levels: the type block moves up
-one level. The InfluxDB options `batch_size`, `batch_timeout`, `max_retries` and
-`retry_delay` move into the `influxdb:` block; `batch_size` now counts rows (one per
-poll, one per read in Modbus direct mode).
-
-- `parallelism` is gone (Modbus requests on one connection always ran one after the
-  other); delete it from every device, an unknown key stops the program.
-- `buffer_size` now counts polls, not points: one entry holds all points of a poll.
-  Lower large values (v1 examples used 10000); the default 1000 fits most setups.
-
-The [InfluxDB schema](#influxdb-schema) changes from one row per point to one row per
-poll. Write v2 into a **new database**: the tables of v1 have the columns `point`,
-`unit` and `value` and would mix both layouts. The v1 database stays readable for
-older data; rewrite the queries as shown below.
-
-```yaml
-# v1
-- name: db
-  type: influxdb
-  batch_size: 5000
-  output_specific:
-    influxdb:
-      address: "http://influxdb:8181"
-
-# v2
-- name: db
-  type: influxdb
-  influxdb:
-    address: "http://influxdb:8181"
-    batch_size: 5000
-```
-
 ## Running
 
 - Devices and outputs connect in the background: one that is unreachable at startup (or
@@ -303,8 +286,65 @@ older data; rewrite the queries as shown below.
   7 seconds outputs that are still busy (an endpoint that hangs) are stopped: they drop
   the rest, close their files and connections, and the program exits with 1.
 - Exit code 0 after a clean stop, 1 on configuration or startup errors, when a component
-  stops unexpectedly, or when the shutdown takes too long. Run it with a restart policy
-  (`restart: unless-stopped` in the compose file).
+  stops unexpectedly, or when the shutdown takes too long. Run it with a restart policy:
+  `restart: unless-stopped` in the compose file; the packaged systemd service restarts
+  on failure.
+- Logs go to stderr (`docker compose logs -f`, `journalctl -u datalogger -f`). A device
+  that fails is logged once as a warning, from the third failure in a row as an error,
+  and again when it recovers. `-debug` adds per-poll and per-point detail.
+
+## Upgrading from v1
+
+v2 changes the config format and the InfluxDB schema: a v1 config does not start (its
+keys are unknown to v2). The Docker tag `latest` is v2; pin `v1` to stay on v1 for now.
+
+1. **Config:** the `device_specific:` and `output_specific:` levels are gone; the type
+   block moves up one level. The InfluxDB options `batch_size`, `batch_timeout`,
+   `max_retries` and `retry_delay` move into the `influxdb:` block; `batch_size` now
+   counts rows (one per poll, one per read in Modbus direct mode).
+
+   ```yaml
+   # v1
+   - name: db
+     type: influxdb
+     batch_size: 5000
+     output_specific:
+       influxdb:
+         address: "http://influxdb:8181"
+
+   # v2
+   - name: db
+     type: influxdb
+     influxdb:
+       address: "http://influxdb:8181"
+       batch_size: 5000
+   ```
+
+2. **`parallelism`** is gone (Modbus requests on one connection always ran one after the
+   other); delete it from every device.
+3. **`buffer_size`** now counts polls, not points: one entry holds all points of a poll.
+   Lower large values (v1 examples used 10000); the default 1000 fits most setups.
+4. **InfluxDB:** the [schema](#influxdb-schema) changes from one row per point to one
+   row per poll. Write v2 into a **new database**: the tables of v1 have the columns
+   `point`, `unit` and `value` and would mix both layouts. The v1 database stays
+   readable for older data; rewrite the queries as shown in
+   [Query examples](#query-examples-sql-grafana-flightsql).
+
+MQTT topics and payloads, CSV columns and the HTTP API paths are unchanged. Other
+differences you may notice:
+
+- Timestamps: Modbus `direct` mode stamps every point with the time of its own read;
+  Modbus `range` mode and HTTP stamp all points of a poll with one time.
+- CSV backups are named in UTC (`<file>.<YYYYMMDD-HHMMSS>`), like the timestamps in the
+  file.
+- Several Modbus devices on one serial port now share it (v1 opened it once per device),
+  see [above](#several-devices-on-one-serial-port).
+- An HTTP response from which no point can be extracted counts as a failed poll.
+- Stricter checks at startup: Modbus `parity` (N, E, O) and `ranges`, at most 499 points
+  per device in InfluxDB.
+
+New in v2: the [webhook](#webhook) output, shared serial ports, API documentation at
+`GET /` and `GET /openapi.json`, `.deb`/`.rpm` packages.
 
 ## InfluxDB schema
 
