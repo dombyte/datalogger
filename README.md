@@ -6,8 +6,8 @@
 # Datalogger
 
 Datalogger polls devices (Modbus TCP/RTU, HTTP APIs) and forwards every reading to one
-or more outputs (InfluxDB 3.x, MQTT, CSV files, a read-only HTTP API). It is a single
-binary configured by one YAML file.
+or more outputs (InfluxDB 3.x, MQTT, CSV files, a read-only HTTP API, a webhook). It is
+a single binary configured by one YAML file.
 
 ## Installation
 
@@ -26,8 +26,12 @@ The compose file mounts `./config.yaml` read-only and `./data` to `/app/data` (w
 files below `/app/data`). Publish a port only if you use the `api` output. Pin a version
 tag (`vX.Y.Z`, `vX.Y`, `vX`) instead of `latest` if you want controlled upgrades.
 
-**Binary:** download the archive for Linux or macOS (amd64, arm64, armv7) from the
-[releases](https://github.com/dombyte/datalogger/releases) and run:
+> **v2 pre-release:** this README and `example/config.yaml` on `main` describe v2. Until
+> v2.0.0 is released, `latest` is still v1 and does not read this config; use the newest
+> `v2.0.0-rcN` tag from the [releases](https://github.com/dombyte/datalogger/releases).
+
+**Binary:** download the archive for Linux (amd64, arm64, armv7) or macOS (amd64,
+arm64) from the [releases](https://github.com/dombyte/datalogger/releases) and run:
 
 ```bash
 datalogger -config config.yaml [-debug]   # -version prints the build info
@@ -84,7 +88,7 @@ outputs:
 
 | Type | Notes |
 |---|---|
-| `modbus` | `tcp://host:port` or `rtu:///dev/ttyUSB0`. **direct** mode reads each point on its own (a failing point is skipped). **range** mode reads register ranges and decodes all points from them (a failing range skips the whole poll). Types `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool`; value = raw × `scale` + `offset`. One register type (3 holding / 4 input) per device. Several devices may share one serial port, see [below](#several-devices-on-one-serial-port). |
+| `modbus` | `tcp://host:port` or `rtu:///dev/ttyUSB0`. `register_mode` (required): **direct** reads each point on its own (a failing point is skipped); **range** reads the register `ranges` (`"start-end"`) and decodes all points from them (a failing range skips the whole poll). Types `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool`; value = raw × `scale` + `offset`. One register type (3 holding / 4 input) per device. Several devices may share one serial port, see [below](#several-devices-on-one-serial-port). |
 | `http` | GET or POST with optional headers and body. `response_type: json` extracts values with [gjson paths](https://github.com/tidwall/gjson/blob/master/SYNTAX.md); `text` delivers the whole body as one string. A path that is missing or `null` skips the point (no fake `0`). |
 
 ### Several devices on one serial port
@@ -97,12 +101,14 @@ devices:
   - name: meter
     type: modbus
     poll_interval: 1s
-    modbus: {address: "rtu:///dev/ttyUSB0", slave_id: 1, speed: 9600, parity: "N"}
+    modbus: {address: "rtu:///dev/ttyUSB0", slave_id: 1, speed: 9600, parity: "N",
+             register_mode: direct}
     # ...
   - name: heat_pump
     type: modbus
     poll_interval: 10s
-    modbus: {address: "rtu:///dev/ttyUSB0", slave_id: 2, speed: 9600, parity: "N"}
+    modbus: {address: "rtu:///dev/ttyUSB0", slave_id: 2, speed: 9600, parity: "N",
+             register_mode: direct}
     # ...
 ```
 
@@ -116,8 +122,8 @@ devices:
 
 | Type | Notes |
 |---|---|
-| `influxdb` | InfluxDB 3.x, batched, with retries. `timeout` per write (default 10 s); `no_sync: true` lets InfluxDB answer before the write is in its WAL on disk (faster on slow storage, a crash can lose the last second). Schema [below](#influxdb-schema). |
-| `mqtt` | MQTT v5, one topic per point: `<topic>/<device>/<point>` (default topic `datalogger`), payload `{"value": 230.5, "unit": "V", "timestamp": "2026-10-05T10:15:02.123Z"}`. `tcp://` or TLS via `tls://`, `ssl://`, `mqtts://`. Points are dropped (and counted) while the broker is unreachable. |
+| `influxdb` | InfluxDB 3.x, batched, with retries. `timeout` per write (default 10 s); `no_sync: true` lets InfluxDB answer before the write is in its WAL on disk (faster on slow storage, a crash can lose the last WAL flush). Schema [below](#influxdb-schema). |
+| `mqtt` | MQTT v5, one topic per point: `<topic>/<device>/<point>` (default topic `datalogger`), payload `{"value": 230.5, "unit": "V", "timestamp": "2026-10-05T10:15:02.123Z"}`. `tcp://` (or `mqtt://`, or no scheme) or TLS via `tls://`, `ssl://`, `mqtts://` (`insecure: true` skips the certificate check). Points are dropped (and counted) while the broker is unreachable. |
 | `csv` | Columns `timestamp, device, point, value, unit`, written as soon as no further poll is queued. Rotated after `max_age` to `<file>.<YYYYMMDD-HHMMSS>` (UTC); `max_backups` 0 = keep none, > 0 = keep that many, < 0 = keep all. |
 | `api` | Read-only JSON API with the latest value of every point, see [below](#http-api). |
 | `webhook` | Pushes readings as a JSON array to your HTTP endpoint, see [below](#webhook). |
@@ -235,6 +241,11 @@ v2 drops the `device_specific:` and `output_specific:` levels: the type block mo
 one level. The InfluxDB options `batch_size`, `batch_timeout`, `max_retries` and
 `retry_delay` move into the `influxdb:` block; `batch_size` now counts rows (one per
 poll, one per read in Modbus direct mode).
+
+- `parallelism` is gone (Modbus requests on one connection always ran one after the
+  other); delete it from every device, an unknown key stops the program.
+- `buffer_size` now counts polls, not points: one entry holds all points of a poll.
+  Lower large values (v1 examples used 10000); the default 1000 fits most setups.
 
 The [InfluxDB schema](#influxdb-schema) changes from one row per point to one row per
 poll. Write v2 into a **new database**: the tables of v1 have the columns `point`,
