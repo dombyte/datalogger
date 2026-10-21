@@ -1,0 +1,49 @@
+# System unit installed by the .deb/.rpm packages; runs as the datalogger user that
+# preinstall.sh creates.
+[Unit]
+Description=Datalogger
+Documentation=https://github.com/dombyte/datalogger#readme
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=datalogger
+Group=datalogger
+ExecStart=/usr/bin/datalogger -config /etc/datalogger/config.yaml
+# Relative paths in the config (./data/data.csv) land in /var/lib/datalogger, the only
+# directory the service may write to.
+StateDirectory=datalogger
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/datalogger
+# Exit 1 = a component stopped or the config is invalid: start again, like the
+# container's restart policy.
+Restart=on-failure
+RestartSec=5s
+# datalogger exits within its 8 s hard deadline.
+TimeoutStopSec=15s
+StandardOutput=journal
+StandardError=journal
+
+# Hardening. No PrivateDevices: Modbus RTU needs /dev/tty* (group dialout).
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
