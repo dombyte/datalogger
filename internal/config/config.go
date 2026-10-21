@@ -66,7 +66,7 @@ type HTTPConfig struct {
 	Method       string            `mapstructure:"method"` // GET or POST
 	Headers      map[string]string `mapstructure:"headers"`
 	Body         string            `mapstructure:"body"`          // Raw body for POST
-	ResponseType string            `mapstructure:"response_type"` // json, text, xml
+	ResponseType string            `mapstructure:"response_type"` // json or text
 	Insecure     bool              `mapstructure:"insecure"`
 }
 
