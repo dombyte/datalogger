@@ -65,7 +65,7 @@ func NewDialer(s ConnSettings, logger zerolog.Logger) (*LibDialer, error) {
 func (d *LibDialer) Open() (BusClient, error) {
 	client := d.newClient()
 	if err := client.Open(); err != nil {
-		return nil, fmt.Errorf("open connection: %w", err)
+		return nil, err // the Bus wraps it with the operation
 	}
 	return libBusClient{client: client}, nil
 }

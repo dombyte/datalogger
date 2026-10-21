@@ -41,6 +41,18 @@ func TestOpenConnectsAndFailsWhenNothingListens(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestOpenLeavesWrappingToTheBus(t *testing.T) {
+	t.Parallel()
+	d, err := modbus.NewDialer(modbus.ConnSettings{
+		Address: "rtu://" + t.TempDir() + "/missing", Timeout: time.Second,
+	}, zerolog.Nop())
+	require.NoError(t, err)
+
+	_, err = d.Open()
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "open connection", "the Bus names the operation")
+}
+
 func TestNewDialerAcceptsRTUParities(t *testing.T) {
 	t.Parallel()
 	for _, parity := range []string{"N", "E", "O"} {
