@@ -30,7 +30,8 @@ Datalogger polls **devices** and forwards every reading to one or more **outputs
   starts), in UTC: per read in Modbus direct mode; one per poll in Modbus range mode (its
   last chunk) and for HTTP (the response).
 - **Runtime:** a single binary configured by one YAML file (`-config`), no database of its
-  own; the only HTTP server is the optional `api` output. Shipped as binaries and a multi-arch `scratch` image on ghcr.io.
+  own; the only HTTP server is the optional `api` output. Shipped as binaries, `.deb`/
+  `.rpm` packages with a systemd service and a multi-arch `scratch` image on ghcr.io.
 
 ---
 
@@ -52,8 +53,8 @@ docker compose -f docker-compose.dev.yaml up --build      # local image with ./c
 - CI: `.github/workflows/checks.yml` (PRs, pushes to main, reused by the release; see
   section 11.1).
 - Release: push a `vX.Y.Z` (or `vX.Y.Z-rcN`) tag on `main`; `release.yml` runs the
-  checks, then goreleaser (`.goreleaser.yaml`) builds archives and
-  `ghcr.io/dombyte/datalogger` images (linux/amd64, arm64, arm/v7).
+  checks, then goreleaser (`.goreleaser.yaml`) builds archives, `.deb`/`.rpm` packages
+  (linux only, nfpm) and `ghcr.io/dombyte/datalogger` images (linux/amd64, arm64, arm/v7).
 - Go tools: mockery, deadcode and govulncheck are `tool` directives in `go.mod`, run with
   `go tool <name>`, so Renovate updates them with the modules. Golangci-lint is not one
   (its maintainers advise against it); it is installed locally and pinned in CI.
@@ -86,6 +87,8 @@ internal/output/         Writer interface
   webhook/               webhook writer: JSON array per request, backlog batching, retries
 internal/**/mocks/       mockery output
 example/                 config.yaml (full reference) and docker-compose.yaml for users
+packaging/               .deb/.rpm only: systemd unit (/usr/bin/datalogger, user
+                         datalogger) and the install/remove scripts (nfpm in .goreleaser.yaml)
 scripts/pre-commit.sh    local checks (make check)
 ```
 
@@ -356,7 +359,8 @@ writer that failed, or a missed deadline (drain or hard).
   is logged as an error, repeats at debug, the next rotation at info.
 - A path that cannot be opened fails startup.
 - The directory is created if missing. In the container, write below `/app/data`
-  (mounted from `./data`).
+  (mounted from `./data`); with the package, below `/var/lib/datalogger` (the working
+  directory of the service and the only one it may write to).
 
 ### API output
 - `listen` (`host:port`, required) is bound at startup; a port in use fails startup.
@@ -491,6 +495,16 @@ writer that failed, or a missed deadline (drain or hard).
 - **Config only from the YAML file, no env overrides:** the config is mostly lists of
   devices/outputs that env vars cannot address sensibly; the gitignored `config.yaml`,
   mounted read-only, serves as the secret file.
+- **Packages with a fixed system user, as release assets:** the `.deb`/`.rpm` files are
+  attached to the GitHub release (an apt/yum repository would need an external service).
+  The service runs as the `datalogger` user that `preinstall` creates (in `dialout` for
+  serial ports; kept on removal, it owns the data) rather than root or `DynamicUser`:
+  familiar to debug (`sudo -u datalogger`) and independent of the systemd version. The
+  unit is hardened (`ProtectSystem=strict`, no capabilities, no `PrivateDevices` because
+  of `/dev/tty*`) and may only write its `StateDirectory`, `/var/lib/datalogger`, which
+  is also its working directory. The package ships the config only as an example and
+  creates `/etc/datalogger` 0750 `root:datalogger`; it does not enable the service (it
+  would fail before the config is written), and an upgrade restarts it if it runs.
 - **API docs as static files, no Swagger UI:** three routes need no generator; a
   plain page and a hand-written spec are embedded, work offline and need no vendored
   JavaScript that Renovate cannot track. Tests keep the spec and the handlers in step.
@@ -658,7 +672,8 @@ writer that failed, or a missed deadline (drain or hard).
   checks the exact tag format and that the tag is on `main`, then the checks rerun
   (`checks.yml`), then goreleaser
   (`go mod verify` only, `-trimpath`, reproducible via `CommitDate`, `goamd64: v1`) builds
-  the archives and images. Image tags: `vX.Y.Z` always; `vX.Y`, `vX`, `latest` only for
+  the archives, the `.deb`/`.rpm` packages (`mtime` = `CommitDate`) and the images.
+  Image tags: `vX.Y.Z` always; `vX.Y`, `vX`, `latest` only for
   stable releases. The changelog is grouped from commit subjects (section 11.2);
   pre-releases compare against the last stable tag.
 - **Build info** (`Version`, `Commit`, `BuildDate`, `GoVersion`) is set via ldflags

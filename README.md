@@ -30,6 +30,30 @@ tag (`vX.Y.Z`, `vX.Y`, `vX`) instead of `latest` if you want controlled upgrades
 > v2.0.0 is released, `latest` is still v1 and does not read this config; use the newest
 > `v2.0.0-rcN` tag from the [releases](https://github.com/dombyte/datalogger/releases).
 
+**Package (.deb / .rpm)** for Linux (amd64, arm64, armv7) from the
+[releases](https://github.com/dombyte/datalogger/releases), with a systemd service:
+
+```bash
+sudo apt install ./datalogger_<version>_amd64.deb      # Debian, Ubuntu
+sudo dnf install ./datalogger-<version>-1.x86_64.rpm   # Fedora, RHEL
+```
+
+The package creates the system user `datalogger` (member of `dialout` for Modbus RTU
+serial ports). Write the config, then start the service:
+
+```bash
+sudo install -m 0640 -g datalogger /usr/share/doc/datalogger/examples/config.yaml \
+  /etc/datalogger/config.yaml
+sudoedit /etc/datalogger/config.yaml
+sudo systemctl enable --now datalogger
+journalctl -u datalogger -f
+```
+
+The service may only write below `/var/lib/datalogger`, its working directory: relative
+CSV paths such as `./data/data.csv` land there. The `api` output needs a port above 1023.
+An upgrade restarts a running service; removing the package stops it and keeps the
+config, the data and the user.
+
 **Binary:** download the archive for Linux (amd64, arm64, armv7) or macOS (amd64,
 arm64) from the [releases](https://github.com/dombyte/datalogger/releases) and run:
 

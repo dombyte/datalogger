@@ -48,6 +48,48 @@ archives:
       - README.md
       - example/config.yaml
 
+# .deb and .rpm for the linux builds (darwin is skipped), attached to the GitHub release.
+nfpms:
+  - id: packages
+    ids: [datalogger-multi-arch]
+    formats: [deb, rpm]
+    # datalogger_1.2.3_amd64.deb, datalogger-1.2.3-1.x86_64.rpm
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: dombyte
+    homepage: https://github.com/dombyte/datalogger
+    maintainer: Dominik <dom@ixsrv.de>
+    description: >-
+      Polls Modbus and HTTP devices and forwards the readings to InfluxDB, MQTT, CSV files,
+      an HTTP API and webhooks.
+    license: MIT
+    section: misc
+    bindir: /usr/bin
+    # CommitDate keeps rebuilds of the same tag byte-identical, as for the binaries.
+    mtime: "{{ .CommitDate }}"
+    contents:
+      - src: packaging/datalogger.service
+        dst: /usr/lib/systemd/system/datalogger.service
+      # Examples only: the real config is written by the admin, so nothing in /etc is
+      # replaced or removed by the package.
+      - src: example/config.yaml
+        dst: /usr/share/doc/datalogger/examples/config.yaml
+      - src: README.md
+        dst: /usr/share/doc/datalogger/README.md
+      - src: LICENSE
+        dst: /usr/share/doc/datalogger/LICENSE
+      # Holds the config with tokens and passwords: readable by the service user only.
+      - dst: /etc/datalogger
+        type: dir
+        file_info:
+          mode: 0750
+          owner: root
+          group: datalogger
+    scripts:
+      preinstall: packaging/preinstall.sh
+      postinstall: packaging/postinstall.sh
+      preremove: packaging/preremove.sh
+      postremove: packaging/postremove.sh
+
 changelog:
   sort: asc
   use: git
