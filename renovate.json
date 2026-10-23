@@ -19,6 +19,14 @@
     "renovate"
   ],
   "ignoreUnstable": true,
+  "timezone": "Europe/Berlin",
+  "minimumReleaseAge": "3 days",
+  "automergeType": "pr",
+  "automergeStrategy": "merge-commit",
+  "platformAutomerge": false,
+  "automergeSchedule": [
+    "* 0-5 * * *"
+  ],
   "packageRules": [
     {
       "matchManagers": [
@@ -46,6 +54,17 @@
         "github-actions"
       ],
       "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Non-major updates merge by themselves once the required checks pass, only within automergeSchedule",
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest",
+        "pin",
+        "pinDigest"
+      ],
+      "automerge": true
     },
     {
       "description": "Go module majors change the module path and need code changes; update by hand",
