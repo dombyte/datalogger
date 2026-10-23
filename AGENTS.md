@@ -664,6 +664,12 @@ writer that failed, or a missed deadline (drain or hard).
   majors, golangci-lint majors) are disabled with a `description` saying why. Text that
   only describes a pinning pattern must not match such a regex. GitHub vulnerability alerts stay enabled;
   Renovate's `vulnerabilityAlerts` reads them.
+- **Auto-merge:** Renovate proposes a version only once it is 3 days old
+  (`minimumReleaseAge`; security updates at once) and merges minor, patch and digest
+  updates itself with a merge commit once the required checks pass, only between 00:00
+  and 06:00 Europe/Berlin (`automergeSchedule`). Renovate merges, not GitHub
+  (`platformAutomerge: false`): GitHub's auto-merge is armed when the PR is opened and
+  would ignore the schedule. Majors stay manual PRs. Releases are still tagged by hand.
 - **Images:** `Dockerfile` (dev) and `Dockerfile.goreleaser` build `scratch` images with
   CA certs and tzdata from pinned base images; `.dockerignore`/`.gitignore` keep local
   config, data and build output out.
@@ -688,8 +694,10 @@ writer that failed, or a missed deadline (drain or hard).
   `refactor/…`, `chore/…`, `ci/…`). The maintainer MAY commit or merge directly into
   `main` after `make check` passes (ruleset bypass for the admin role; bots such as
   Renovate always need a PR with green checks).
-- `main` is protected by a repository ruleset: no deletion or force push, signed commits,
-  PR required, the `checks.yml` jobs required with "branches must be up to date".
+- `main` is protected by two repository rulesets: "main: signed commits" (every commit
+  signed, no bypass) and "main: required checks" (the `checks.yml` jobs `Gate`,
+  `golangci-lint` and `Build, test, deadcode, govulncheck` must pass with "branches must
+  be up to date"; the admin role may bypass it).
 - CI minutes: `checks.yml` runs on every PR, every direct push to `main` and every
   release tag, but not again on the merge commit of a PR. A `gate` job asks the API
   (`repos/{repo}/commits/{sha}/pulls`) whether the pushed commit is a PR's
