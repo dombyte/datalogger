@@ -1,6 +1,6 @@
 module github.com/dombyte/datalogger
 
-go 1.26.10
+go 1.27.3
 
 require (
 	github.com/InfluxCommunity/influxdb3-go/v2 v2.17.0
