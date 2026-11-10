@@ -158,6 +158,9 @@ devices:
 - Requests run one after the other, so devices on a port wait for each other. A slave
   that does not answer holds the port for up to `timeout` per request.
 - The port uses the largest `timeout` of its devices.
+- After a timeout the port is reopened, so an answer that arrives late is not taken for
+  the answer to the next request. Set `timeout` above the slowest answer of your
+  devices. A port that went away (an unplugged USB adapter) is reopened once it is back.
 
 ### Outputs
 

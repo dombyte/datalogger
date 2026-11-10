@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -324,14 +325,21 @@ func (r *Reader) disconnect() {
 	r.client = nil
 }
 
-// isConnectionError reports whether err means the connection is broken. Timeouts
-// (modbus.ErrRequestTimedOut) and Modbus exceptions keep the connection.
+// isConnectionError reports whether err means the connection is broken or could not
+// be opened. Timeouts (modbus.ErrRequestTimedOut) and Modbus exceptions keep the
+// connection. EIO, ENXIO, ENODEV and EBADF are what a serial port that went away
+// (an unplugged USB adapter) answers.
 func isConnectionError(err error) bool {
 	var opErr *net.OpError
-	return errors.As(err, &opErr) ||
-		errors.Is(err, io.EOF) ||
-		errors.Is(err, io.ErrUnexpectedEOF) ||
-		errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, syscall.ECONNRESET) ||
-		errors.Is(err, syscall.EPIPE)
+	if errors.As(err, &opErr) {
+		return true
+	}
+	broken := []error{
+		errOpen, io.EOF, io.ErrUnexpectedEOF, net.ErrClosed,
+		syscall.ECONNRESET, syscall.EPIPE,
+		syscall.EIO, syscall.ENXIO, syscall.ENODEV, syscall.EBADF,
+	}
+	return slices.ContainsFunc(broken, func(target error) bool {
+		return errors.Is(err, target)
+	})
 }

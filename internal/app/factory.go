@@ -95,7 +95,9 @@ func createBus(s modbus.ConnSettings, devices []string, log zerolog.Logger) (*mo
 		log.Info().Str("port", s.Address).Strs("devices", devices).
 			Stringer("timeout", s.Timeout).Msg("Modbus devices share serial port")
 	}
-	return modbus.NewBus(modbus.BusDeps{Address: s.Address, Opener: opener, Log: log})
+	return modbus.NewBus(modbus.BusDeps{
+		Address: s.Address, Serial: serial, Opener: opener, Log: log,
+	})
 }
 
 // modbusConnSettings maps a device config onto the settings of its connection.
