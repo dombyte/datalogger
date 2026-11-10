@@ -3,9 +3,12 @@ package modbus_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -19,12 +22,29 @@ import (
 	"github.com/dombyte/datalogger/internal/datasource/modbus/mocks"
 )
 
-// startBus starts a Bus on mocks; it is stopped when the test ends.
+// startBus starts the Bus of a TCP connection on mocks; it is stopped when the test
+// ends.
 func startBus(t *testing.T) (*modbus.Bus, *mocks.MockBusOpener, *mocks.MockBusClient) {
+	t.Helper()
+	return startBusOn(t, modbus.BusDeps{Address: "tcp://inverter:502"})
+}
+
+// startSerialBus starts the Bus of a serial port on mocks.
+func startSerialBus(t *testing.T) (*modbus.Bus, *mocks.MockBusOpener, *mocks.MockBusClient) {
+	t.Helper()
+	return startBusOn(t, modbus.BusDeps{Address: "rtu:///dev/ttyUSB0", Serial: true})
+}
+
+// startBusOn starts a Bus with d on mocks; it is stopped when the test ends.
+func startBusOn(
+	t *testing.T,
+	d modbus.BusDeps,
+) (*modbus.Bus, *mocks.MockBusOpener, *mocks.MockBusClient) {
 	t.Helper()
 	opener := mocks.NewMockBusOpener(t)
 	client := mocks.NewMockBusClient(t)
-	bus, err := modbus.NewBus(modbus.BusDeps{Address: "rtu:///dev/ttyUSB0", Opener: opener})
+	d.Opener = opener
+	bus, err := modbus.NewBus(d)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := bus.Start(ctx)
@@ -97,6 +117,101 @@ func TestBusTimeoutKeepsConnection(t *testing.T) {
 		_, err = c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
 		assert.ErrorIs(t, err, lib.ErrRequestTimedOut)
 	}
+}
+
+// Regression: a serial frame has no transaction ID, and the port stayed open after a
+// timeout. An answer that arrived late was taken for the answer to the next request,
+// and every later request got the answer before it. The port is reopened, which
+// discards what is on the line; so is a port that only times out because it went away.
+func TestSerialBusReopensAfterLateAnswerErrors(t *testing.T) {
+	t.Parallel()
+	for name, readErr := range map[string]error{
+		"timeout":                 fmt.Errorf("slave 1: %w", lib.ErrRequestTimedOut),
+		"answer of another slave": fmt.Errorf("slave 1: %w", lib.ErrBadUnitId),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			bus, opener, client := startSerialBus(t)
+			opener.EXPECT().Open().Return(client, nil).Twice()
+			client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+				Return(nil, readErr).Once()
+			client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+				Return([]uint16{7}, nil).Once()
+			client.EXPECT().Close().Return(nil).Twice()
+
+			c, err := bus.Dialer(1).Dial(context.Background())
+			require.NoError(t, err)
+			_, err = c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+			require.ErrorIs(t, err, readErr, "the reader still sees the timeout")
+
+			values, err := c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+			require.NoError(t, err)
+			assert.Equal(t, []uint16{7}, values)
+		})
+	}
+}
+
+// Regression: a serial port that went away (an unplugged USB adapter) answers with
+// errors of the device file, which were no connection errors: the bus kept the dead
+// port until the process was restarted.
+func TestBusReopensPortThatWentAway(t *testing.T) {
+	t.Parallel()
+	for _, errno := range []syscall.Errno{
+		syscall.EIO, syscall.ENXIO, syscall.ENODEV, syscall.EBADF,
+	} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			t.Parallel()
+			bus, opener, client := startSerialBus(t)
+			opener.EXPECT().Open().Return(client, nil).Twice()
+			client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+				Return(nil, fmt.Errorf("slave 1: %w", errno)).Once()
+			client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+				Return([]uint16{7}, nil).Once()
+			client.EXPECT().Close().Return(nil).Twice()
+
+			c, err := bus.Dialer(1).Dial(context.Background())
+			require.NoError(t, err)
+			_, err = c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+			require.ErrorIs(t, err, errno)
+
+			values, err := c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+			require.NoError(t, err)
+			assert.Equal(t, []uint16{7}, values)
+		})
+	}
+}
+
+// Regression: a port that could not be opened was no connection error, so a
+// direct-mode poll tried to open it for every point and logged each one.
+func TestReaderSkipsRestWhenPortCannotBeOpened(t *testing.T) {
+	t.Parallel()
+	bus, opener, client := startSerialBus(t)
+	gone := &fs.PathError{Op: "open", Path: "/dev/ttyUSB0", Err: syscall.ENOENT}
+	opener.EXPECT().Open().Return(client, nil).Once()
+	opener.EXPECT().Open().Return(nil, gone).Once() // not once more for d
+	client.EXPECT().ReadSlave(uint8(3), uint16(1), uint16(1), lib.HOLDING_REGISTER).
+		Return([]uint16{42}, nil).Once()
+	client.EXPECT().ReadSlave(uint8(3), uint16(2), uint16(1), lib.HOLDING_REGISTER).
+		Return(nil, lib.ErrRequestTimedOut).Once() // the adapter is unplugged
+	client.EXPECT().Close().Return(nil).Once()
+
+	r, err := modbus.New(modbus.Deps{
+		Settings: settings(
+			modbus.Point{Name: "a", Register: 1, Type: "uint16", Scale: 1},
+			modbus.Point{Name: "b", Register: 2, Type: "uint16", Scale: 1},
+			modbus.Point{Name: "c", Register: 3, Type: "uint16", Scale: 1},
+			modbus.Point{Name: "d", Register: 4, Type: "uint16", Scale: 1},
+		),
+		Dialer: bus.Dialer(3), Clock: clocktest.NewFake(start), Log: zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	data := r.Start(ctx)
+	points := <-data // sent when the poll is over
+	cancel()
+	for range data { // drain until the reader closes the channel
+	}
+	assert.Equal(t, []string{"a"}, names(points))
 }
 
 func TestBusDialFailsWhenPortCannotBeOpened(t *testing.T) {

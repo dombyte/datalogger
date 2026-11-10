@@ -9,8 +9,14 @@ import (
 	"github.com/simonvetter/modbus"
 )
 
-// ErrBusStopped is returned by the clients of a Bus that has stopped.
-var ErrBusStopped = errors.New("modbus: bus stopped")
+var (
+	// ErrBusStopped is returned by the clients of a Bus that has stopped.
+	ErrBusStopped = errors.New("modbus: bus stopped")
+
+	// errOpen marks a connection that could not be opened; it is a connection error, so
+	// a poll does not try to open it again for every point.
+	errOpen = errors.New("open connection")
+)
 
 // BusClient is an open connection that reads from any slave on it.
 type BusClient interface {
@@ -26,8 +32,11 @@ type BusOpener interface {
 // BusDeps are the dependencies of a Bus; all are required.
 type BusDeps struct {
 	Address string // the connection address, for logs
-	Opener  BusOpener
-	Log     zerolog.Logger
+	// Serial is set for a serial port: its frames carry no transaction ID, so the port is
+	// reopened after a request that may leave a late answer on the line.
+	Serial bool
+	Opener BusOpener
+	Log    zerolog.Logger
 }
 
 // Bus owns one Modbus connection: a serial port shared by the devices on it (an RS-485
@@ -35,14 +44,19 @@ type BusDeps struct {
 // the connection: it runs the requests one after the other, so frames never mix, and a
 // device whose context ends stops waiting for its request at once (the library cannot
 // cancel a request in flight; the bus finishes it alone). It opens the connection on the
-// first request and reopens it after a connection error. Each device reads through
-// Dialer(slaveID).
+// first request and reopens it after a connection error; a serial port also after a
+// timeout or an answer of another slave, which discards what arrives late. Each device
+// reads through Dialer(slaveID).
 type Bus struct {
 	opener   BusOpener
+	serial   bool
 	logger   zerolog.Logger
 	requests chan request
 	done     chan struct{}
-	client   BusClient // nil while closed; used only by the run goroutine
+
+	// Used only by the run goroutine.
+	client BusClient // nil while closed
+	resync bool      // the port was closed to discard a late answer, not because it broke
 }
 
 // request is one call to the bus: open the connection (open) or read registers of a
@@ -70,6 +84,7 @@ func NewBus(d BusDeps) (*Bus, error) {
 	}
 	return &Bus{
 		opener:   d.Opener,
+		serial:   d.Serial,
 		logger:   d.Log.With().Str("component", "modbus").Str("address", d.Address).Logger(),
 		requests: make(chan request),
 		done:     make(chan struct{}),
@@ -104,23 +119,60 @@ func (b *Bus) handle(req request) response {
 	if err := req.ctx.Err(); err != nil {
 		return response{err: err} // nobody waits for the answer
 	}
-	if b.client == nil {
-		client, err := b.opener.Open()
-		if err != nil {
-			return response{err: fmt.Errorf("open connection: %w", err)}
-		}
-		b.client = client
-		b.logger.Info().Msg("Opened Modbus connection")
+	if err := b.connect(); err != nil {
+		return response{err: err}
 	}
 	if req.open {
 		return response{}
 	}
 	values, err := b.client.ReadSlave(req.slaveID, req.addr, req.quantity, req.regType)
-	if err != nil && isConnectionError(err) {
+	b.afterRead(err)
+	return response{values: values, err: err}
+}
+
+// connect opens the connection, if it is closed.
+func (b *Bus) connect() error {
+	if b.client != nil {
+		return nil
+	}
+	resync := b.resync
+	b.resync = false
+	client, err := b.opener.Open()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errOpen, err)
+	}
+	b.client = client
+	level := zerolog.InfoLevel
+	if resync {
+		level = zerolog.DebugLevel // a reopen per timeout is no news
+	}
+	b.logger.WithLevel(level).Msg("Opened Modbus connection")
+	return nil
+}
+
+// afterRead closes the connection after a read error that makes it unusable: a
+// connection error, and on a serial port an error that can leave an answer on the line.
+func (b *Bus) afterRead(err error) {
+	switch {
+	case err == nil:
+	case isConnectionError(err):
 		b.logger.Warn().Err(err).Msg("Modbus connection lost, reopening on the next request")
 		b.disconnect()
+	case b.serial && leavesAnswerOnLine(err):
+		b.logger.Debug().Err(err).Msg("Reopening serial port to discard a late answer")
+		b.disconnect()
+		b.resync = true
 	}
-	return response{values: values, err: err}
+}
+
+// leavesAnswerOnLine reports whether the answer to a failed request may still arrive:
+// after a timeout the slave may answer late, and after an answer of another slave
+// (the late answer to an earlier request) the one asked for is still to come. A serial
+// frame has no transaction ID, so the next request with the same slave, function and
+// length would take that answer for its own, and every later one the answer before it.
+// A timeout is also all a port that went away (an unplugged USB adapter) may report.
+func leavesAnswerOnLine(err error) bool {
+	return errors.Is(err, modbus.ErrRequestTimedOut) || errors.Is(err, modbus.ErrBadUnitId)
 }
 
 // disconnect closes the connection, if it is open.

@@ -182,8 +182,10 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
 - Poll errors are handled inside the reader: exponential backoff (100 ms doubling, max
   30 s, waited on the injected clock and cut short by shutdown), and a reconnect on
   connection errors, detected by type: Modbus on `net.OpError`, EOF, closed connection,
-  `ECONNRESET`, `EPIPE` (the next poll dials again; timeouts and Modbus exceptions keep
-  the connection); HTTP closes idle connections on every transport error (`net.Error`)
+  `ECONNRESET`, `EPIPE`, a connection that cannot be opened, and `EIO`, `ENXIO`,
+  `ENODEV`, `EBADF` (a serial port that went away); the next poll dials again. Timeouts
+  and Modbus exceptions keep a TCP connection; a serial port is reopened after a timeout
+  (section 7); HTTP closes idle connections on every transport error (`net.Error`)
   and truncated bodies (status and parse errors do not). A reader never stops because of
   read errors. A failed poll is logged once, with `failure_count` and the backoff
   (`retry_in`): as a warning, from the third failure in a row as an error; the first
@@ -252,12 +254,19 @@ writer that failed, or a missed deadline (drain or hard).
   concurrently), so frames never mix. A reader whose context ends stops waiting for its
   request at once, also while it is in flight: the library cannot cancel a request, so
   the bus finishes it alone and skips requests whose caller has gone. The connection
-  opens on the first request and reopens after a connection error; a timeout keeps it
-  open.
+  opens on the first request and reopens after a connection error; a timeout keeps a
+  TCP connection open.
 - **Serial port (RTU):** all devices with one `rtu://` address share its bus (an RS-485
   bus with one `slave_id` each, or one device split in two). Devices on a port wait for
   each other: a slave that does not answer holds the port for its timeout. The port has
-  one timeout, the largest of its devices. Validation requires the same `speed`,
+  one timeout, the largest of its devices. After a timeout, and after an answer of
+  another slave, the bus closes the port and the next request reopens it, which
+  discards what is on the line: an RTU frame has no transaction ID (TCP has one, and
+  the library checks it), so an answer that arrives late would be taken for the answer
+  to the next request with the same slave, function and length. The reader still sees
+  the timeout. An answer that arrives only while the next request waits cannot be told
+  apart; a `timeout` above the slowest answer of the device avoids it. A port that
+  went away (an unplugged USB adapter) is reopened the same way, once it is back. Validation requires the same `speed`,
   `data_bits`, `parity` and `stop_bits` on all devices of a port. TCP devices keep one
   connection each.
 
