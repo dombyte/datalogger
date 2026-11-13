@@ -228,7 +228,8 @@ writer that failed, or a missed deadline (drain or hard).
 
 ### Modbus reader
 - Address URL: `tcp://host:port`, `rtu:///dev/ttyUSB0` (RTU: `speed`, `data_bits`,
-  `parity` N/E/O, `stop_bits`) or `rtuovertcp://host:port` (RTU frames through a TCP
+  `parity` N/E/O, `stop_bits`; `applyDefaults` fills in the library's defaults 19200,
+  8, N and 2 stop bits without parity, 1 with parity) or `rtuovertcp://host:port` (RTU frames through a TCP
   gateway: handled like a serial port, one shared bus per address, reopened after a
   timeout). Other schemes of the library (`udp`, `rtuoverudp`, `tcp+tls`) are rejected
   by validation. `slave_id` is required.

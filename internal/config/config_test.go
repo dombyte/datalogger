@@ -1596,3 +1596,32 @@ func TestValidateCSVFiles(t *testing.T) {
 			"outputs out and copy write the same file", path)
 	}
 }
+
+// Regression: the serial defaults of the library (19200 8N2, 1 stop bit with parity)
+// were not filled in, so a device without stop_bits and one with stop_bits: 2 were
+// rejected on a shared port although they used the same settings.
+func TestApplySerialDefaults(t *testing.T) {
+	t.Parallel()
+	cfg := rtuConfig(func(c *Config) {
+		c.Devices[0].Modbus = &ModbusConfig{
+			Address: "rtu:///dev/ttyUSB0", SlaveID: 1, RegisterMode: "direct",
+		}
+		c.Devices[1].Modbus = &ModbusConfig{
+			Address: "rtu:///dev/ttyUSB0", SlaveID: 2, RegisterMode: "direct",
+			Speed: 19200, StopBits: 2,
+		}
+	})
+	cfg.applyDefaults()
+	require.NoError(t, cfg.Validate())
+	m := cfg.Devices[0].Modbus
+	assert.Equal(t, serialSettings{speed: 19200, dataBits: 8, stopBits: 2, parity: "N"},
+		portSettings(m))
+
+	even := &Device{Modbus: &ModbusConfig{Address: "rtu:///dev/ttyUSB1", Parity: "E"}}
+	even.applyDefaults()
+	assert.Equal(t, 1, even.Modbus.StopBits, "1 stop bit with parity")
+
+	tcp := &Device{Modbus: &ModbusConfig{Address: "tcp://gw:502"}}
+	tcp.applyDefaults()
+	assert.Zero(t, tcp.Modbus.Speed, "no serial settings for TCP")
+}
