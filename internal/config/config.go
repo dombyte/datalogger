@@ -85,6 +85,9 @@ type Output struct {
 	Devices    []string `mapstructure:"devices"`
 	// ExcludePoints lists "device/point" names this output does not receive.
 	ExcludePoints []string `mapstructure:"exclude_points"`
+	// Spool keeps the polls on disk while the output does not take them (InfluxDB and
+	// webhook only); nil is off.
+	Spool *SpoolConfig `mapstructure:"spool"`
 	// Influxdb, Mqtt, Csv, API and Webhook hold the settings of the output type; exactly
 	// the block named by Type is set.
 	Influxdb *InfluxdbConfig `mapstructure:"influxdb"`
@@ -92,6 +95,12 @@ type Output struct {
 	Csv      *CsvConfig      `mapstructure:"csv"`
 	API      *APIConfig      `mapstructure:"api"`
 	Webhook  *WebhookConfig  `mapstructure:"webhook"`
+}
+
+// SpoolConfig configures the store and forward of an output.
+type SpoolConfig struct {
+	Dir       string `mapstructure:"dir"`         // the file is <dir>/<output>.spool
+	MaxSizeMB int    `mapstructure:"max_size_mb"` // 0 = default (100)
 }
 
 // InfluxdbConfig contains InfluxDB3-specific configuration.

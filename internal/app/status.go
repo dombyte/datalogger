@@ -73,6 +73,11 @@ func deviceStatus(s source) status.Device {
 func outputStatus(o outputRoute, queued int, now time.Time) status.Output {
 	st := o.state
 	sent := st.sent.Load()
+	var spooled int64
+	if o.spool != nil {
+		// The routers send to the spool; the writer's queue is filled by it.
+		sent, spooled = o.spool.Delivered(), o.spool.Backlog()
+	}
 	taken := sent - int64(queued)
 	if queued == 0 || taken != st.progress.taken || st.progress.since.IsZero() {
 		st.progress.taken, st.progress.since = taken, now
@@ -82,6 +87,7 @@ func outputStatus(o outputRoute, queued int, now time.Time) status.Output {
 		Queued:   queued,
 		Capacity: o.bufferSize,
 		Sent:     sent,
+		Spooled:  spooled,
 		Dropped:  st.dropped.Load(),
 		Stopped:  st.stopped.Load(),
 	}

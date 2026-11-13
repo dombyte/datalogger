@@ -135,6 +135,11 @@ outputs:
   device is handed over as one batch. If an output is too slow and its queue is full,
   new polls are dropped for that output only and a warning is logged; devices and other
   outputs are not affected.
+- InfluxDB and webhook outputs can keep polls on disk instead (`spool: {dir:
+  ./data/spool, max_size_mb: 100}`): while the output is down, the polls that find its
+  queue full are written to `<dir>/<output>.spool` and sent in order once it is back,
+  also after a restart. Above `max_size_mb` new polls are dropped. After a crash up to
+  one second of polls may be sent twice (InfluxDB stores an identical row once).
 
 ### Devices
 
