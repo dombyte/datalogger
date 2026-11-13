@@ -240,6 +240,9 @@ Every request has a JSON array as body (`Content-Type: application/json`):
   new polls queue up to `buffer_size`. Other answers such as `401` or `400` drop the
   batch at once. Dropped batches are logged with the status and the start
   of your endpoint's answer.
+- Every request carries an `Idempotency-Key` header: one random key per batch, the same
+  on every retry, so your endpoint can drop a batch it already stored when only the
+  answer was lost.
 - `timeout` per request (default 10 s), `insecure: true` skips certificate checks.
   Headers are never logged, and neither are tokens in the URL.
 

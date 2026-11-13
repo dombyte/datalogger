@@ -443,8 +443,10 @@ deadline (drain or hard).
 
 ### Webhook writer
 - `url` (`http://` or `https://` with a host; anything else fails startup), `method` POST
-  (default) or PUT, `headers` sent as given (after `Content-Type: application/json`, so
-  they may replace it; never logged), `insecure` skips certificate checks, `timeout` per
+  (default) or PUT, `headers` sent as given (after `Content-Type: application/json` and
+  `Idempotency-Key`, so they may replace them; never logged). `Idempotency-Key` is a
+  random key per batch (26 characters), the same on every retry of it, so an endpoint
+  that stored a batch whose answer was lost can drop the retry; `insecure` skips certificate checks, `timeout` per
   request (default 10 s).
 - Body: a JSON array of readings `[{"device", "point", "value", "unit", "timestamp":
   "<RFC3339Nano>"}]`, the fields of the API and MQTT payloads (NaN/±Inf are `null`). A

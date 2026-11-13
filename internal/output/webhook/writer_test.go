@@ -349,15 +349,20 @@ func TestKeepsBatchWhileUnavailable(t *testing.T) {
 		silent(http.StatusServiceUnavailable), http.StatusOK, http.StatusOK)
 
 	h.input <- []datasource.DataPoint{point("kept", 1.0)}
-	h.request()
+	key := h.request().header.Get("Idempotency-Key")
+	require.Len(t, key, 26)
 	h.advance(time.Second)
 	h.request() // the last retry: unavailable
 	h.advance(2 * time.Second)
 	h.request()
 	h.advance(4 * time.Second)
-	assert.Equal(t, []string{"kept"}, names(h.request()), "the same batch, sent at last")
+	last := h.request()
+	assert.Equal(t, []string{"kept"}, names(last), "the same batch, sent at last")
+	assert.Equal(t, key, last.header.Get("Idempotency-Key"), "the same key on every retry")
 	h.input <- []datasource.DataPoint{point("next", 2.0)}
-	assert.Equal(t, []string{"next"}, names(h.request()))
+	next := h.request()
+	assert.Equal(t, []string{"next"}, names(next))
+	assert.NotEqual(t, key, next.header.Get("Idempotency-Key"), "a new key per batch")
 	h.stop()
 
 	logs := h.logs.String()

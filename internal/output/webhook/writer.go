@@ -4,6 +4,7 @@ package webhook
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -260,7 +261,9 @@ func (w *Writer) flush(ctx context.Context) {
 	w.body.WriteByte(']')
 	// A copy for the requests: the transport may still read a body after Do returned
 	// (an early answer), while body already takes the next batch.
-	err := w.sendUntilDone(ctx, bytes.Clone(w.body.Bytes()))
+	// One key per batch, the same on every retry: an endpoint that stored a batch whose
+	// answer was lost can recognise the retry.
+	err := w.sendUntilDone(ctx, batch{body: bytes.Clone(w.body.Bytes()), key: rand.Text()})
 	switch {
 	case err != nil:
 		log.Error().Err(err).Msg("Dropping batch after failed requests")
@@ -273,14 +276,20 @@ func (w *Writer) flush(ctx context.Context) {
 	}
 }
 
-// sendUntilDone sends body, the JSON array of the batch, until it is accepted, fails
+// batch is one request body with its idempotency key.
+type batch struct {
+	body []byte // the JSON array of the readings
+	key  string // sent as Idempotency-Key, the same on every retry
+}
+
+// sendUntilDone sends the batch until it is accepted, fails
 // with an answer a retry cannot fix, or ctx ends. The first MaxRetries retries wait
 // RetryDelay; then the endpoint counts as unavailable: that is logged once, the batch
 // is kept and the wait doubles up to maxRetryAfter. Meanwhile the input fills and the
 // router drops (or spools) new polls. The InfluxDB writer retries the same way.
-func (w *Writer) sendUntilDone(ctx context.Context, body []byte) error {
+func (w *Writer) sendUntilDone(ctx context.Context, b batch) error {
 	for attempt := 1; ; attempt++ {
-		err := w.send(ctx, body)
+		err := w.send(ctx, b)
 		if err == nil {
 			w.available(attempt)
 			return nil
@@ -320,15 +329,16 @@ func (w *Writer) available(attempts int) {
 	}
 }
 
-// send sends one request with body; any 2xx status is a success.
-func (w *Writer) send(ctx context.Context, body []byte) error {
+// send sends one request with the batch; any 2xx status is a success.
+func (w *Writer) send(ctx context.Context, b batch) error {
 	req, err := http.NewRequestWithContext(ctx, w.settings.Method, w.settings.URL,
-		bytes.NewReader(body))
+		bytes.NewReader(b.body))
 	if err != nil {
 		//nolint:forbidigo // invariant: New checked the method and URL
 		panic(fmt.Sprintf("webhook: build request: %v", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Idempotency-Key", b.key)
 	setHeaders(req, w.settings.Headers)
 
 	resp, err := w.client.Do(req)
