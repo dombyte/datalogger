@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -365,8 +366,23 @@ func formatValue(v any) string {
 	case bool:
 		return strconv.FormatBool(val)
 	case string:
-		return val
+		return neutralizeFormula(val)
 	default:
 		return fmt.Sprintf("%v", val)
 	}
+}
+
+// formulaPrefixes are the first characters that make a spreadsheet read a cell as a
+// formula.
+const formulaPrefixes = "=+-@\t\r"
+
+// neutralizeFormula prefixes a text value that a spreadsheet would run as a formula
+// (=HYPERLINK(…), +cmd|…) with a single quote, as OWASP recommends for CSV files: the
+// text comes from a device and the file is often opened in Excel or LibreOffice.
+// Numbers are formatted by formatValue and never start with a quote.
+func neutralizeFormula(s string) string {
+	if s != "" && strings.ContainsRune(formulaPrefixes, rune(s[0])) {
+		return "'" + s
+	}
+	return s
 }
