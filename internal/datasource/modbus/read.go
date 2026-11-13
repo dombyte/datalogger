@@ -28,8 +28,11 @@ func (r *Reader) readDirectMode(ctx context.Context) ([]datasource.DataPoint, er
 			break
 		}
 		dp, err := r.readPoint(ctx, p)
-		if err != nil && ctx.Err() == nil {
-			r.logger.Warn().Str("point", p.Name).Err(err).Msg("Failed to read point")
+		switch {
+		case err == nil:
+			r.pointRead(p.Name)
+		case ctx.Err() == nil:
+			r.pointFailed(p.Name, err)
 		}
 		poll.add(dp, err)
 	}
@@ -82,6 +85,26 @@ func (d *directPoll) result() ([]datasource.DataPoint, error) {
 	return d.results, nil
 }
 
+// pointFailed warns once per point until it can be read again; repeats go to debug, so
+// a register the device never answers does not log a warning per poll.
+func (r *Reader) pointFailed(name string, err error) {
+	if r.failedPoints[name] {
+		r.logger.Debug().Str("point", name).Err(err).Msg("Failed to read point")
+		return
+	}
+	r.failedPoints[name] = true
+	r.logger.Warn().Str("point", name).Err(err).
+		Msg("Failed to read point; further failures of this point are logged at debug")
+}
+
+// pointRead logs at info when a point that failed before can be read again.
+func (r *Reader) pointRead(name string) {
+	if r.failedPoints[name] {
+		delete(r.failedPoints, name)
+		r.logger.Info().Str("point", name).Msg("Point can be read again")
+	}
+}
+
 // readPoint reads, decodes and scales one point, stamped with the receive time.
 func (r *Reader) readPoint(ctx context.Context, p Point) (datasource.DataPoint, error) {
 	values, err := r.client.ReadRegisters(ctx, p.Register, registerCount(p), r.regType)
@@ -111,9 +134,10 @@ func (r *Reader) readRangeMode(ctx context.Context) ([]datasource.DataPoint, err
 		values := r.registers[s.rng][s.offset : s.offset+int(registerCount(p))]
 		dp, err := r.dataPoint(p, values, received)
 		if err != nil {
-			r.logger.Warn().Str("point", p.Name).Err(err).Msg("Failed to decode point")
+			r.pointFailed(p.Name, err)
 			continue
 		}
+		r.pointRead(p.Name)
 		results = append(results, dp)
 	}
 	return results, nil
