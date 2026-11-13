@@ -59,6 +59,8 @@ devices:
     poll_interval: 5s
     timeout: 2s
     modbus:
+      # tcp://host:port, rtu:///dev/ttyUSB0 (serial, see below) or rtuovertcp://host:port
+      # (RTU frames through a TCP gateway; devices with the same address share it)
       address: "tcp://192.0.2.10:502"
       slave_id: 1
       register_mode: range

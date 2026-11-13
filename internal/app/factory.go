@@ -23,11 +23,26 @@ import (
 	"github.com/dombyte/datalogger/internal/transform"
 )
 
-// rtuScheme starts the address of a Modbus device on a serial port.
-const rtuScheme = "rtu://"
+const (
+	// rtuScheme starts the address of a Modbus device on a serial port.
+	rtuScheme = "rtu://"
 
-// createBuses creates the Bus of every Modbus device: one per serial port, shared by
-// the devices on it, and one per TCP device. A serial port has one timeout for all
+	// rtuOverTCPScheme starts the address of RTU frames sent through a TCP gateway: like
+	// a serial port, its frames carry no transaction ID and its devices share the line
+	// behind the gateway.
+	rtuOverTCPScheme = "rtuovertcp://"
+)
+
+// rtuFrames reports whether a Modbus address carries RTU frames (a serial port or an
+// RTU-over-TCP gateway): their devices share one connection, and a late answer cannot
+// be told from the answer to the next request.
+func rtuFrames(address string) bool {
+	return strings.HasPrefix(address, rtuScheme) || strings.HasPrefix(address, rtuOverTCPScheme)
+}
+
+// createBuses creates the Bus of every Modbus device: one per serial port or RTU-over-TCP
+// gateway, shared by the devices on it, and one per TCP device. A shared bus has one
+// timeout for all
 // requests: the largest of its devices, so no device is cut off before its own timeout.
 // It returns the bus of each device by name.
 func createBuses(devices []config.Device, log zerolog.Logger) (map[string]*modbus.Bus, error) {
@@ -73,25 +88,25 @@ func modbusConnections(
 	return conns, users
 }
 
-// connKey identifies the connection of a Modbus device: devices on one serial port
-// share it, every TCP device has its own.
+// connKey identifies the connection of a Modbus device: devices on one serial port or
+// RTU-over-TCP gateway share it, every TCP device has its own.
 func connKey(d config.Device) string {
-	if strings.HasPrefix(d.Modbus.Address, rtuScheme) {
+	if rtuFrames(d.Modbus.Address) {
 		return d.Modbus.Address
 	}
-	return "device " + d.Name // never an rtu:// address
+	return "device " + d.Name // never a Modbus address
 }
 
 // createBus creates the Bus of one connection, used by the named devices.
 func createBus(s modbus.ConnSettings, devices []string, log zerolog.Logger) (*modbus.Bus, error) {
-	serial := strings.HasPrefix(s.Address, rtuScheme)
+	serial := rtuFrames(s.Address)
 	opener, err := modbus.NewDialer(s, log)
 	switch {
 	case err != nil && serial:
 		return nil, fmt.Errorf("serial port %s: %w", s.Address, err)
 	case err != nil:
 		return nil, fmt.Errorf("device %s: %w", devices[0], err)
-	case serial:
+	case serial && len(devices) > 1:
 		log.Info().Str("port", s.Address).Strs("devices", devices).
 			Stringer("timeout", s.Timeout).Msg("Modbus devices share serial port")
 	}
