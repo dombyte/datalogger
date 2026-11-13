@@ -391,6 +391,13 @@ deadline (drain or hard).
   connect and `offline` on stop (at most 2 s, so a hanging broker cannot hold the
   shutdown); the CONNECT carries the same topic with `offline` as last will, which the
   broker publishes when the connection breaks without a DISCONNECT.
+- Home Assistant discovery (`discovery_prefix`, usually `homeassistant`; empty = off):
+  before the first value of a point on a session, a retained config message (QoS 1) on
+  `<prefix>/<sensor|binary_sensor>/<topic>/<device>_<point>/config` (IDs reduced to
+  letters, digits, `_` and `-`) names the state topic, `value_template`
+  `{{ value_json.value }}` (bools: `ON`/`OFF`, a binary sensor), the unit, the
+  availability topic and one Home Assistant device per datalogger device. A failed
+  config publish is logged and tried again with the next poll.
 - Topic: `<topic>/<device>/<point>` (`topic` default `datalogger`); payload
   `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}` (NaN/±Inf values are
   `null`, as in the API); `qos` 0–2, `retain`.

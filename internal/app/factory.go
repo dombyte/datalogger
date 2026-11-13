@@ -360,6 +360,7 @@ func createMQTTWriter(
 			QoS:               byte(m.QoS), // validated: 0-2
 			Retain:            m.Retain,
 			AvailabilityTopic: availability,
+			DiscoveryPrefix:   m.DiscoveryPrefix,
 		},
 		Dialer: dialer,
 		Clock:  clk,

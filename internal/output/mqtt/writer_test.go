@@ -2,6 +2,7 @@ package mqtt_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strings"
@@ -413,4 +414,62 @@ func TestPublishesAvailability(t *testing.T) {
 	assert.Equal(t, "logger/availability online", got[0])
 	assert.Equal(t, "logger/meter/power", strings.Fields(got[1])[0])
 	assert.Equal(t, "logger/availability offline", got[2])
+}
+
+// With a discovery prefix every point gets one retained Home Assistant config message
+// per session, before its first value; bools are binary sensors.
+func TestPublishesHomeAssistantDiscovery(t *testing.T) {
+	t.Parallel()
+	dialer := mocks.NewMockDialer(t)
+	p, _ := session(t)
+	dialer.EXPECT().Dial(mock.Anything).Return(p, nil).Once()
+	pubs := published(p, nil)
+	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
+	w, err := mqtt.New(mqtt.Deps{
+		Settings: mqtt.Settings{
+			Name: "broker", Topic: "logger", AvailabilityTopic: "logger/availability",
+			DiscoveryPrefix: "homeassistant",
+		},
+		Dialer: dialer, Clock: clocktest.NewFake(start), Log: zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	input := make(chan []datasource.DataPoint)
+	done := w.Start(context.Background(), input)
+	poll := []datasource.DataPoint{
+		{DeviceName: "meter 1", PointName: "power", Value: 1.5, Timestamp: start, Unit: "W"},
+		{DeviceName: "meter 1", PointName: "on", Value: true, Timestamp: start},
+	}
+	input <- poll
+	input <- poll // announced already: data only
+	close(input)
+	for err := range done {
+		require.NoError(t, err)
+	}
+	close(pubs)
+
+	configs := map[string]map[string]any{}
+	data := 0
+	for pub := range pubs {
+		if !strings.HasPrefix(pub.Topic, "homeassistant/") {
+			if strings.HasPrefix(pub.Topic, "logger/meter 1/") {
+				data++
+			}
+			continue
+		}
+		assert.True(t, pub.Retain)
+		var cfg map[string]any
+		require.NoError(t, json.Unmarshal(pub.Payload, &cfg))
+		configs[pub.Topic] = cfg
+	}
+	assert.Equal(t, 4, data)
+	require.Len(t, configs, 2, "one config per point, not per poll")
+	power := configs["homeassistant/sensor/logger/meter_1_power/config"]
+	assert.Equal(t, "logger/meter 1/power", power["state_topic"])
+	assert.Equal(t, "{{ value_json.value }}", power["value_template"])
+	assert.Equal(t, "W", power["unit_of_measurement"])
+	assert.Equal(t, "logger_meter_1_power", power["unique_id"])
+	assert.Equal(t, "logger/availability", power["availability_topic"])
+	on := configs["homeassistant/binary_sensor/logger/meter_1_on/config"]
+	assert.Equal(t, "{{ 'ON' if value_json.value else 'OFF' }}", on["value_template"])
+	assert.NotContains(t, on, "unit_of_measurement")
 }

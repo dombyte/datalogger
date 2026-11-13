@@ -522,6 +522,9 @@ func (m *MqttConfig) Validate() error {
 	if strings.ContainsAny(m.Topic, mqttWildcards) {
 		return fmt.Errorf("topic %q must not contain + or #", m.Topic)
 	}
+	if strings.ContainsAny(m.DiscoveryPrefix, mqttWildcards) {
+		return fmt.Errorf("discovery_prefix %q must not contain + or #", m.DiscoveryPrefix)
+	}
 	return nil
 }
 
