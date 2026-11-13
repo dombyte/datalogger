@@ -110,6 +110,37 @@ func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) 
 	return a, nil
 }
 
+// Check builds everything New builds that has no side effects: the Modbus connections,
+// the readers, the expressions and the InfluxDB, MQTT and webhook writers. CSV files are
+// not opened and API ports not bound, so a running instance is not disturbed. Nothing
+// connects; an error wraps ErrInvalidConfig.
+func Check(cfg *config.Config, log zerolog.Logger) error {
+	buses, err := createBuses(cfg.Devices, log)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidConfig, err)
+	}
+	for _, d := range cfg.Devices {
+		if _, err := createSource(d, cfg.Lookups, buses, log, clock.Real{}); err != nil {
+			return fmt.Errorf("%w: device %s: %w", ErrInvalidConfig, d.Name, err)
+		}
+	}
+	return checkOutputs(cfg.Outputs, log)
+}
+
+// checkOutputs creates the writers whose construction has no side effects; a CSV file
+// or an API port would be opened. Not started, a writer holds no connection.
+func checkOutputs(outputs []config.Output, log zerolog.Logger) error {
+	for _, o := range outputs {
+		if o.Type == "csv" || o.Type == "api" {
+			continue
+		}
+		if _, err := createWriter(o, log, clock.Real{}); err != nil {
+			return outputError(o, err)
+		}
+	}
+	return nil
+}
+
 // createOutputs creates the writer of every output with its route.
 func createOutputs(
 	outputs []config.Output,

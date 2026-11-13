@@ -47,6 +47,7 @@ go test -race ./...                                       # all unit tests, as i
 go tool mockery                                           # regenerate mocks (.mockery.yaml)
 make build                                                # ./datalogger with version info (ldflags)
 ./datalogger -config config.yaml [-debug]                 # run; -version prints build info
+./datalogger -check -config config.yaml                   # validate (app.Check), exit 0 or 2
 docker compose -f docker-compose.dev.yaml up --build      # local image with ./config.yaml, ./test-dump
 ```
 

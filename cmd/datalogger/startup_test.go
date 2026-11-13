@@ -193,3 +193,47 @@ func TestRunStartupErrors(t *testing.T) {
 		})
 	}
 }
+
+// -check validates the config without starting anything: a port in use does not
+// matter, a setting a library rejects exits 2.
+func TestCheckFlag(t *testing.T) {
+	t.Parallel()
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = busy.Close() })
+	apiOutput := fmt.Sprintf("    api:\n      listen: %q", busy.Addr().String())
+	mqttOutput := "    mqtt:\n      address: \"http://broker.invalid:1883\""
+	tests := []struct {
+		name, config, wantOut, wantLog string
+		want                           int
+	}{
+		{
+			name:    "valid, port in use",
+			config:  fmt.Sprintf(startupConfig, "http://192.0.2.1", "api", apiOutput),
+			wantOut: "Configuration OK\n",
+		},
+		{
+			name:    "rejected by the client library",
+			config:  fmt.Sprintf(startupConfig, "http://192.0.2.1", "mqtt", mqttOutput),
+			want:    2,
+			wantLog: "Invalid configuration",
+		},
+		{
+			name:    "invalid",
+			config:  fmt.Sprintf(startupConfig, "http://192.0.2.1", "csv", "    csv: {}"),
+			want:    2,
+			wantLog: "Failed to load config",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr lockedBuffer
+			code := run([]string{"datalogger", "-check", "-config", writeConfig(t, tt.config)},
+				&stdout, &stderr)
+			assert.Equal(t, tt.want, code, "log:\n%s", stderr.String())
+			assert.Equal(t, tt.wantOut, stdout.String())
+			assert.Contains(t, stderr.String(), tt.wantLog)
+		})
+	}
+}

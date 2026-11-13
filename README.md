@@ -58,6 +58,7 @@ serial ports). Write the config, then start the service:
 sudo install -m 0640 -g datalogger /usr/share/doc/datalogger/examples/config.yaml \
   /etc/datalogger/config.yaml
 sudoedit /etc/datalogger/config.yaml
+sudo -u datalogger datalogger -check -config /etc/datalogger/config.yaml
 sudo systemctl enable --now datalogger
 journalctl -u datalogger -f
 ```
@@ -74,7 +75,12 @@ Download the archive for Linux (amd64, arm64, armv7) or macOS (amd64, arm64) fro
 
 ```bash
 datalogger -config config.yaml [-debug]   # -version prints the build info
+datalogger -check -config config.yaml     # validate only: exit 0 if valid, 2 if not
 ```
+
+`-check` loads the config and builds every device and output without connecting,
+opening CSV files or binding ports, so it is safe next to a running instance (for
+example in CI, or before a restart).
 
 ### From source
 
