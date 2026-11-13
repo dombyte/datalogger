@@ -159,6 +159,8 @@ func TestPollsJSONWithHeadersAndBody(t *testing.T) {
 		assert.Equal(t, `{"id":1}`, string(body))
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 		assert.Equal(t, "Bearer x", r.Header.Get("Authorization"))
+		// Regression: a Host header had no effect, Go sends req.Host.
+		assert.Equal(t, "meter.local", r.Host)
 		_, _ = w.Write([]byte(`{"power": 1500, "missing_is_skipped": null}`))
 	})
 	s := settings(srv.URL,
@@ -166,7 +168,7 @@ func TestPollsJSONWithHeadersAndBody(t *testing.T) {
 		http.Point{Name: "gone", JSONPath: "nope", Scale: 1},
 	)
 	s.Method, s.Body = "POST", `{"id":1}`
-	s.Headers = map[string]string{"Authorization": "Bearer x"}
+	s.Headers = map[string]string{"Authorization": "Bearer x", "host": "meter.local"}
 	h := newHarness(t, s, http.NewClient(time.Second, false))
 
 	h.start()

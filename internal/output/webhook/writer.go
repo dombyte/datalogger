@@ -329,9 +329,7 @@ func (w *Writer) send(ctx context.Context, body []byte) error {
 		panic(fmt.Sprintf("webhook: build request: %v", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
-	for k, v := range w.settings.Headers {
-		req.Header.Set(k, v)
-	}
+	setHeaders(req, w.settings.Headers)
 
 	resp, err := w.client.Do(req)
 	if err != nil {
@@ -441,4 +439,16 @@ func redactURL(raw string) string {
 		return "<invalid url>"
 	}
 	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
+}
+
+// setHeaders sets the configured headers on req. Go sends req.Host, not a Host header,
+// so a configured Host (a virtual host behind an IP address) is set there.
+func setHeaders(req *http.Request, headers map[string]string) {
+	for k, v := range headers {
+		if http.CanonicalHeaderKey(k) == "Host" {
+			req.Host = v
+			continue
+		}
+		req.Header.Set(k, v)
+	}
 }
