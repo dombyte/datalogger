@@ -76,6 +76,7 @@ internal/app/            composition root: Create* factories (config → Setting
 internal/config/         Config structs (viper/mapstructure), Load() (defaults + Validate)
 internal/clock/          Clock interface (Now, tickers, After) + Sleep; clocktest/ fake
 internal/status/         status snapshot, health rule, Unix socket server and client
+internal/spool/          store and forward of an output: polls on disk while it is down
 internal/datasource/     DataPoint type, DeviceReader interface
   modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, reconnect;
                          Bus: one connection (TCP device or shared serial port)
@@ -107,7 +108,7 @@ Imports (paths below `internal/`):
 
 ```
 cmd/datalogger    → app, clock, config, status
-app               → clock, config, status, datasource{,/modbus,/http},
+app               → clock, config, spool, status, datasource{,/modbus,/http},
                     output{,/csv,/influxdb,/mqtt,/api,/webhook}, transform
 transform         → datasource, expr-lang/expr
 datasource/modbus → clock, datasource, simonvetter/modbus
@@ -120,6 +121,7 @@ output/api        → clock, datasource
 output/webhook    → clock, datasource
 config            → viper
 status            → zerolog
+spool             → clock, datasource, zerolog
 clock, datasource → stdlib only
 ```
 
@@ -161,6 +163,13 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   blocks a device or the other outputs.
 - **`app` owns** the output input channels and closes them during shutdown, after all
   routers have finished.
+- **Spool** (optional, InfluxDB and webhook): a spool goroutine sits between the routers
+  and the writer. The routers send to its queue (64 polls); it passes a poll straight
+  to the writer's queue while nothing is spooled and the queue has room, else appends it
+  to `<dir>/<output>.spool` and hands the file over in order whenever the queue has
+  room. It owns the file and the writer's input: `app` closes the spool's queue, the
+  spool closes the writer's input. What is left on disk at shutdown is sent after the
+  next start.
 - **Writers own** their external resource (file, broker connection, InfluxDB client) and
   are the only code that writes to it. The channel returned by `Writer.Start` is closed
   when the writer has flushed and stopped (after an error on it, if it failed).
@@ -481,6 +490,22 @@ deadline (drain or hard).
   logged). The client does not connect at startup.
 - The body format is a public interface; changing it is a breaking change (`!`).
 
+### Spool (store and forward)
+- `spool: {dir, max_size_mb}` on an InfluxDB or webhook output (validation rejects it on
+  others and requires `dir`; the output name names the file and has no `/`). Those
+  writers keep a batch through an outage, so their queue fills; with a spool the polls
+  that find it full go to disk instead of being dropped.
+- File: one line per poll, a JSON array of points with their value as text and its Go
+  kind (`f`, `i`, `u`, `b`, `s`), so int64, uint64, NaN and ±Inf keep their type. The
+  read position is saved in `<file>.offset` at most once per second and on stop;
+  delivery is at least once (after a crash up to a second of polls is sent again). A
+  line cut short by a crash is removed at startup, a line that cannot be decoded is
+  skipped (warned). Once everything was handed over the file is emptied.
+- `max_size_mb` (default 100) bounds the file; a poll that does not fit, or cannot be
+  written, is dropped (warned once, info with the count when the spool takes polls
+  again). The status reports the polls on disk as `spooled`.
+- A spool directory that cannot be created fails startup with exit 1.
+
 ### Transforms (`expr`, `lookups`, `exclude_points`)
 - A point's `expr` ([expr-lang](https://expr-lang.org)) replaces its value after
   `scale`/`offset`. The environment: `value` (this point), `points.<name>` (every point
@@ -547,6 +572,11 @@ deadline (drain or hard).
 - **Soft vs. hard startup failures:** components connect lazily and retry, so one device
   or broker that is down does not stop the others; settings a client library rejects are
   configuration errors and fail startup, where they are noticed at once.
+- **Spool as a component in `app`, not in the writers:** one implementation serves every
+  output that keeps a batch through an outage; the writers stay unchanged and the
+  routers still never block (they send to the spool's queue). JSON lines with typed
+  values instead of gob: readable with standard tools and one record per line, so a
+  crash costs at most the last line.
 - **Drop while an output is disconnected (MQTT):** buffering in memory for an unbounded
   outage would only move the loss; the dropped count is logged instead.
 - **Exit on component death:** a reader/writer that ends unexpectedly is a bug or an

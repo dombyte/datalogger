@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -555,4 +556,71 @@ func TestStatusReportsStalledOutput(t *testing.T) {
 	<-a.inputs[0] // the writer takes the poll
 	clk.Advance(time.Minute)
 	assert.Zero(t, a.Status().Outputs[0].StalledSeconds)
+}
+
+// An output with a spool loses no poll while its writer takes nothing: its queue of one
+// poll is full, the rest waits on disk and follows in order once the writer reads again.
+func TestSpoolKeepsPollsWhileWriterIsStuck(t *testing.T) {
+	t.Parallel()
+	sp, err := createSpool(config.Output{
+		Name: "db", Spool: &config.SpoolConfig{Dir: t.TempDir()},
+	}, zerolog.Nop(), clock.Real{})
+	require.NoError(t, err)
+
+	gate := make(chan struct{})
+	rec := &recorder{}
+	w := outmocks.NewMockWriter(t)
+	w.EXPECT().Name().Return("db").Maybe()
+	w.EXPECT().Start(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, in <-chan []datasource.DataPoint) <-chan error {
+			done := make(chan error)
+			go func() {
+				defer close(done)
+				<-gate // stuck until the test opens the gate
+				for batch := range in {
+					rec.mu.Lock()
+					rec.points = append(rec.points, batch...)
+					rec.mu.Unlock()
+				}
+			}()
+			return done
+		}).Once()
+	a := newApp(
+		[]source{
+			fakeSource(t, "dev1", nil, point("dev1")),
+			fakeSource(t, "dev2", nil, point("dev2")),
+			fakeSource(t, "dev3", nil, point("dev3")),
+		},
+		[]outputRoute{{
+			writer: w, devices: []string{"dev1", "dev2", "dev3"}, bufferSize: 1, spool: sp,
+		}},
+		zerolog.Nop(), clock.Real{},
+	)
+
+	cancel, runErr := runApp(a)
+	require.Eventually(t, func() bool {
+		st := a.Status().Outputs[0]
+		return st.Queued == 1 && st.Spooled == 2
+	}, time.Second, time.Millisecond, "one poll queued, two on disk")
+	assert.Zero(t, a.Status().Outputs[0].Dropped)
+
+	close(gate)
+	require.Eventually(t, func() bool { return len(rec.got()) == 3 }, time.Second, time.Millisecond)
+	cancel()
+	require.NoError(t, <-runErr)
+	require.NoError(t, a.Shutdown(context.Background()))
+	assert.Zero(t, sp.Backlog())
+}
+
+func TestCreateSpool(t *testing.T) {
+	t.Parallel()
+	sp, err := createSpool(config.Output{Name: "db"}, zerolog.Nop(), clock.Real{})
+	require.NoError(t, err)
+	assert.Nil(t, sp, "no spool configured")
+
+	file := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+	_, err = createSpool(config.Output{Name: "db", Spool: &config.SpoolConfig{Dir: file}},
+		zerolog.Nop(), clock.Real{})
+	assert.ErrorContains(t, err, "spool: create directory")
 }

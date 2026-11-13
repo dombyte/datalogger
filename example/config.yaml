@@ -243,6 +243,12 @@ devices:
 #                dropped for this output only and a warning is logged.
 #   exclude_points  "device/point" names this output does not receive (optional), e.g.
 #                helper points only used by an expr.
+#   spool        influxdb and webhook only (optional): keep the polls on disk while the
+#                output is down instead of dropping them when the queue is full, and
+#                send them in order once it is back, also after a restart.
+#                dir: where <output>.spool is kept; max_size_mb: limit (default 100),
+#                new polls are dropped above it. After a crash a few polls (up to one
+#                second) may be sent twice.
 # =====================================================================================
 outputs:
   # ----- InfluxDB 3 --------------------------------------------------------------------
@@ -252,6 +258,9 @@ outputs:
   - name: influxdb
     type: influxdb
     buffer_size: 1000
+    spool: # optional store and forward while InfluxDB is down
+      dir: ./data/spool
+      max_size_mb: 100
     influxdb:
       address: "http://influxdb.example.com:8181"
       token: "<your-influxdb-token>"

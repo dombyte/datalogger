@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -18,12 +19,23 @@ import (
 	"github.com/dombyte/datalogger/internal/datasource"
 	"github.com/dombyte/datalogger/internal/datasource/modbus"
 	"github.com/dombyte/datalogger/internal/output"
+	"github.com/dombyte/datalogger/internal/spool"
 	"github.com/dombyte/datalogger/internal/transform"
 )
 
 const (
 	// defaultBufferSize is the output channel size in polls when buffer_size is not set.
 	defaultBufferSize = 1000
+
+	// bytesPerMB converts max_size_mb.
+	bytesPerMB = 1 << 20
+
+	// defaultSpoolMB is the size limit of a spool file when max_size_mb is not set.
+	defaultSpoolMB = 100
+
+	// spoolBuffer is the queue in front of a spool in polls: the spool only appends to
+	// a file, so it takes polls quickly and needs no buffer_size of its own.
+	spoolBuffer = 64
 
 	// pathSeparator separates device and point in exclude_points ("device/point").
 	pathSeparator = "/"
@@ -58,6 +70,10 @@ type outputRoute struct {
 	excludePoints []string
 	bufferSize    int
 	state         *outputState // set by newApp
+	// spool keeps the polls on disk while the writer does not take them; nil without
+	// one. spoolIn is its queue, created by newApp.
+	spool   *spool.Spool
+	spoolIn chan []datasource.DataPoint
 }
 
 // App runs all readers and writers of one config.
@@ -160,15 +176,40 @@ func createOutputs(
 		if err != nil {
 			return nil, outputError(o, err)
 		}
+		sp, err := createSpool(o, log, clk)
+		if err != nil {
+			return nil, fmt.Errorf("output %s: %w", o.Name, err) // a directory may work later
+		}
 		bufferSize := o.BufferSize
 		if bufferSize <= 0 {
 			bufferSize = defaultBufferSize
 		}
 		routes = append(routes, outputRoute{
 			writer: w, devices: o.Devices, excludePoints: o.ExcludePoints, bufferSize: bufferSize,
+			spool: sp,
 		})
 	}
 	return routes, nil
+}
+
+// createSpool opens the spool of an output, nil if it has none.
+func createSpool(o config.Output, log zerolog.Logger, clk clock.Clock) (*spool.Spool, error) {
+	if o.Spool == nil {
+		return nil, nil
+	}
+	sizeMB := o.Spool.MaxSizeMB
+	if sizeMB <= 0 {
+		sizeMB = defaultSpoolMB
+	}
+	return spool.New(spool.Deps{
+		Settings: spool.Settings{
+			Name:     o.Name,
+			Path:     filepath.Join(o.Spool.Dir, o.Name+".spool"),
+			MaxBytes: int64(sizeMB) * bytesPerMB,
+		},
+		Clock: clk,
+		Log:   log,
+	})
 }
 
 // outputError wraps the construction error of an output: a CSV file or an API port
@@ -193,6 +234,9 @@ func newApp(
 	for i := range outputs {
 		outputs[i].state = &outputState{}
 		inputs[i] = make(chan []datasource.DataPoint, outputs[i].bufferSize)
+		if outputs[i].spool != nil {
+			outputs[i].spoolIn = make(chan []datasource.DataPoint, spoolBuffer)
+		}
 	}
 	return &App{
 		sources: sources,
@@ -244,7 +288,11 @@ func (a *App) Shutdown(ctx context.Context) error {
 	a.cancelBuses()
 
 	a.log.Info().Msg("Draining outputs")
-	for _, in := range a.inputs {
+	for i, in := range a.inputs {
+		if sp := a.outputs[i].spoolIn; sp != nil {
+			close(sp) // the spool closes the writer's input
+			continue
+		}
 		close(in)
 	}
 	err := a.drain(ctx)
@@ -302,6 +350,12 @@ func (a *App) startWriters(
 	for i, o := range a.outputs {
 		in := a.inputs[i]
 		inputs[o.writer.Name()] = in
+		if o.spool != nil {
+			// The routers send to the spool; it feeds the writer and closes its input.
+			inputs[o.writer.Name()] = o.spoolIn
+			spoolDone := o.spool.Start(ctx, o.spoolIn, in)
+			a.writers.Go(func() { <-spoolDone })
+		}
 
 		done := o.writer.Start(ctx, in)
 		a.writers.Add(1)

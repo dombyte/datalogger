@@ -1678,3 +1678,23 @@ func TestValidateSharedConnections(t *testing.T) {
 	assert.ErrorContains(t, rtuConfig(func(c *Config) { tcp(c, true, false) }).Validate(),
 		"devices meter and inverter use tcp://gw:502 with different shared_connection")
 }
+
+// A spool is allowed on InfluxDB and webhook outputs, with a dir and an output name that
+// can name its file.
+func TestValidateSpool(t *testing.T) {
+	t.Parallel()
+	spooled := func(typ, name string, sp *SpoolConfig) *Output {
+		return &Output{Name: name, Type: typ, Spool: sp}
+	}
+	ok := &SpoolConfig{Dir: "./data/spool"}
+	assert.NoError(t, spooled("influxdb", "db", ok).validateSpool())
+	assert.NoError(t, spooled("webhook", "hook", &SpoolConfig{Dir: "x", MaxSizeMB: 5}).validateSpool())
+	assert.NoError(t, spooled("csv", "file", nil).validateSpool())
+	assert.ErrorContains(t, spooled("mqtt", "broker", ok).validateSpool(),
+		"spool is only supported for influxdb and webhook outputs, not mqtt")
+	assert.ErrorContains(t, spooled("influxdb", "db", &SpoolConfig{}).validateSpool(),
+		"spool: dir required")
+	assert.ErrorContains(t, spooled("influxdb", "db", &SpoolConfig{Dir: "x", MaxSizeMB: -1}).
+		validateSpool(), "max_size_mb must not be negative")
+	assert.ErrorContains(t, spooled("influxdb", "a/b", ok).validateSpool(), "must not contain /")
+}

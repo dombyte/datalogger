@@ -53,6 +53,7 @@ type Output struct {
 	Queued   int    `json:"queued"`   // polls waiting in the queue
 	Capacity int    `json:"capacity"` // buffer_size
 	Sent     int64  `json:"sent"`     // polls handed over
+	Spooled  int64  `json:"spooled"`  // polls in the spool file, waiting for the queue
 	Dropped  int64  `json:"dropped"`  // points dropped because the queue was full
 	// StalledSeconds is how long the queue has held polls without the output taking one
 	// (0 while it takes data or the queue is empty).

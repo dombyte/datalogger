@@ -462,8 +462,32 @@ func (o *Output) Validate() error {
 	if len(o.Devices) == 0 {
 		return errors.New("devices required")
 	}
+	if err := o.validateSpool(); err != nil {
+		return err
+	}
 
 	return o.validateTypeSettings()
+}
+
+// validateSpool checks the spool of an output: only outputs that keep a batch through
+// an outage (InfluxDB, webhook) fill their queue and can use it; the output name names
+// its file.
+func (o *Output) validateSpool() error {
+	switch sp := o.Spool; {
+	case sp == nil:
+		return nil
+	case o.Type != "influxdb" && o.Type != "webhook":
+		return fmt.Errorf("spool is only supported for influxdb and webhook outputs, not %s",
+			o.Type)
+	case sp.Dir == "":
+		return errors.New("spool: dir required")
+	case sp.MaxSizeMB < 0:
+		return errors.New("spool: max_size_mb must not be negative")
+	case strings.ContainsAny(o.Name, `/\`):
+		return fmt.Errorf("spool: output name %q names the spool file and must not contain /",
+			o.Name)
+	}
+	return nil
 }
 
 // validateTypeSettings validates the settings block of the output type.
