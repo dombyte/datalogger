@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -374,4 +375,42 @@ func TestQoS0PublishesInOrderAndStopsAfterFailure(t *testing.T) {
 		require.NoError(t, err)
 	}
 	assert.Equal(t, []string{"logger/meter/a", "logger/meter/b"}, topics)
+}
+
+// With an availability topic the writer publishes a retained "online" after connecting
+// and "offline" on stop; the broker publishes the last will if the connection breaks.
+func TestPublishesAvailability(t *testing.T) {
+	t.Parallel()
+	dialer := mocks.NewMockDialer(t)
+	p, _ := session(t)
+	dialer.EXPECT().Dial(mock.Anything).Return(p, nil).Once()
+	pubs := published(p, nil)
+	p.EXPECT().Disconnect(mock.Anything).Return(nil).Once()
+	w, err := mqtt.New(mqtt.Deps{
+		Settings: mqtt.Settings{
+			Name: "broker", Topic: "logger", AvailabilityTopic: "logger/availability",
+		},
+		Dialer: dialer, Clock: clocktest.NewFake(start), Log: zerolog.Nop(),
+	})
+	require.NoError(t, err)
+	input := make(chan []datasource.DataPoint)
+	done := w.Start(context.Background(), input)
+	input <- pollOf("power")
+	close(input)
+	for err := range done {
+		require.NoError(t, err)
+	}
+
+	var got []string
+	for range 3 {
+		pub := <-pubs
+		got = append(got, pub.Topic+" "+string(pub.Payload))
+		if pub.Topic == "logger/availability" {
+			assert.True(t, pub.Retain)
+			assert.Equal(t, byte(1), pub.QoS)
+		}
+	}
+	assert.Equal(t, "logger/availability online", got[0])
+	assert.Equal(t, "logger/meter/power", strings.Fields(got[1])[0])
+	assert.Equal(t, "logger/availability offline", got[2])
 }

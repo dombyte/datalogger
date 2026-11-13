@@ -291,6 +291,8 @@ outputs:
       address: "tcp://mqtt.example.com:1883"
       client_id: "datalogger-01" # default: logger-<8 random characters>
       topic: "datalogger" # default: datalogger
+      # <topic>/availability holds a retained "online" while connected and "offline"
+      # after a stop or a lost connection (last will).
       qos: 1 # 0, 1 or 2
       retain: false
       username: "<user>"
