@@ -176,6 +176,7 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 		for {
 			select {
 			case <-ctx.Done():
+				w.dropOpenBatch()
 				return
 			case points, ok := <-input:
 				if !ok {
@@ -189,6 +190,14 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 		}
 	}()
 	return done
+}
+
+// dropOpenBatch logs the readings of a batch that is dropped because the writer was
+// cancelled (at the drain deadline) before it was sent.
+func (w *Writer) dropOpenBatch() {
+	if w.reading > 0 {
+		w.logger.Warn().Int("points", w.reading).Msg("Dropping batch, output cancelled")
+	}
 }
 
 // addAll appends the points to the batch and sends it whenever it is full.
