@@ -23,9 +23,9 @@ const (
 	idleConnTimeout = 30 * time.Second
 )
 
-// Client writes points to InfluxDB; *influxdb3.Client implements it.
+// Client writes line protocol to InfluxDB; *influxdb3.Client implements it.
 type Client interface {
-	WritePoints(ctx context.Context, points []*influxdb3.Point, opts ...influxdb3.WriteOption) error
+	Write(ctx context.Context, lines []byte, opts ...influxdb3.WriteOption) error
 	Close() error
 }
 

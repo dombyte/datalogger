@@ -32,7 +32,7 @@ type harness struct {
 	client *mocks.MockClient
 	input  chan []datasource.DataPoint
 	done   <-chan error
-	writes chan []string // line protocol of every WritePoints call
+	writes chan []string // line protocol of every Write call
 	logs   *bytes.Buffer // read only after stop: the writer goroutine has ended
 }
 
@@ -54,16 +54,14 @@ func newHarness(t *testing.T, s influxdb.Settings) *harness {
 	return h
 }
 
-// expectWrites records the next n WritePoints calls, answering with errs in order.
+// expectWrites records the next n Write calls, answering with errs in order.
 func (h *harness) expectWrites(errs ...error) {
 	for _, err := range errs {
-		h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).RunAndReturn(
-			func(_ context.Context, points []*influxdb3.Point, _ ...influxdb3.WriteOption) error {
-				lines := make([]string, len(points))
-				for i, p := range points {
-					b, mErr := p.MarshalBinary(influxdb3.Nanosecond)
-					require.NoError(h.t, mErr)
-					lines[i] = string(b)
+		h.client.EXPECT().Write(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+			func(_ context.Context, data []byte, _ ...influxdb3.WriteOption) error {
+				var lines []string
+				for line := range strings.Lines(string(data)) {
+					lines = append(lines, line)
 				}
 				h.writes <- lines
 				return err
@@ -395,11 +393,11 @@ func TestPartialWriteCountsAsWritten(t *testing.T) {
 func TestRetryWaitsForRetryAfter(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 1, RetryDelay: time.Second})
-	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).
+	h.client.EXPECT().Write(mock.Anything, mock.Anything, mock.Anything).
 		Return(&influxdb3.ServerError{StatusCode: 429, RetryAfter: 5}).Once()
 	retried := make(chan time.Time, 1)
-	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).RunAndReturn(
-		func(context.Context, []*influxdb3.Point, ...influxdb3.WriteOption) error {
+	h.client.EXPECT().Write(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(context.Context, []byte, ...influxdb3.WriteOption) error {
 			retried <- h.clock.Now()
 			return nil
 		}).Once()
@@ -416,11 +414,11 @@ func TestRetryWaitsForRetryAfter(t *testing.T) {
 func TestRetryAfterIsCapped(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 1, RetryDelay: time.Second})
-	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).
+	h.client.EXPECT().Write(mock.Anything, mock.Anything, mock.Anything).
 		Return(&influxdb3.ServerError{StatusCode: 503, RetryAfter: 86400}).Once()
 	retried := make(chan time.Time, 1)
-	h.client.EXPECT().WritePoints(mock.Anything, mock.Anything).RunAndReturn(
-		func(context.Context, []*influxdb3.Point, ...influxdb3.WriteOption) error {
+	h.client.EXPECT().Write(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(context.Context, []byte, ...influxdb3.WriteOption) error {
 			retried <- h.clock.Now()
 			return nil
 		}).Once()

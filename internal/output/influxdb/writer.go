@@ -63,10 +63,14 @@ type Writer struct {
 	client   Client
 	clock    clock.Clock
 	logger   zerolog.Logger
-	batch    []*influxdb3.Point // one line per timestamp of a poll
-	columns  map[column]*columnType
-	failed   bool // the previous batch failed
-	partial  bool // the server rejected lines of the previous batch
+	// batch is the line protocol of the batch, encoded once when a poll is added, so a
+	// retry sends the same bytes again; lines counts its lines (one per timestamp of a
+	// poll).
+	batch   []byte
+	lines   int
+	columns map[column]*columnType
+	failed  bool // the previous batch failed
+	partial bool // the server rejected lines of the previous batch
 
 	unavailable bool // the batch failed MaxRetries retries and is still retried
 }
@@ -106,7 +110,6 @@ func New(d Deps) (*Writer, error) {
 		client:   d.Client,
 		clock:    d.Clock,
 		logger:   d.Log.With().Str("component", "influxdb").Str("output", s.Name).Logger(),
-		batch:    make([]*influxdb3.Point, 0, s.BatchSize),
 		columns:  make(map[column]*columnType),
 	}, nil
 }
@@ -145,8 +148,8 @@ func (w *Writer) loop(ctx context.Context, input <-chan []datasource.DataPoint) 
 	for {
 		select {
 		case <-ctx.Done():
-			if len(w.batch) > 0 {
-				w.logger.Warn().Int("lines", len(w.batch)).Msg("Dropping batch, output cancelled")
+			if w.lines > 0 {
+				w.logger.Warn().Int("lines", w.lines).Msg("Dropping batch, output cancelled")
 			}
 			return
 		case points, ok := <-input:
@@ -166,11 +169,25 @@ func (w *Writer) loop(ctx context.Context, input <-chan []datasource.DataPoint) 
 func (w *Writer) addAll(ctx context.Context, points []datasource.DataPoint) {
 	for _, group := range byTimestamp(points) {
 		if row := w.newRow(group); row != nil {
-			w.batch = append(w.batch, row)
+			w.appendLine(row)
 		}
 	}
-	if len(w.batch) >= w.settings.BatchSize {
+	if w.lines >= w.settings.BatchSize {
 		w.flush(ctx)
+	}
+}
+
+// appendLine encodes a row and appends it to the batch. A row that cannot be encoded is
+// skipped, so it cannot fail the batch of every device; one without a value line
+// protocol can store (only NaN or ±Inf) encodes to nothing.
+func (w *Writer) appendLine(row *influxdb3.Point) {
+	line, err := row.MarshalBinary(influxdb3.Nanosecond)
+	switch {
+	case err != nil:
+		w.logger.Warn().Err(err).Msg("Skipping line that cannot be encoded")
+	case len(line) > 0:
+		w.batch = append(w.batch, line...)
+		w.lines++
 	}
 }
 
@@ -284,12 +301,12 @@ func (w *Writer) checkType(c column, typ string) bool {
 // flush writes the batch with retries; after the last retry the batch is dropped. A
 // partial write counts as written: the server stored every line it did not reject.
 func (w *Writer) flush(ctx context.Context) {
-	if len(w.batch) == 0 {
+	if w.lines == 0 {
 		return
 	}
-	defer func() { w.batch = w.batch[:0] }()
+	defer func() { w.batch, w.lines = w.batch[:0], 0 }()
 
-	log := w.logger.With().Int("lines", len(w.batch)).Logger()
+	log := w.logger.With().Int("lines", w.lines).Logger()
 	err := w.writeUntilDone(ctx)
 	var partialErr *influxdb3.PartialWriteError
 	if errors.As(err, &partialErr) {
@@ -334,7 +351,7 @@ func (w *Writer) logRejected(log zerolog.Logger, err *influxdb3.PartialWriteErro
 // spools) new polls, so an outage costs the newest polls, not every batch.
 func (w *Writer) writeUntilDone(ctx context.Context) error {
 	for attempt := 1; ; attempt++ {
-		err := w.client.WritePoints(ctx, w.batch)
+		err := w.client.Write(ctx, w.batch, influxdb3.WithPrecision(influxdb3.Nanosecond))
 		if err == nil {
 			w.available(attempt)
 			return nil
