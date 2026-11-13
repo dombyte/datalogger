@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -76,6 +77,9 @@ func validateModbusPoints(points []Point) error {
 
 // validateModbusPoint checks the type, the register count and the function code.
 func validateModbusPoint(p Point) error {
+	if p.JSONPath != "" {
+		return errors.New("json_path is an HTTP setting")
+	}
 	need, ok := modbusRegisterCount(p.Type)
 	if !ok {
 		return fmt.Errorf("type must be int16, uint16, int32, uint32, float32 or bool, got %q",
@@ -121,15 +125,49 @@ func modbusRegisterCount(dataType string) (uint16, bool) {
 	}
 }
 
-// validateHTTPPoints checks that JSON points have a json_path.
-func validateHTTPPoints(points []Point, responseType string) error {
-	if responseType != "json" {
-		return nil
+// httpTypes are the point types of an HTTP device: the value is converted to it.
+func httpTypes() []string {
+	return []string{
+		"", "float32", "float64", "int16", "int32", "int64",
+		"uint16", "uint32", "uint64", "bool", "string",
 	}
+}
+
+// validateHTTPPoints checks every point of an HTTP device: a known type, json_path for
+// JSON (and only for JSON) and no Modbus settings, which would be ignored silently.
+func validateHTTPPoints(points []Point, responseType string) error {
 	for i, p := range points {
-		if p.JSONPath == "" {
-			return fmt.Errorf("points[%d] %s: %w", i, p.Name, errJSONPathRequired)
+		if err := validateHTTPPoint(p, responseType); err != nil {
+			return fmt.Errorf("points[%d] %s: %w", i, p.Name, err)
 		}
+	}
+	return nil
+}
+
+// validateHTTPPoint checks one point of an HTTP device.
+func validateHTTPPoint(p Point, responseType string) error {
+	if !slices.Contains(httpTypes(), p.Type) {
+		return fmt.Errorf("type must be float32, float64, int16, int32, int64, uint16, "+
+			"uint32, uint64, bool or string, got %q", p.Type)
+	}
+	if p.Register != 0 || p.Count != 0 || p.FunctionCode != 0 {
+		return errors.New("register, count and function_code are Modbus settings")
+	}
+	return validateHTTPSource(p, responseType)
+}
+
+// validateHTTPSource checks where the value comes from: json_path for JSON; a text
+// response has neither json_path nor type.
+func validateHTTPSource(p Point, responseType string) error {
+	switch {
+	case responseType == "json" && p.JSONPath == "":
+		return errJSONPathRequired
+	case responseType == "json":
+		return nil
+	case p.JSONPath != "":
+		return errors.New("json_path is only used with response_type json")
+	case p.Type != "":
+		return errors.New("type is only used with response_type json")
 	}
 	return nil
 }

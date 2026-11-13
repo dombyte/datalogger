@@ -64,7 +64,7 @@ type Settings struct {
 type Point struct {
 	Name     string
 	JSONPath string // json only
-	Type     string // optional conversion: float*, int*, uint*, bool, string
+	Type     string // optional: float32/64, int16/32/64, uint16/32/64, bool, string
 	Scale    float64
 	Offset   float64
 	Unit     string
@@ -112,13 +112,26 @@ func New(d Deps) (*Reader, error) {
 
 		failedPoints: make(map[string]bool),
 	}
-	if d.Settings.PollInterval <= 0 || len(d.Settings.Points) == 0 {
-		return nil, fmt.Errorf("%w: poll interval and points are required", ErrInvalidSettings)
+	if err := checkSettings(d.Settings); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidSettings, err)
 	}
 	if _, err := r.newRequest(context.Background()); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidSettings, err)
 	}
 	return r, nil
+}
+
+// checkSettings checks the poll interval and the points.
+func checkSettings(s Settings) error {
+	if s.PollInterval <= 0 || len(s.Points) == 0 {
+		return errors.New("poll interval and points are required")
+	}
+	for _, p := range s.Points {
+		if !validType(p.Type) {
+			return fmt.Errorf("point %s: unknown type %q", p.Name, p.Type)
+		}
+	}
+	return nil
 }
 
 // Name returns the device name.

@@ -143,6 +143,12 @@ func TestNewChecksDependencies(t *testing.T) {
 		Clock: clocktest.NewFake(start),
 	})
 	assert.ErrorIs(t, err, http.ErrInvalidSettings, "no points")
+
+	_, err = http.New(http.Deps{
+		Settings: settings("http://x", http.Point{Name: "p", JSONPath: "p", Type: "int8"}),
+		Client:   mocks.NewMockClient(t), Clock: clocktest.NewFake(start),
+	})
+	assert.ErrorIs(t, err, http.ErrInvalidSettings, "unknown type")
 }
 
 func TestPollsJSONWithHeadersAndBody(t *testing.T) {
