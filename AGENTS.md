@@ -221,8 +221,11 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    10 s stop timeout) is the backstop; after it the process exits 1. There is no
    second-signal force mode: a second signal is ignored, the deadlines are the force.
 
-Exit codes: 0 after a clean shutdown; 1 for startup errors, a stopped component, a
-writer that failed, or a missed deadline (drain or hard).
+Exit codes: 0 after a clean shutdown; 2 for a configuration that can never run (bad
+flags, a config that does not load, a setting a library rejects: `app.ErrInvalidConfig`;
+the systemd unit does not restart on it); 1 for other startup errors (a CSV file or API
+port that cannot be opened), a stopped component, a writer that failed, or a missed
+deadline (drain or hard).
 
 ---
 

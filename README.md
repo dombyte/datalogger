@@ -292,10 +292,11 @@ outputs:
 - SIGINT/SIGTERM stop the devices first, then every output writes what is queued. After
   7 seconds outputs that are still busy (an endpoint that hangs) are stopped: they drop
   the rest, close their files and connections, and the program exits with 1.
-- Exit code 0 after a clean stop, 1 on configuration or startup errors, when a component
-  stops unexpectedly, or when the shutdown takes too long. Run it with a restart policy:
-  `restart: unless-stopped` in the compose file; the packaged systemd service restarts
-  on failure.
+- Exit code 0 after a clean stop, 2 when the configuration can never run (bad flags, an
+  invalid config, a setting a library rejects), 1 on other startup errors (a file or port
+  that cannot be opened), when a component stops unexpectedly, or when the shutdown takes
+  too long. Run it with a restart policy: `restart: unless-stopped` in the compose file;
+  the packaged systemd service restarts on failure, but not after exit code 2.
 - Logs go to stderr (`docker compose logs -f`, `journalctl -u datalogger -f`). A device
   that fails is logged once as a warning, from the third failure in a row as an error,
   and again when it recovers. `-debug` adds per-poll and per-point detail.

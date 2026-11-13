@@ -33,6 +33,11 @@ var (
 	// ErrComponentStopped is returned by Run when a reader or writer stops on its own.
 	ErrComponentStopped = errors.New("app: component stopped unexpectedly")
 
+	// ErrInvalidConfig marks a New error caused by a setting that can never work (an
+	// address or expression the libraries reject), unlike a file or port that cannot be
+	// opened now and may work on the next start.
+	ErrInvalidConfig = errors.New("app: invalid configuration")
+
 	// ErrDrainDeadline is returned by Shutdown when the writers were stopped before they
 	// had written everything that was queued.
 	ErrDrainDeadline = errors.New("app: outputs stopped at the shutdown deadline")
@@ -79,13 +84,13 @@ type App struct {
 func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) {
 	buses, err := createBuses(cfg.Devices, log)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrInvalidConfig, err)
 	}
 	sources := make([]source, 0, len(cfg.Devices))
 	for _, d := range cfg.Devices {
 		s, err := createSource(d, cfg.Lookups, buses, log, clk)
 		if err != nil {
-			return nil, fmt.Errorf("device %s: %w", d.Name, err)
+			return nil, fmt.Errorf("%w: device %s: %w", ErrInvalidConfig, d.Name, err)
 		}
 		sources = append(sources, s)
 	}
@@ -115,7 +120,7 @@ func createOutputs(
 	for _, o := range outputs {
 		w, err := createWriter(o, log, clk)
 		if err != nil {
-			return nil, fmt.Errorf("output %s: %w", o.Name, err)
+			return nil, outputError(o, err)
 		}
 		bufferSize := o.BufferSize
 		if bufferSize <= 0 {
@@ -126,6 +131,16 @@ func createOutputs(
 		})
 	}
 	return routes, nil
+}
+
+// outputError wraps the construction error of an output: a CSV file or an API port
+// that cannot be opened may work on the next start; the settings of every other output
+// type were rejected by its library (ErrInvalidConfig).
+func outputError(o config.Output, err error) error {
+	if o.Type == "csv" || o.Type == "api" {
+		return fmt.Errorf("output %s: %w", o.Name, err)
+	}
+	return fmt.Errorf("%w: output %s: %w", ErrInvalidConfig, o.Name, err)
 }
 
 // newApp wires already created components; tests use it with mocks.

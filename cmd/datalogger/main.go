@@ -39,6 +39,11 @@ const (
 	// 10 s Docker waits before it kills the container.
 	shutdownTimeout = 8 * time.Second
 
+	// exitConfig is the exit code of a configuration that can never run (bad flags, a
+	// config that does not load or a setting the libraries reject): the systemd unit
+	// does not restart on it (RestartPreventExitStatus).
+	exitConfig = 2
+
 	// drainTimeout is how long the outputs may drain; then they are cancelled and get
 	// the rest of shutdownTimeout to close their files and connections.
 	drainTimeout = 7 * time.Second
@@ -82,7 +87,7 @@ func flagsOrExit(args []string, stdout, stderr io.Writer) (f cliFlags, code int,
 		return f, 0, false
 	case err != nil:
 		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
-		return f, 1, false
+		return f, exitConfig, false
 	case f.showVersion:
 		printVersion(stdout)
 		return f, 0, false
@@ -104,8 +109,9 @@ func main() {
 }
 
 // run starts the datalogger with args (program name first) and returns the exit code:
-// 0 after a clean shutdown, 1 if startup fails, a component stops on its own, a writer
-// fails or the shutdown deadline passes. It returns after SIGINT or SIGTERM.
+// 0 after a clean shutdown, 2 for a configuration that can never run, 1 if startup
+// fails otherwise, a component stops on its own, a writer fails or the shutdown
+// deadline passes. It returns after SIGINT or SIGTERM.
 func run(args []string, stdout, stderr io.Writer) int {
 	f, code, ok := flagsOrExit(args, stdout, stderr)
 	if !ok {
@@ -123,7 +129,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	cfg, err := config.Load(f.configPath)
 	if err != nil {
 		logger.Error().Err(err).Msg("Failed to load config")
-		return 1
+		return exitConfig
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -132,6 +138,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	a, err := app.New(cfg, logger, clock.Real{})
 	if err != nil {
 		logger.Error().Err(err).Msg("Startup failed")
+		if errors.Is(err, app.ErrInvalidConfig) {
+			return exitConfig
+		}
 		return 1
 	}
 	runErr := a.Run(ctx)
