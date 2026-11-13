@@ -26,7 +26,7 @@ var (
 
 // BusClient is an open connection that reads from any slave on it.
 type BusClient interface {
-	ReadSlave(slaveID uint8, addr, quantity uint16, regType modbus.RegType) ([]uint16, error)
+	ReadSlave(slaveID uint8, table Table, addr, quantity uint16) ([]uint16, error)
 	Close() error
 }
 
@@ -75,7 +75,7 @@ type request struct {
 	slaveID  uint8
 	addr     uint16
 	quantity uint16
-	regType  modbus.RegType
+	table    Table
 	reply    chan<- response // buffered, so the bus never waits for the caller
 }
 
@@ -133,7 +133,7 @@ func (b *Bus) handle(req request) response {
 	if req.open {
 		return response{}
 	}
-	values, err := b.client.ReadSlave(req.slaveID, req.addr, req.quantity, req.regType)
+	values, err := b.client.ReadSlave(req.slaveID, req.table, req.addr, req.quantity)
 	b.afterRead(err)
 	return response{values: values, err: err}
 }
@@ -257,14 +257,12 @@ type slaveClient struct {
 	slaveID uint8
 }
 
-// ReadRegisters reads registers of the slave, after the requests queued before it.
-func (c slaveClient) ReadRegisters(
-	ctx context.Context,
-	addr, quantity uint16,
-	regType modbus.RegType,
+// Read reads registers (or bits) of the slave, after the requests queued before it.
+func (c slaveClient) Read(
+	ctx context.Context, table Table, addr, quantity uint16,
 ) ([]uint16, error) {
 	return c.bus.call(ctx, request{
-		slaveID: c.slaveID, addr: addr, quantity: quantity, regType: regType,
+		slaveID: c.slaveID, table: table, addr: addr, quantity: quantity,
 	})
 }
 

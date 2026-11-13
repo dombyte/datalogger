@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/simonvetter/modbus"
 
 	"github.com/dombyte/datalogger/internal/clock"
 )
@@ -15,9 +14,7 @@ import (
 // reader, not the device.
 type instantClient struct{}
 
-func (instantClient) ReadRegisters(
-	_ context.Context, _, quantity uint16, _ modbus.RegType,
-) ([]uint16, error) {
+func (instantClient) Read(_ context.Context, _ Table, _, quantity uint16) ([]uint16, error) {
 	return make([]uint16, quantity), nil
 }
 

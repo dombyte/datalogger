@@ -235,27 +235,37 @@ writer that failed, or a missed deadline (drain or hard).
   gateway: handled like a serial port, one shared bus per address, reopened after a
   timeout). Other schemes of the library (`udp`, `rtuoverudp`, `tcp+tls`) are rejected
   by validation. `slave_id` is required.
-- **Register type** is chosen once per device from the first point with
-  `function_code` 3 (holding) or 4 (input); default holding. Mixing 3 and 4 in one device
-  is rejected by validation; use two devices.
+- **Data table** (`modbus.Table`) is chosen once per device from the first point with a
+  `function_code`: 1 (coils), 2 (discrete inputs), 3 (holding registers, the default) or
+  4 (input registers). Mixing them in one device is rejected by validation; use two
+  devices. Coils and discrete inputs are read with their own function code and handed
+  to the reader as one value of 0 or 1 per address, so they decode like registers;
+  their points are `bool` with count 1.
 - **Direct mode:** one read per point (`register`, `count`, default 1), one after the
   other. A failed point is skipped (warned once per point, then debug, info when it can
   be read again); the rest of the poll is still delivered. Reads not started yet are skipped after a connection
   error and after two timeouts in a row (the device does not answer; one timeout may be a
   register it ignores), so a silent device does not hold a poll for points × timeout.
 - **Range mode:** the `ranges` (`"start-end"`, inclusive) are read in chunks of at most
-  **125 registers** (Modbus protocol limit), then points are decoded from the collected
+  **125 registers** or 2000 coils/discrete inputs (Modbus protocol limits), then points are decoded from the collected
   registers. Every point address must be covered by a range (checked at construction).
   **Any failed chunk fails the whole poll** (no partial data); no further chunk is read
   after it.
 - Timestamps: direct mode stamps every point with the receive time of its own read;
   range mode stamps all points of a poll with the receive time of its last chunk (the
   ranges are one block of registers, decoded together).
-- Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `bool` (others are rejected by
-  validation); value = raw × `scale` + `offset`, always delivered as float64. `scale`
-  defaults to 1 (an explicit 0 is treated as unset). 32-bit types need `count: 2` (high
-  word first); a smaller count is rejected by validation, as is a `count` above 125 or
-  registers past 65535.
+- Types: `int16`, `uint16`, `int32`, `uint32`, `float32`, `int64`, `uint64`, `float64`,
+  `bool`, `string` (others are rejected by validation); numbers: value = raw × `scale` +
+  `offset`, always delivered as float64 (64-bit integers above 2^53 lose their last
+  digits). `scale` defaults to 1 (an explicit 0 is treated as unset). 32-bit types need
+  `count: 2`, 64-bit types `count: 4`; a smaller count is rejected by validation, as is
+  a `count` above 125 or registers past 65535. `string` reads `count` registers, two
+  characters each (high byte first), up to the first NUL, trimmed and without control
+  characters; it is never scaled.
+- **Byte order** (`byte_order` on the `modbus` block as the device default, per point
+  as override): `ABCD` (default: high word first, big-endian), `CDAB` (word order
+  reversed), `BADC` (bytes of every word swapped), `DCBA` (both). 16-bit types only use
+  the byte swap; strings keep their word order and only use the byte swap.
 - **Connections:** every Modbus connection has one `Bus`, created by `app`: one per TCP
   device and one per serial port. Its goroutine is the only code that uses the
   connection: readers send their requests (slave, register, count) over a channel and

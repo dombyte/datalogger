@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -222,7 +223,7 @@ func createModbusReader(
 			PollInterval: d.PollInterval,
 			RangeMode:    m.RegisterMode == "range",
 			Ranges:       m.Ranges,
-			Points:       modbusPoints(d.Points),
+			Points:       modbusPoints(d.Points, m.ByteOrder),
 		},
 		Dialer: bus.Dialer(m.SlaveID),
 		Clock:  clk,
@@ -230,8 +231,9 @@ func createModbusReader(
 	})
 }
 
-// modbusPoints maps config points onto Modbus points.
-func modbusPoints(points []config.Point) []modbus.Point {
+// modbusPoints maps config points onto Modbus points; a point without byte_order takes
+// the device's.
+func modbusPoints(points []config.Point, byteOrder string) []modbus.Point {
 	out := make([]modbus.Point, len(points))
 	for i, p := range points {
 		out[i] = modbus.Point{
@@ -240,6 +242,7 @@ func modbusPoints(points []config.Point) []modbus.Point {
 			Count:        p.Count,
 			Type:         p.Type,
 			FunctionCode: p.FunctionCode,
+			ByteOrder:    cmp.Or(p.ByteOrder, byteOrder),
 			Scale:        p.Scale,
 			Offset:       p.Offset,
 			Unit:         p.Unit,

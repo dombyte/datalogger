@@ -13,17 +13,12 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/simonvetter/modbus"
 
 	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/datasource"
 )
 
 const (
-	// Modbus function codes that select the register type.
-	fcHoldingRegisters = 3
-	fcInputRegisters   = 4
-
 	// Backoff after failed polls: starts at initialBackoff and doubles up to maxBackoff.
 	initialBackoff = 100 * time.Millisecond
 	maxBackoff     = 30 * time.Second
@@ -56,8 +51,9 @@ type Point struct {
 	Name         string
 	Register     uint16
 	Count        uint16 // registers to read; 0 means 1
-	Type         string // int16, uint16, int32, uint32, float32, bool
-	FunctionCode uint8  // 3 holding, 4 input; the first 3/4 decides for the device
+	Type         string // int16/32/64, uint16/32/64, float32/64, bool, string
+	FunctionCode uint8  // 1 coils, 2 discrete inputs, 3 holding, 4 input; one per device
+	ByteOrder    string // ABCD (default), CDAB, BADC or DCBA
 	Scale        float64
 	Offset       float64
 	Unit         string
@@ -80,7 +76,7 @@ type Reader struct {
 	clock    clock.Clock
 	logger   zerolog.Logger
 	ranges   []Range
-	regType  modbus.RegType
+	table    Table
 
 	// Range mode: the registers of each range, reused by every poll, and where each point
 	// (by index in Settings.Points) is in them.
@@ -104,7 +100,7 @@ func New(d Deps) (*Reader, error) {
 		dialer:   d.Dialer,
 		clock:    d.Clock,
 		logger:   d.Log.With().Str("component", "modbus").Str("device", d.Settings.Name).Logger(),
-		regType:  regType(d.Settings.Points),
+		table:    tableOf(d.Settings.Points),
 
 		failedPoints: make(map[string]bool),
 	}
@@ -144,20 +140,6 @@ func checkDeps(d Deps) error {
 			ErrInvalidSettings)
 	}
 	return nil
-}
-
-// regType returns the register type of the first point with function code 3 or 4
-// (holding registers by default).
-func regType(points []Point) modbus.RegType {
-	for _, p := range points {
-		switch p.FunctionCode {
-		case fcHoldingRegisters:
-			return modbus.HOLDING_REGISTER
-		case fcInputRegisters:
-			return modbus.INPUT_REGISTER
-		}
-	}
-	return modbus.HOLDING_REGISTER
 }
 
 // planSlots finds a range that holds all registers of every point and allocates the

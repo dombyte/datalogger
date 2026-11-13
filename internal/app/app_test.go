@@ -489,3 +489,14 @@ func TestNewSharesSerialPort(t *testing.T) {
 		`"port":"`+port+`","devices":["meter","inverter"],"timeout":"3s"`)
 	assert.Contains(t, logs.String(), `"port":"rtuovertcp://127.0.0.1:1","devices":["rtu-a","rtu-b"]`)
 }
+
+// A point without byte_order takes the device's; its own wins.
+func TestModbusPointsTakeDeviceByteOrder(t *testing.T) {
+	t.Parallel()
+	points := modbusPoints([]config.Point{
+		{Name: "a", Type: "uint32", Count: 2},
+		{Name: "b", Type: "uint32", Count: 2, ByteOrder: "BADC"},
+	}, "CDAB")
+	assert.Equal(t, "CDAB", points[0].ByteOrder)
+	assert.Equal(t, "BADC", points[1].ByteOrder)
+}

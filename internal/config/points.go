@@ -7,13 +7,17 @@ import (
 	"strings"
 )
 
-// Modbus function codes: 3 reads holding registers, 4 reads input registers.
+// Modbus function codes: 1 reads coils, 2 discrete inputs, 3 holding registers, 4 input
+// registers.
 const (
-	functionCodeHolding = 3
-	functionCodeInput   = 4
+	functionCodeCoils    = 1
+	functionCodeDiscrete = 2
+	functionCodeInput    = 4
 
-	// registersPer32Bit is the register count of int32, uint32 and float32.
+	// registersPer32Bit and registersPer64Bit are the register counts of the 32-bit and
+	// 64-bit types.
 	registersPer32Bit = 2
+	registersPer64Bit = 4
 
 	// maxRegistersPerRead is the Modbus protocol limit for one read request.
 	maxRegistersPerRead = 125
@@ -75,22 +79,44 @@ func validateModbusPoints(points []Point) error {
 	return nil
 }
 
-// validateModbusPoint checks the type, the register count and the function code.
+// validateModbusPoint checks the type, the register count, the function code and the
+// byte order.
 func validateModbusPoint(p Point) error {
 	if p.JSONPath != "" {
 		return errors.New("json_path is an HTTP setting")
 	}
 	need, ok := modbusRegisterCount(p.Type)
 	if !ok {
-		return fmt.Errorf("type must be int16, uint16, int32, uint32, float32 or bool, got %q",
-			p.Type)
+		return fmt.Errorf("type must be int16, uint16, int32, uint32, float32, int64, "+
+			"uint64, float64, string or bool, got %q", p.Type)
 	}
 	if err := validateRegisters(p, need); err != nil {
 		return err
 	}
-	if p.FunctionCode != 0 && p.FunctionCode != functionCodeHolding &&
-		p.FunctionCode != functionCodeInput {
-		return fmt.Errorf("function_code must be 3 or 4, got %d", p.FunctionCode)
+	if err := validateFunctionCode(p); err != nil {
+		return err
+	}
+	return validateByteOrder(p.ByteOrder)
+}
+
+// validateFunctionCode checks the function code; coils and discrete inputs are single
+// bits.
+func validateFunctionCode(p Point) error {
+	if p.FunctionCode > functionCodeInput {
+		return fmt.Errorf("function_code must be 1, 2, 3 or 4, got %d", p.FunctionCode)
+	}
+	bits := p.FunctionCode == functionCodeCoils || p.FunctionCode == functionCodeDiscrete
+	if bits && (p.Type != "bool" || p.Count > 1) {
+		return errors.New("coils and discrete inputs (function_code 1, 2) are type bool " +
+			"with count 1")
+	}
+	return nil
+}
+
+// validateByteOrder checks a byte order; "" uses the device's (or ABCD).
+func validateByteOrder(order string) error {
+	if !slices.Contains([]string{"", "ABCD", "CDAB", "BADC", "DCBA"}, order) {
+		return fmt.Errorf("byte_order must be ABCD, CDAB, BADC or DCBA, got %q", order)
 	}
 	return nil
 }
@@ -116,10 +142,12 @@ func validateRegisters(p Point, need uint16) error {
 // modbusRegisterCount returns how many registers a Modbus data type spans.
 func modbusRegisterCount(dataType string) (uint16, bool) {
 	switch dataType {
-	case "int16", "uint16", "bool":
+	case "int16", "uint16", "bool", "string":
 		return 1, true
 	case "int32", "uint32", "float32":
 		return registersPer32Bit, true
+	case "int64", "uint64", "float64":
+		return registersPer64Bit, true
 	default:
 		return 0, false
 	}
@@ -150,8 +178,8 @@ func validateHTTPPoint(p Point, responseType string) error {
 		return fmt.Errorf("type must be float32, float64, int16, int32, int64, uint16, "+
 			"uint32, uint64, bool or string, got %q", p.Type)
 	}
-	if p.Register != 0 || p.Count != 0 || p.FunctionCode != 0 {
-		return errors.New("register, count and function_code are Modbus settings")
+	if p.Register != 0 || p.Count != 0 || p.FunctionCode != 0 || p.ByteOrder != "" {
+		return errors.New("register, count, function_code and byte_order are Modbus settings")
 	}
 	return validateHTTPSource(p, responseType)
 }
