@@ -57,6 +57,7 @@ type cliFlags struct {
 	configPath  string
 	debug       bool
 	showVersion bool
+	check       bool
 }
 
 // parseFlags parses args (without the program name); usage and errors go to output.
@@ -67,6 +68,8 @@ func parseFlags(name string, args []string, output io.Writer) (cliFlags, error) 
 	fs.StringVar(&f.configPath, "config", "", "Path to configuration file (required)")
 	fs.BoolVar(&f.debug, "debug", false, "Enable debug logging")
 	fs.BoolVar(&f.showVersion, "version", false, "Show version and exit")
+	fs.BoolVar(&f.check, "check", false,
+		"Check the configuration (without connecting) and exit: 0 if it is valid, 2 if not")
 
 	if err := fs.Parse(args); err != nil {
 		return f, err
@@ -131,6 +134,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Error().Err(err).Msg("Failed to load config")
 		return exitConfig
 	}
+	if f.check {
+		return check(cfg, logger, stdout)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -148,6 +154,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		logger.Error().Err(runErr).Msg("Stopping after a component failure")
 	}
 	return shutdown(a, runErr, logger)
+}
+
+// check checks cfg with app.Check and returns the exit code: 0 if it is valid, else 2.
+func check(cfg *config.Config, logger zerolog.Logger, stdout io.Writer) int {
+	if err := app.Check(cfg, logger); err != nil {
+		logger.Error().Err(err).Msg("Invalid configuration")
+		return exitConfig
+	}
+	_, _ = fmt.Fprintln(stdout, "Configuration OK")
+	return 0
 }
 
 // shutdown runs a.Shutdown with the hard deadline and returns the exit code.
