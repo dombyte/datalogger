@@ -281,11 +281,16 @@ writer that failed, or a missed deadline (drain or hard).
 - `response_type`: `json` (default; values via gjson `json_path`; `type` float32/64,
   int16/32/64, uint16/32/64, bool or string converts, numbers sent as strings included;
   otherwise numbers become float64 and bools and strings stay) or `text` (the whole body
-  as one string); anything else is rejected by validation. JSON points need a
-  `json_path`; validation rejects an unknown `type`, `json_path` or `type` with `text`,
+  without surrounding white space, converted like a JSON string: a string without
+  `type`, else that type, then `scale`/`offset`); anything else is rejected by
+  validation. JSON points need a
+  `json_path`; validation rejects an unknown `type`, a `json_path` with `text`,
   and the Modbus keys `register`, `count`, `function_code` (and `json_path` on a Modbus
   point), which would be ignored.
-- `scale`/`offset` apply to numeric JSON values: value × scale + offset as float64. With
+- Strings from a device (JSON and text) are cleaned before they reach an output: at most
+  64 KiB (else the point fails), invalid UTF-8 replaced, control characters other than
+  tab and newline removed (no terminal escapes or carriage returns in logs and files).
+- `scale`/`offset` apply to numeric values: value × scale + offset as float64. With
   the defaults (1, 0) the value keeps its parsed type, so existing InfluxDB field types do
   not change; bools and strings are never scaled.
 - Non-200 responses are errors (up to 64 KiB of their body is read so the connection

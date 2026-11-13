@@ -38,7 +38,7 @@ func bodyReader(t *testing.T, resp *http.Response) *Reader {
 	r, err := New(Deps{
 		Settings: Settings{
 			Name: "meter", PollInterval: time.Second, Address: "http://device", Method: "GET",
-			ResponseType: "text", Points: []Point{{Name: "body", Scale: 1}},
+			ResponseType: "json", Points: []Point{{Name: "v", JSONPath: "v", Scale: 1}},
 		},
 		Client: stubClient{resp: resp},
 		Clock:  clocktest.NewFake(time.Time{}),
@@ -63,12 +63,14 @@ func TestBodyAboveLimitIsAnError(t *testing.T) {
 
 func TestBodyAtLimitIsRead(t *testing.T) {
 	t.Parallel()
-	body := &countingBody{Reader: strings.NewReader(strings.Repeat("x", maxBodySize))}
+	doc := `{"v": 1}`
+	body := &countingBody{Reader: strings.NewReader(doc + strings.Repeat(" ", maxBodySize-len(doc)))}
 	r := bodyReader(t, &http.Response{StatusCode: http.StatusOK, Body: body})
 
 	points, err := r.poll(context.Background())
 	require.NoError(t, err)
-	assert.Len(t, points[0].Value, maxBodySize)
+	assert.Equal(t, maxBodySize, body.read)
+	assert.InDelta(t, 1.0, points[0].Value, 0)
 }
 
 // Regression: the body of a non-200 response was closed unread, so the connection

@@ -195,7 +195,8 @@ devices:
         unit: "Hz"
 
   # ----- HTTP POST with body and auth header -------------------------------------------
-  # response_type: json (default) or text (the whole body as one string value).
+  # response_type: json (default) or text (the whole body without surrounding white
+  # space as one value: a string, or converted with type, then scale and offset).
   - name: cloud_api
     type: http
     poll_interval: 1min

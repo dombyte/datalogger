@@ -5,9 +5,15 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/tidwall/gjson"
 )
+
+// maxStringSize bounds a string value: InfluxDB stores at most 64 KiB in a string field,
+// and no reading of a device is longer.
+const maxStringSize = 64 << 10
 
 // Number kinds of the configured point types.
 const (
@@ -62,7 +68,7 @@ func (r *Reader) extractValue(body []byte, p Point) (any, error) {
 	case "json":
 		return extractJSONValue(body, p)
 	case "text":
-		return string(body), nil
+		return extractTextValue(body, p)
 	default:
 		return nil, fmt.Errorf("unknown response type: %s", r.settings.ResponseType)
 	}
@@ -80,10 +86,56 @@ func extractJSONValue(body []byte, p Point) (any, error) {
 	}
 
 	value, err := convertJSONResult(result, p.Type)
+	if err == nil {
+		value, err = cleanValue(value)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("JSONPath %s: %w", p.JSONPath, err)
 	}
 	return applyScaleAndOffset(value, p), nil
+}
+
+// extractTextValue converts the whole body, without surrounding white space, like a
+// JSON string: to the point type, a string without one; scale and offset apply to
+// numbers.
+func extractTextValue(body []byte, p Point) (any, error) {
+	text := strings.TrimSpace(string(body))
+	var value any = text
+	var err error
+	switch p.Type {
+	case "", "string":
+	case "bool":
+		value, err = parseBool(text)
+	default:
+		value, err = convertNumber(gjson.Result{Type: gjson.String, Str: text}, p.Type)
+	}
+	if err == nil {
+		value, err = cleanValue(value)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("text: %w", err)
+	}
+	return applyScaleAndOffset(value, p), nil
+}
+
+// cleanValue checks a string from the device before it reaches the outputs: at most
+// maxStringSize bytes, invalid UTF-8 replaced, and control characters other than tab
+// and newline removed, so no device text can carry terminal escapes or carriage returns
+// into a log, a CSV file or a dashboard. Other values are returned unchanged.
+func cleanValue(value any) (any, error) {
+	s, ok := value.(string)
+	if !ok {
+		return value, nil
+	}
+	if len(s) > maxStringSize {
+		return nil, fmt.Errorf("text of %d bytes is longer than %d", len(s), maxStringSize)
+	}
+	return strings.Map(func(r rune) rune {
+		if r != '\t' && r != '\n' && unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(s, string(utf8.RuneError))), nil
 }
 
 // convertJSONResult converts a gjson result to the point type; without a type numbers
@@ -150,14 +202,19 @@ func convertBool(result gjson.Result) (any, error) {
 	case gjson.True, gjson.False, gjson.Number:
 		return result.Bool(), nil
 	case gjson.String:
-		b, err := strconv.ParseBool(strings.TrimSpace(result.Str))
-		if err != nil {
-			return nil, fmt.Errorf("%q is not a bool", result.Str)
-		}
-		return b, nil
+		return parseBool(strings.TrimSpace(result.Str))
 	default:
 		return nil, fmt.Errorf("%s is not a bool", result.Raw)
 	}
+}
+
+// parseBool parses a bool sent as text ("true", "0").
+func parseBool(s string) (any, error) {
+	b, err := strconv.ParseBool(s)
+	if err != nil {
+		return nil, fmt.Errorf("%q is not a bool", s)
+	}
+	return b, nil
 }
 
 // autoDetect converts a JSON value without a configured type: numbers become float64,

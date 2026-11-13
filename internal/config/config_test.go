@@ -1035,11 +1035,7 @@ func TestValidatePoints(t *testing.T) {
 			device:  http("text", Point{Name: "p", JSONPath: "a"}),
 			wantErr: "points[0] p: json_path is only used with response_type json",
 		},
-		{
-			name:    "http text with type",
-			device:  http("text", Point{Name: "p", Type: "float64"}),
-			wantErr: "points[0] p: type is only used with response_type json",
-		},
+		{name: "http text with type", device: http("text", Point{Name: "p", Type: "float64"})},
 		{
 			name:    "modbus json path",
 			device:  modbus(Point{Name: "p", Type: "uint16", JSONPath: "a"}),
