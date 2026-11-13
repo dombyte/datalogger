@@ -64,15 +64,24 @@ func TestNewDialerAcceptsRTUParities(t *testing.T) {
 	}
 }
 
-// unitHandler answers every holding register read with the unit ID of the request.
+// unitHandler answers every holding register read with the unit ID of the request,
+// coils with true, false, … and discrete inputs with true.
 type unitHandler struct{}
 
-func (unitHandler) HandleCoils(*lib.CoilsRequest) ([]bool, error) {
-	return nil, lib.ErrIllegalFunction
+func (unitHandler) HandleCoils(req *lib.CoilsRequest) ([]bool, error) {
+	bits := make([]bool, req.Quantity)
+	for i := range bits {
+		bits[i] = i%2 == 0
+	}
+	return bits, nil
 }
 
-func (unitHandler) HandleDiscreteInputs(*lib.DiscreteInputsRequest) ([]bool, error) {
-	return nil, lib.ErrIllegalFunction
+func (unitHandler) HandleDiscreteInputs(req *lib.DiscreteInputsRequest) ([]bool, error) {
+	bits := make([]bool, req.Quantity)
+	for i := range bits {
+		bits[i] = true
+	}
+	return bits, nil
 }
 
 func (unitHandler) HandleHoldingRegisters(req *lib.HoldingRegistersRequest) ([]uint16, error) {
@@ -104,12 +113,18 @@ func TestOpenReadsFromEverySlave(t *testing.T) {
 	client, err := d.Open()
 	require.NoError(t, err)
 	for _, slave := range []uint8{1, 7} {
-		values, err := client.ReadSlave(slave, 0, 1, lib.HOLDING_REGISTER)
+		values, err := client.ReadSlave(slave, modbus.HoldingRegisters, 0, 1)
 		require.NoError(t, err)
 		assert.Equal(t, []uint16{uint16(slave)}, values)
 	}
-	_, err = client.ReadSlave(1, 0, 1, lib.INPUT_REGISTER)
+	_, err = client.ReadSlave(1, modbus.InputRegisters, 0, 1)
 	assert.ErrorContains(t, err, "slave 1")
+	values, err := client.ReadSlave(1, modbus.Coils, 0, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []uint16{1, 0, 1}, values, "coils as 0 and 1")
+	values, err = client.ReadSlave(1, modbus.DiscreteInputs, 0, 2)
+	require.NoError(t, err)
+	assert.Equal(t, []uint16{1, 1}, values)
 	require.NoError(t, client.Close())
 	assert.Error(t, client.Close(), "closed twice")
 

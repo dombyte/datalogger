@@ -11,12 +11,11 @@ import (
 	"github.com/simonvetter/modbus"
 )
 
-// Client is the part of an open Modbus connection the reader uses. A read returns when
-// ctx ends, also while it is in flight.
+// Client is the part of an open Modbus connection the reader uses. Read reads quantity
+// registers (or bits, as 0 or 1 each) of the table from addr on; it returns when ctx
+// ends, also while it is in flight.
 type Client interface {
-	ReadRegisters(
-		ctx context.Context, addr, quantity uint16, regType modbus.RegType,
-	) ([]uint16, error)
+	Read(ctx context.Context, table Table, addr, quantity uint16) ([]uint16, error)
 	Close() error
 }
 
@@ -93,16 +92,43 @@ type libBusClient struct {
 	client *modbus.ModbusClient
 }
 
-// ReadSlave selects the slave and reads its registers.
+// ReadSlave selects the slave and reads its registers, or its bits as 0 or 1.
 func (c libBusClient) ReadSlave(
-	slaveID uint8,
-	addr, quantity uint16,
-	regType modbus.RegType,
+	slaveID uint8, table Table, addr, quantity uint16,
 ) ([]uint16, error) {
 	setUnitID(c.client, slaveID)
-	values, err := c.client.ReadRegisters(addr, quantity, regType)
+	values, err := c.read(table, addr, quantity)
 	if err != nil {
 		return nil, fmt.Errorf("slave %d: %w", slaveID, err)
+	}
+	return values, nil
+}
+
+// read reads from the table with the function code of it.
+func (c libBusClient) read(table Table, addr, quantity uint16) ([]uint16, error) {
+	switch table {
+	case Coils:
+		return bitValues(c.client.ReadCoils(addr, quantity))
+	case DiscreteInputs:
+		return bitValues(c.client.ReadDiscreteInputs(addr, quantity))
+	case InputRegisters:
+		return c.client.ReadRegisters(addr, quantity, modbus.INPUT_REGISTER)
+	default:
+		return c.client.ReadRegisters(addr, quantity, modbus.HOLDING_REGISTER)
+	}
+}
+
+// bitValues turns coils or discrete inputs into one value of 0 or 1 each, so they are
+// decoded like registers.
+func bitValues(bits []bool, err error) ([]uint16, error) {
+	if err != nil {
+		return nil, err
+	}
+	values := make([]uint16, len(bits))
+	for i, b := range bits {
+		if b {
+			values[i] = 1
+		}
 	}
 	return values, nil
 }

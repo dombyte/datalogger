@@ -321,8 +321,8 @@ func (m *ModbusConfig) Validate() error {
 		return errors.New("slave_id required")
 	}
 
-	if !slices.Contains([]string{"", "N", "E", "O"}, m.Parity) {
-		return fmt.Errorf("parity must be N, E or O, got %q", m.Parity)
+	if err := m.validateEncoding(); err != nil {
+		return err
 	}
 
 	if err := m.validateRegisterMode(); err != nil {
@@ -334,6 +334,17 @@ func (m *ModbusConfig) Validate() error {
 	}
 	if len(m.Ranges) > 0 {
 		return errors.New("ranges are only read with register_mode range")
+	}
+	return nil
+}
+
+// validateEncoding checks the byte order and the parity.
+func (m *ModbusConfig) validateEncoding() error {
+	if err := validateByteOrder(m.ByteOrder); err != nil {
+		return err
+	}
+	if !slices.Contains([]string{"", "N", "E", "O"}, m.Parity) {
+		return fmt.Errorf("parity must be N, E or O, got %q", m.Parity)
 	}
 	return nil
 }

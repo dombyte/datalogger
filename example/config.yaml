@@ -65,13 +65,20 @@ devices:
       slave_id: 1
       register_mode: range
       ranges: ["33049-33058", "33095-33121", "33135-33150"]
+      byte_order: ABCD # default byte order of the points (see below)
     # Point options (Modbus):
     #   register       start register address
     #   count          number of registers: 1 for 16-bit types and bool,
-    #                  2 for int32/uint32/float32 (high word first; required)
-    #   type           int16, uint16, int32, uint32, float32, bool
-    #   function_code  3 = holding registers, 4 = input registers. One register type per
-    #                  device (mixing is rejected): configure a second device for both.
+    #                  2 for int32/uint32/float32, 4 for int64/uint64/float64 (required);
+    #                  string: the registers of the text, two characters each
+    #   type           int16, uint16, int32, uint32, float32, int64, uint64, float64,
+    #                  bool, string (numbers are delivered as float64, string as text)
+    #   function_code  1 = coils, 2 = discrete inputs (both type bool), 3 = holding
+    #                  registers (default), 4 = input registers. One per device (mixing
+    #                  is rejected): configure a second device for both.
+    #   byte_order     ABCD (default, high word first), CDAB (word swap), BADC (byte
+    #                  swap), DCBA (both). Set it on the modbus block for the device,
+    #                  here to override it for one point.
     #   scale, offset  value = raw * scale + offset (scale defaults to 1, offset to 0).
     #   unit           free text, passed to the outputs
     points:

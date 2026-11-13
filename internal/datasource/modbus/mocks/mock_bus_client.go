@@ -5,7 +5,7 @@
 package mocks
 
 import (
-	"github.com/simonvetter/modbus"
+	"github.com/dombyte/datalogger/internal/datasource/modbus"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -90,8 +90,8 @@ func (_c *MockBusClient_Close_Call) RunAndReturn(run func() error) *MockBusClien
 }
 
 // ReadSlave provides a mock function for the type MockBusClient
-func (_mock *MockBusClient) ReadSlave(slaveID uint8, addr uint16, quantity uint16, regType modbus.RegType) ([]uint16, error) {
-	ret := _mock.Called(slaveID, addr, quantity, regType)
+func (_mock *MockBusClient) ReadSlave(slaveID uint8, table modbus.Table, addr uint16, quantity uint16) ([]uint16, error) {
+	ret := _mock.Called(slaveID, table, addr, quantity)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReadSlave")
@@ -99,18 +99,18 @@ func (_mock *MockBusClient) ReadSlave(slaveID uint8, addr uint16, quantity uint1
 
 	var r0 []uint16
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(uint8, uint16, uint16, modbus.RegType) ([]uint16, error)); ok {
-		return returnFunc(slaveID, addr, quantity, regType)
+	if returnFunc, ok := ret.Get(0).(func(uint8, modbus.Table, uint16, uint16) ([]uint16, error)); ok {
+		return returnFunc(slaveID, table, addr, quantity)
 	}
-	if returnFunc, ok := ret.Get(0).(func(uint8, uint16, uint16, modbus.RegType) []uint16); ok {
-		r0 = returnFunc(slaveID, addr, quantity, regType)
+	if returnFunc, ok := ret.Get(0).(func(uint8, modbus.Table, uint16, uint16) []uint16); ok {
+		r0 = returnFunc(slaveID, table, addr, quantity)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]uint16)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(uint8, uint16, uint16, modbus.RegType) error); ok {
-		r1 = returnFunc(slaveID, addr, quantity, regType)
+	if returnFunc, ok := ret.Get(1).(func(uint8, modbus.Table, uint16, uint16) error); ok {
+		r1 = returnFunc(slaveID, table, addr, quantity)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -124,30 +124,30 @@ type MockBusClient_ReadSlave_Call struct {
 
 // ReadSlave is a helper method to define mock.On call
 //   - slaveID uint8
+//   - table modbus.Table
 //   - addr uint16
 //   - quantity uint16
-//   - regType modbus.RegType
-func (_e *MockBusClient_Expecter) ReadSlave(slaveID any, addr any, quantity any, regType any) *MockBusClient_ReadSlave_Call {
-	return &MockBusClient_ReadSlave_Call{Call: _e.mock.On("ReadSlave", slaveID, addr, quantity, regType)}
+func (_e *MockBusClient_Expecter) ReadSlave(slaveID any, table any, addr any, quantity any) *MockBusClient_ReadSlave_Call {
+	return &MockBusClient_ReadSlave_Call{Call: _e.mock.On("ReadSlave", slaveID, table, addr, quantity)}
 }
 
-func (_c *MockBusClient_ReadSlave_Call) Run(run func(slaveID uint8, addr uint16, quantity uint16, regType modbus.RegType)) *MockBusClient_ReadSlave_Call {
+func (_c *MockBusClient_ReadSlave_Call) Run(run func(slaveID uint8, table modbus.Table, addr uint16, quantity uint16)) *MockBusClient_ReadSlave_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 uint8
 		if args[0] != nil {
 			arg0 = args[0].(uint8)
 		}
-		var arg1 uint16
+		var arg1 modbus.Table
 		if args[1] != nil {
-			arg1 = args[1].(uint16)
+			arg1 = args[1].(modbus.Table)
 		}
 		var arg2 uint16
 		if args[2] != nil {
 			arg2 = args[2].(uint16)
 		}
-		var arg3 modbus.RegType
+		var arg3 uint16
 		if args[3] != nil {
-			arg3 = args[3].(modbus.RegType)
+			arg3 = args[3].(uint16)
 		}
 		run(
 			arg0,
@@ -164,7 +164,7 @@ func (_c *MockBusClient_ReadSlave_Call) Return(uint16s []uint16, err error) *Moc
 	return _c
 }
 
-func (_c *MockBusClient_ReadSlave_Call) RunAndReturn(run func(slaveID uint8, addr uint16, quantity uint16, regType modbus.RegType) ([]uint16, error)) *MockBusClient_ReadSlave_Call {
+func (_c *MockBusClient_ReadSlave_Call) RunAndReturn(run func(slaveID uint8, table modbus.Table, addr uint16, quantity uint16) ([]uint16, error)) *MockBusClient_ReadSlave_Call {
 	_c.Call.Return(run)
 	return _c
 }

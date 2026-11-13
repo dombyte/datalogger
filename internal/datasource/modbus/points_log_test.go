@@ -18,9 +18,7 @@ import (
 // stubClient answers every read with err, or with one register if err is nil.
 type stubClient struct{ err error }
 
-func (c *stubClient) ReadRegisters(
-	context.Context, uint16, uint16, modbus.RegType,
-) ([]uint16, error) {
+func (c *stubClient) Read(context.Context, Table, uint16, uint16) ([]uint16, error) {
 	if c.err != nil {
 		return nil, c.err
 	}

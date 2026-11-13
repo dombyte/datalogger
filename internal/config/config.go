@@ -36,8 +36,9 @@ type Point struct {
 	Name         string  `mapstructure:"name"`
 	Register     uint16  `mapstructure:"register"`      // Modbus: starting register address
 	Count        uint16  `mapstructure:"count"`         // Modbus: number of registers to read
-	Type         string  `mapstructure:"type"`          // int16/uint16/int32/uint32/float32/bool
-	FunctionCode uint8   `mapstructure:"function_code"` // Modbus: 3 or 4
+	Type         string  `mapstructure:"type"`          // Modbus or HTTP value type
+	FunctionCode uint8   `mapstructure:"function_code"` // Modbus: 1, 2, 3 or 4
+	ByteOrder    string  `mapstructure:"byte_order"`    // Modbus: overrides the device's
 	JSONPath     string  `mapstructure:"json_path"`     // HTTP: "main.temp"
 	Scale        float64 `mapstructure:"scale"`
 	Offset       float64 `mapstructure:"offset"`
@@ -58,6 +59,9 @@ type ModbusConfig struct {
 	StopBits     int      `mapstructure:"stop_bits"`     // RTU only, default 2 with N, else 1
 	RegisterMode string   `mapstructure:"register_mode"` // "direct" or "range"
 	Ranges       []string `mapstructure:"ranges"`        // e.g. ["3000-3011", "3012-3060"]
+	// ByteOrder is the default byte order of the points: ABCD (default, high word
+	// first), CDAB, BADC or DCBA.
+	ByteOrder string `mapstructure:"byte_order"`
 }
 
 // HTTPConfig contains HTTP-specific configuration.

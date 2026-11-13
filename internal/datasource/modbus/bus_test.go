@@ -67,16 +67,16 @@ func TestBusSharesOneConnection(t *testing.T) {
 	t.Parallel()
 	bus, opener, client := startBus(t)
 	opener.EXPECT().Open().Return(client, nil).Once()
-	client.EXPECT().ReadSlave(uint8(1), uint16(10), uint16(2), lib.HOLDING_REGISTER).
+	client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(10), uint16(2)).
 		Return([]uint16{1, 2}, nil).Once()
-	client.EXPECT().ReadSlave(uint8(2), uint16(10), uint16(2), lib.HOLDING_REGISTER).
+	client.EXPECT().ReadSlave(uint8(2), modbus.HoldingRegisters, uint16(10), uint16(2)).
 		Return([]uint16{3, 4}, nil).Once()
 	client.EXPECT().Close().Return(nil).Once()
 
 	for slave, want := range map[uint8][]uint16{1: {1, 2}, 2: {3, 4}} {
 		c, err := bus.Dialer(slave).Dial(context.Background())
 		require.NoError(t, err)
-		values, err := c.ReadRegisters(context.Background(), 10, 2, lib.HOLDING_REGISTER)
+		values, err := c.Read(context.Background(), modbus.HoldingRegisters, 10, 2)
 		require.NoError(t, err)
 		assert.Equal(t, want, values)
 		assert.NoError(t, c.Close(), "closing a device's client keeps the port open")
@@ -87,18 +87,18 @@ func TestBusReopensAfterConnectionError(t *testing.T) {
 	t.Parallel()
 	bus, opener, client := startBus(t)
 	opener.EXPECT().Open().Return(client, nil).Twice()
-	client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+	client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
 		Return(nil, io.EOF).Once()
-	client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+	client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
 		Return([]uint16{7}, nil).Once()
 	client.EXPECT().Close().Return(errors.New("already closed")).Twice() // only logged
 
 	c, err := bus.Dialer(1).Dial(context.Background())
 	require.NoError(t, err)
-	_, err = c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+	_, err = c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 	require.ErrorIs(t, err, io.EOF)
 
-	values, err := c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+	values, err := c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 	require.NoError(t, err)
 	assert.Equal(t, []uint16{7}, values)
 }
@@ -107,14 +107,14 @@ func TestBusTimeoutKeepsConnection(t *testing.T) {
 	t.Parallel()
 	bus, opener, client := startBus(t)
 	opener.EXPECT().Open().Return(client, nil).Once()
-	client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+	client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
 		Return(nil, lib.ErrRequestTimedOut).Twice()
 	client.EXPECT().Close().Return(nil).Once()
 
 	c, err := bus.Dialer(1).Dial(context.Background())
 	require.NoError(t, err)
 	for range 2 {
-		_, err = c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+		_, err = c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 		assert.ErrorIs(t, err, lib.ErrRequestTimedOut)
 	}
 }
@@ -127,23 +127,23 @@ func TestBusRedialsAfterTimeoutsInRow(t *testing.T) {
 	bus, opener, client := startBus(t)
 	opener.EXPECT().Open().Return(client, nil).Twice()
 	read := func(err error, n int) {
-		client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+		client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
 			Return(nil, err).Times(n)
 	}
 	read(lib.ErrRequestTimedOut, 2)
 	read(lib.ErrIllegalDataAddress, 1) // an answer: the count starts again
 	read(lib.ErrRequestTimedOut, 3)
-	client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+	client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
 		Return([]uint16{7}, nil).Once()
 	client.EXPECT().Close().Return(nil).Twice() // after the third timeout, and on stop
 
 	c, err := bus.Dialer(1).Dial(context.Background())
 	require.NoError(t, err)
 	for range 6 {
-		_, err = c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+		_, err = c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 		assert.Error(t, err)
 	}
-	values, err := c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+	values, err := c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 	require.NoError(t, err, "read on the new connection")
 	assert.Equal(t, []uint16{7}, values)
 }
@@ -162,18 +162,18 @@ func TestSerialBusReopensAfterLateAnswerErrors(t *testing.T) {
 			t.Parallel()
 			bus, opener, client := startSerialBus(t)
 			opener.EXPECT().Open().Return(client, nil).Twice()
-			client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+			client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
 				Return(nil, readErr).Once()
-			client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+			client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
 				Return([]uint16{7}, nil).Once()
 			client.EXPECT().Close().Return(nil).Twice()
 
 			c, err := bus.Dialer(1).Dial(context.Background())
 			require.NoError(t, err)
-			_, err = c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+			_, err = c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 			require.ErrorIs(t, err, readErr, "the reader still sees the timeout")
 
-			values, err := c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+			values, err := c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 			require.NoError(t, err)
 			assert.Equal(t, []uint16{7}, values)
 		})
@@ -192,18 +192,18 @@ func TestBusReopensPortThatWentAway(t *testing.T) {
 			t.Parallel()
 			bus, opener, client := startSerialBus(t)
 			opener.EXPECT().Open().Return(client, nil).Twice()
-			client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+			client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
 				Return(nil, fmt.Errorf("slave 1: %w", errno)).Once()
-			client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+			client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
 				Return([]uint16{7}, nil).Once()
 			client.EXPECT().Close().Return(nil).Twice()
 
 			c, err := bus.Dialer(1).Dial(context.Background())
 			require.NoError(t, err)
-			_, err = c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+			_, err = c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 			require.ErrorIs(t, err, errno)
 
-			values, err := c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+			values, err := c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 			require.NoError(t, err)
 			assert.Equal(t, []uint16{7}, values)
 		})
@@ -218,9 +218,9 @@ func TestReaderSkipsRestWhenPortCannotBeOpened(t *testing.T) {
 	gone := &fs.PathError{Op: "open", Path: "/dev/ttyUSB0", Err: syscall.ENOENT}
 	opener.EXPECT().Open().Return(client, nil).Once()
 	opener.EXPECT().Open().Return(nil, gone).Once() // not once more for d
-	client.EXPECT().ReadSlave(uint8(3), uint16(1), uint16(1), lib.HOLDING_REGISTER).
+	client.EXPECT().ReadSlave(uint8(3), modbus.HoldingRegisters, uint16(1), uint16(1)).
 		Return([]uint16{42}, nil).Once()
-	client.EXPECT().ReadSlave(uint8(3), uint16(2), uint16(1), lib.HOLDING_REGISTER).
+	client.EXPECT().ReadSlave(uint8(3), modbus.HoldingRegisters, uint16(2), uint16(1)).
 		Return(nil, lib.ErrRequestTimedOut).Once() // the adapter is unplugged
 	client.EXPECT().Close().Return(nil).Once()
 
@@ -273,7 +273,7 @@ func TestBusRunsOneRequestAtATime(t *testing.T) {
 	opener.EXPECT().Open().Return(client, nil).Once()
 	var inFlight, maxInFlight atomic.Int32
 	client.EXPECT().ReadSlave(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		RunAndReturn(func(uint8, uint16, uint16, lib.RegType) ([]uint16, error) {
+		RunAndReturn(func(uint8, modbus.Table, uint16, uint16) ([]uint16, error) {
 			n := inFlight.Add(1)
 			defer inFlight.Add(-1)
 			if n > maxInFlight.Load() {
@@ -289,7 +289,7 @@ func TestBusRunsOneRequestAtATime(t *testing.T) {
 			c, err := bus.Dialer(slave + 1).Dial(context.Background())
 			assert.NoError(t, err)
 			for range 20 {
-				_, err := c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+				_, err := c.Read(context.Background(), modbus.HoldingRegisters, 0, 1)
 				assert.NoError(t, err)
 			}
 		})
@@ -306,8 +306,8 @@ func TestBusCallReturnsWhenContextEnds(t *testing.T) {
 	bus, opener, client := startBus(t)
 	opener.EXPECT().Open().Return(client, nil).Once()
 	reading, release := make(chan struct{}), make(chan struct{})
-	client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
-		RunAndReturn(func(uint8, uint16, uint16, lib.RegType) ([]uint16, error) {
+	client.EXPECT().ReadSlave(uint8(1), modbus.HoldingRegisters, uint16(0), uint16(1)).
+		RunAndReturn(func(uint8, modbus.Table, uint16, uint16) ([]uint16, error) {
 			close(reading)
 			<-release // a slave that does not answer until its timeout
 			return nil, lib.ErrRequestTimedOut
@@ -321,7 +321,7 @@ func TestBusCallReturnsWhenContextEnds(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	inFlight := make(chan error, 1)
 	go func() {
-		_, err := busy.ReadRegisters(ctx, 0, 1, lib.HOLDING_REGISTER)
+		_, err := busy.Read(ctx, modbus.HoldingRegisters, 0, 1)
 		inFlight <- err
 	}()
 	<-reading
@@ -329,7 +329,7 @@ func TestBusCallReturnsWhenContextEnds(t *testing.T) {
 	queuedCtx, cancelQueued := context.WithCancel(context.Background())
 	waiting := make(chan error, 1)
 	go func() {
-		_, err := queued.ReadRegisters(queuedCtx, 0, 1, lib.HOLDING_REGISTER)
+		_, err := queued.Read(queuedCtx, modbus.HoldingRegisters, 0, 1)
 		waiting <- err
 	}()
 
@@ -351,7 +351,7 @@ func TestBusSkipsRequestOfCancelledCaller(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = c.ReadRegisters(ctx, 0, 1, lib.HOLDING_REGISTER) // the mock fails on a read
+	_, err = c.Read(ctx, modbus.HoldingRegisters, 0, 1) // the mock fails on a read
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
@@ -360,7 +360,7 @@ func TestReaderReadsThroughBus(t *testing.T) {
 	t.Parallel()
 	bus, opener, client := startBus(t)
 	opener.EXPECT().Open().Return(client, nil).Once()
-	client.EXPECT().ReadSlave(uint8(3), uint16(100), uint16(1), lib.HOLDING_REGISTER).
+	client.EXPECT().ReadSlave(uint8(3), modbus.HoldingRegisters, uint16(100), uint16(1)).
 		Return([]uint16{42}, nil).Once()
 	client.EXPECT().Close().Return(nil).Once()
 

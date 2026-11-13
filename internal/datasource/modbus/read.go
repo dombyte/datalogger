@@ -11,9 +11,6 @@ import (
 	"github.com/dombyte/datalogger/internal/datasource"
 )
 
-// maxRegistersPerRead is the Modbus protocol limit for one read request.
-const maxRegistersPerRead = 125
-
 // readDirectMode reads every point with its own request, one after the other. A
 // failed point is logged and skipped. On shutdown the read in flight is abandoned and
 // the rest skipped; after a connection error and after maxTimeoutsInRow timeouts in a
@@ -107,7 +104,7 @@ func (r *Reader) pointRead(name string) {
 
 // readPoint reads, decodes and scales one point, stamped with the receive time.
 func (r *Reader) readPoint(ctx context.Context, p Point) (datasource.DataPoint, error) {
-	values, err := r.client.ReadRegisters(ctx, p.Register, registerCount(p), r.regType)
+	values, err := r.client.Read(ctx, r.table, p.Register, registerCount(p))
 	if err != nil {
 		return datasource.DataPoint{}, fmt.Errorf("register %d, count %d: %w",
 			p.Register, registerCount(p), err)
@@ -143,17 +140,19 @@ func (r *Reader) readRangeMode(ctx context.Context) ([]datasource.DataPoint, err
 	return results, nil
 }
 
-// readRange reads one range in chunks of at most maxRegistersPerRead into registers
-// (the buffer of the range); it stops at the first failed chunk or when ctx ends.
+// readRange reads one range in chunks of at most 125 registers (2000 coils or discrete
+// inputs) into registers (the buffer of the range); it stops at the first failed chunk
+// or when ctx ends.
 func (r *Reader) readRange(ctx context.Context, rng Range, registers []uint16) error {
 	// int arithmetic: a range ending at 65535 would overflow uint16.
-	for start := int(rng.Start); start <= int(rng.End); start += maxRegistersPerRead {
+	chunk := r.table.maxPerRead()
+	for start := int(rng.Start); start <= int(rng.End); start += chunk {
 		if ctx.Err() != nil {
 			return fmt.Errorf("poll cancelled: %w", ctx.Err())
 		}
-		count := min(int(rng.End)-start+1, maxRegistersPerRead)
+		count := min(int(rng.End)-start+1, chunk)
 
-		values, err := r.client.ReadRegisters(ctx, uint16(start), uint16(count), r.regType)
+		values, err := r.client.Read(ctx, r.table, uint16(start), uint16(count))
 		if err != nil {
 			return fmt.Errorf("range %d-%d, chunk at %d: %w", rng.Start, rng.End, start, err)
 		}
@@ -167,20 +166,23 @@ func (r *Reader) readRange(ctx context.Context, rng Range, registers []uint16) e
 	return nil
 }
 
-// dataPoint decodes and scales the registers of a point.
+// dataPoint decodes the registers of a point and scales a number; a string is kept.
 func (r *Reader) dataPoint(
 	p Point,
 	values []uint16,
 	timestamp time.Time,
 ) (datasource.DataPoint, error) {
-	raw, err := decodeValue(values, p.Type)
+	value, err := decodeValue(values, p.Type, p.ByteOrder)
 	if err != nil {
 		return datasource.DataPoint{}, fmt.Errorf("decode: %w", err)
+	}
+	if raw, ok := value.(float64); ok {
+		value = raw*p.Scale + p.Offset
 	}
 	return datasource.DataPoint{
 		DeviceName: r.settings.Name,
 		PointName:  p.Name,
-		Value:      raw*p.Scale + p.Offset,
+		Value:      value,
 		Timestamp:  timestamp,
 		Unit:       p.Unit,
 	}, nil

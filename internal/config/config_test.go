@@ -404,6 +404,11 @@ func TestModbusConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "bad device byte order",
+			config:  ModbusConfig{Address: "tcp://gw:502", SlaveID: 1, RegisterMode: "direct", ByteOrder: "XY"},
+			wantErr: true,
+		},
+		{
 			name:    "unknown parity",
 			config:  ModbusConfig{Address: "rtu:///dev/ttyUSB0", SlaveID: 1, RegisterMode: "direct", Parity: "X"},
 			wantErr: true,
@@ -970,14 +975,47 @@ func TestValidatePoints(t *testing.T) {
 			wantErr: "points[0] p: type float32 needs count: 2",
 		},
 		{
-			name:    "modbus unknown type",
-			device:  modbus(Point{Name: "p", Type: "string"}),
-			wantErr: `type must be int16, uint16, int32, uint32, float32 or bool, got "string"`,
+			name:   "modbus unknown type",
+			device: modbus(Point{Name: "p", Type: "int8"}),
+			wantErr: `type must be int16, uint16, int32, uint32, float32, int64, uint64, ` +
+				`float64, string or bool, got "int8"`,
+		},
+		{name: "modbus string", device: modbus(Point{Name: "p", Type: "string", Count: 8})},
+		{name: "modbus float64 count 4", device: modbus(Point{Name: "p", Type: "float64", Count: 4})},
+		{
+			name:    "modbus int64 count 2",
+			device:  modbus(Point{Name: "p", Type: "int64", Count: 2}),
+			wantErr: "type int64 needs count: 4",
+		},
+		{name: "modbus coil", device: modbus(Point{Name: "p", Type: "bool", FunctionCode: 1})},
+		{
+			name:    "modbus coil as number",
+			device:  modbus(Point{Name: "p", Type: "uint16", FunctionCode: 2}),
+			wantErr: "coils and discrete inputs (function_code 1, 2) are type bool with count 1",
+		},
+		{
+			name:    "modbus coil count",
+			device:  modbus(Point{Name: "p", Type: "bool", FunctionCode: 1, Count: 2}),
+			wantErr: "are type bool with count 1",
+		},
+		{name: "modbus byte order", device: modbus(Point{Name: "p", Type: "int16", ByteOrder: "BADC"})},
+		{
+			name:    "modbus bad byte order",
+			device:  modbus(Point{Name: "p", Type: "int16", ByteOrder: "dcba"}),
+			wantErr: `byte_order must be ABCD, CDAB, BADC or DCBA, got "dcba"`,
+		},
+		{
+			name: "modbus coils mixed with registers",
+			device: modbus(
+				Point{Name: "a", Type: "bool", FunctionCode: 1},
+				Point{Name: "b", Type: "int16", FunctionCode: 3},
+			),
+			wantErr: "points[1] b: function_code 3 mixed with 1",
 		},
 		{
 			name:    "modbus bad function code",
 			device:  modbus(Point{Name: "p", Type: "int16", FunctionCode: 6}),
-			wantErr: "function_code must be 3 or 4, got 6",
+			wantErr: "function_code must be 1, 2, 3 or 4, got 6",
 		},
 		{
 			name: "modbus mixed function codes",
@@ -1028,7 +1066,7 @@ func TestValidatePoints(t *testing.T) {
 		{
 			name:    "http register",
 			device:  http("json", Point{Name: "p", JSONPath: "a", Register: 5}),
-			wantErr: "points[0] p: register, count and function_code are Modbus settings",
+			wantErr: "points[0] p: register, count, function_code and byte_order are Modbus settings",
 		},
 		{
 			name:    "http text with path",
