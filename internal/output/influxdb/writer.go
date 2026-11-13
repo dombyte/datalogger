@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -25,10 +26,14 @@ const (
 	DefaultRetryDelay   = 1 * time.Second
 )
 
-// maxRetryAfter bounds the wait a Retry-After asks for: while the writer waits, its input
-// fills up and drops new polls, so a longer wait would lose more than a retry that
-// fails again.
-const maxRetryAfter = time.Minute
+const (
+	// maxRetryAfter bounds the wait between attempts, also one a Retry-After asks for:
+	// a server that is back is noticed within a minute.
+	maxRetryAfter = time.Minute
+
+	// backoffFactor doubles the wait between attempts while the server is unavailable.
+	backoffFactor = 2
+)
 
 // ErrMissingDependency is returned by New when a required dependency is missing.
 var ErrMissingDependency = errors.New("influxdb: missing dependency")
@@ -62,6 +67,8 @@ type Writer struct {
 	columns  map[column]*columnType
 	failed   bool // the previous batch failed
 	partial  bool // the server rejected lines of the previous batch
+
+	unavailable bool // the batch failed MaxRetries retries and is still retried
 }
 
 // column is a field column of a device's table: one point.
@@ -283,7 +290,7 @@ func (w *Writer) flush(ctx context.Context) {
 	defer func() { w.batch = w.batch[:0] }()
 
 	log := w.logger.With().Int("lines", len(w.batch)).Logger()
-	err := w.writeWithRetry(ctx)
+	err := w.writeUntilDone(ctx)
 	var partialErr *influxdb3.PartialWriteError
 	if errors.As(err, &partialErr) {
 		w.logRejected(log, partialErr)
@@ -320,52 +327,84 @@ func (w *Writer) logRejected(log zerolog.Logger, err *influxdb3.PartialWriteErro
 		Msg("InfluxDB rejected lines of the batch, stored the rest")
 }
 
-// writeWithRetry tries the write 1 + MaxRetries times, RetryDelay apart (longer when
-// the server asks for it with Retry-After).
-func (w *Writer) writeWithRetry(ctx context.Context) error {
-	var err error
-	for attempt := range w.settings.MaxRetries + 1 {
-		if attempt > 0 {
-			delay := w.retryDelay(err)
-			w.logger.Warn().Int("attempt", attempt+1).Stringer("retry_in", delay).Err(err).
-				Msg("Retrying batch write")
-			if !clock.Sleep(ctx, w.clock, delay) {
-				return fmt.Errorf("cancelled while retrying: %w", err)
-			}
-		}
-		if err = w.client.WritePoints(ctx, w.batch); err == nil {
+// writeUntilDone writes the batch until it is written, fails with an error a retry
+// cannot fix, or ctx ends. The first MaxRetries retries wait RetryDelay; then the
+// server counts as unavailable: that is logged once, the batch is kept and the wait
+// doubles up to maxRetryAfter. Meanwhile the input fills and the router drops (or
+// spools) new polls, so an outage costs the newest polls, not every batch.
+func (w *Writer) writeUntilDone(ctx context.Context) error {
+	for attempt := 1; ; attempt++ {
+		err := w.client.WritePoints(ctx, w.batch)
+		if err == nil {
+			w.available(attempt)
 			return nil
 		}
 		if !retryable(err) {
 			return fmt.Errorf("not retried: %w", err)
 		}
+		delay := w.retryDelay(attempt, err)
+		w.logRetry(attempt, delay, err)
+		if !clock.Sleep(ctx, w.clock, delay) {
+			return fmt.Errorf("cancelled while retrying: %w", err)
+		}
 	}
-	return fmt.Errorf("after %d retries: %w", w.settings.MaxRetries, err)
 }
 
-// retryDelay returns RetryDelay, or the Retry-After of a 429 or 503 answer (at most
-// maxRetryAfter) if that is longer: retrying earlier only adds load to a server that
-// is busy. The webhook writer waits the same way.
-func (w *Writer) retryDelay(err error) time.Duration {
+// logRetry logs a failed attempt: a warning per retry at RetryDelay, one error when
+// the server counts as unavailable, then debug until the batch is written.
+func (w *Writer) logRetry(attempt int, delay time.Duration, err error) {
+	event := w.logger.Debug()
+	msg := "Retrying batch write"
+	switch {
+	case attempt <= w.settings.MaxRetries:
+		event = w.logger.Warn()
+	case !w.unavailable:
+		w.unavailable = true
+		event = w.logger.Error()
+		msg = "InfluxDB unavailable, keeping the batch and retrying until it is written"
+	}
+	event.Int("attempt", attempt+1).Stringer("retry_in", delay).Err(err).Msg(msg)
+}
+
+// available logs at info when the server is back after it counted as unavailable.
+func (w *Writer) available(attempts int) {
+	if w.unavailable {
+		w.unavailable = false
+		w.logger.Info().Int("attempts", attempts).Msg("InfluxDB available again, batch written")
+	}
+}
+
+// retryDelay returns the wait before the next attempt: RetryDelay for the first
+// MaxRetries retries, then doubled per attempt up to maxRetryAfter; a longer
+// Retry-After of a 429 or 503 answer (at most maxRetryAfter) wins: retrying earlier
+// only adds load to a server that is busy. The webhook writer waits the same way.
+func (w *Writer) retryDelay(attempt int, err error) time.Duration {
+	delay := w.settings.RetryDelay
+	for i := w.settings.MaxRetries; i < attempt && delay < maxRetryAfter; i++ {
+		delay *= backoffFactor
+	}
+	delay = max(w.settings.RetryDelay, min(delay, maxRetryAfter))
+
 	var serverErr *influxdb3.ServerError
 	if !errors.As(err, &serverErr) {
-		return w.settings.RetryDelay
+		return delay
 	}
 	// Capped before the conversion, which would overflow for huge values.
 	seconds := min(max(serverErr.RetryAfter, 0), int(maxRetryAfter/time.Second))
-	return max(w.settings.RetryDelay, time.Duration(seconds)*time.Second)
+	return max(delay, time.Duration(seconds)*time.Second)
 }
 
 // retryable reports whether a write may succeed when repeated: network errors, server
 // errors (5xx) and 429. Other HTTP errors (bad token, unknown database, rejected lines
-// of a partial write) fail the same way again.
+// of a partial write) and errors of the client itself fail the same way again.
 func retryable(err error) bool {
 	var serverErr *influxdb3.ServerError
-	if !errors.As(err, &serverErr) {
-		return true
+	if errors.As(err, &serverErr) {
+		return serverErr.StatusCode >= http.StatusInternalServerError ||
+			serverErr.StatusCode == http.StatusTooManyRequests
 	}
-	return serverErr.StatusCode >= http.StatusInternalServerError ||
-		serverErr.StatusCode == http.StatusTooManyRequests
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 // closeClient releases the client.

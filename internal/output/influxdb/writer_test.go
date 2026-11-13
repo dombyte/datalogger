@@ -3,8 +3,12 @@ package influxdb_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -175,21 +179,90 @@ func TestWritesTheRestWhenInputCloses(t *testing.T) {
 	assert.Len(t, h.write(), 3)
 }
 
-func TestRetriesThenDropsAndRecovers(t *testing.T) {
+// Regression: a batch was dropped after MaxRetries, so an outage dropped a batch and
+// logged an error every few seconds. The batch is kept now: after MaxRetries retries
+// the server counts as unavailable (one error), and the wait doubles until it is back.
+func TestKeepsBatchWhileUnavailable(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 2, RetryDelay: time.Second})
-	down := errors.New("503")
-	h.expectWrites(down, down, down, nil)
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 1, RetryDelay: time.Second})
+	down := &influxdb3.ServerError{StatusCode: 503}
+	h.expectWrites(down, down, down, nil, nil)
 
-	h.input <- []datasource.DataPoint{point("lost", 1.0, "")}
+	h.input <- []datasource.DataPoint{point("kept", 1.0, "")}
 	h.write()
-	h.advance(2, time.Second) // ticker + retry delay
+	h.advance(2, time.Second) // ticker + the retry delay
+	h.write()                 // the last retry: unavailable
+	h.advance(2, 2*time.Second)
 	h.write()
-	h.advance(2, time.Second)
-	h.write() // third and last attempt: the batch is dropped
+	h.advance(2, 4*time.Second)
+	assert.Contains(t, h.write()[0], "meter kept=1", "the same batch, written at last")
 
 	h.input <- []datasource.DataPoint{point("next", 2.0, "")}
 	assert.Contains(t, h.write()[0], "meter next=2")
+	h.stop()
+
+	var levels []string
+	for line := range strings.Lines(h.logs.String()) {
+		var entry struct{ Level, Message string }
+		require.NoError(t, json.Unmarshal([]byte(line), &entry))
+		if entry.Level != "debug" {
+			levels = append(levels, entry.Level+" "+entry.Message)
+		}
+	}
+	assert.Equal(t, []string{
+		"warn Retrying batch write",
+		"error InfluxDB unavailable, keeping the batch and retrying until it is written",
+		"info InfluxDB available again, batch written",
+	}, levels)
+}
+
+// The wait between attempts doubles while the server is unavailable, at most to a
+// minute.
+func TestOutageBackoffIsCapped(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 1, RetryDelay: 20 * time.Second})
+	down := &influxdb3.ServerError{StatusCode: 502}
+	h.expectWrites(down, down, down, nil)
+
+	h.input <- []datasource.DataPoint{point("kept", 1.0, "")}
+	h.write()
+	h.advance(2, 20*time.Second)
+	h.write()
+	h.advance(2, 40*time.Second)
+	h.write()
+	h.advance(2, time.Minute) // 80 s, capped
+	assert.Contains(t, h.write()[0], "meter kept=1")
+	h.stop()
+}
+
+// An error of the client itself (not the network, not the server) fails the same way
+// again: the batch is dropped at once instead of retried forever.
+func TestDropsBatchOnClientError(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 3, RetryDelay: time.Hour})
+	h.expectWrites(errors.New("error encoding point"), nil)
+
+	h.input <- []datasource.DataPoint{point("lost", 1.0, "")}
+	h.write()
+	h.input <- []datasource.DataPoint{point("next", 2.0, "")} // no retry delay in between
+	assert.Contains(t, h.write()[0], "meter next=2")
+	h.stop()
+	assert.Contains(t, h.logs.String(), "Dropping batch")
+}
+
+// A network error is retried.
+func TestRetriesNetworkErrors(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, influxdb.Settings{BatchSize: 1, MaxRetries: 3, RetryDelay: time.Second})
+	refused := &url.Error{Op: "Post", URL: "http://db", Err: &net.OpError{
+		Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED,
+	}}
+	h.expectWrites(refused, nil)
+
+	h.input <- []datasource.DataPoint{point("kept", 1.0, "")}
+	h.write()
+	h.advance(2, time.Second)
+	assert.Contains(t, h.write()[0], "meter kept=1")
 	h.stop()
 }
 
@@ -228,7 +301,7 @@ func TestCancelEndsRetries(t *testing.T) {
 	t.Parallel()
 	h, cancel := startCancellable(t,
 		influxdb.Settings{BatchSize: 1, MaxRetries: 5, RetryDelay: time.Hour}, nil)
-	h.expectWrites(errors.New("503"))
+	h.expectWrites(&influxdb3.ServerError{StatusCode: 503})
 
 	h.input <- []datasource.DataPoint{point("power", 1.0, "")}
 	h.write()

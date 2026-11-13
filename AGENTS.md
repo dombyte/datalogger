@@ -192,8 +192,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   read errors. A failed poll is logged once, with `failure_count` and the backoff
   (`retry_in`): as a warning, from the third failure in a row as an error; the first
   successful poll after it logs the recovery at info (`failures`, `points`).
-- Write errors are handled inside the writer (InfluxDB and webhook: retries, then the
-  batch is dropped and logged; MQTT/CSV: log and continue with the next point).
+- Write errors are handled inside the writer (InfluxDB: transient errors are retried
+  until the batch is written, other errors drop it; webhook: retries, then the batch is
+  dropped and logged; MQTT/CSV: log and continue with the next point).
 - A reader or writer that **stops** while the app is not shutting down makes `Run`
   return `ErrComponentStopped`; the process shuts down and exits 1, and the container
   runtime (`restart: unless-stopped`) restarts it. There is no in-process restart.
@@ -323,11 +324,14 @@ writer that failed, or a missed deadline (drain or hard).
   then debug, info when the type matches again. After a restart the server may hold
   another type; that line is rejected and logged as a partial write.
 - Batching: a full `batch_size` of lines (default 10000) is written at once, a partial batch every
-  `batch_timeout` (default 1 s). Retries: `max_retries` (default 3) with `retry_delay`
-  (default 1 s; a longer `Retry-After` of the server wins, at most 1 min: while the
-  writer waits its input fills and drops polls), only for network errors, 5xx
-  and 429; after that, or at once for other
-  HTTP errors (bad token, unknown database), the batch is dropped and logged. A partial
+  `batch_timeout` (default 1 s). Retries only for network errors, 5xx and 429:
+  `max_retries` (default 3) at `retry_delay` (default 1 s, each logged as a warning);
+  then the server counts as unavailable (one error log), the batch is kept and retried
+  with the wait doubling up to 1 min, at debug, until it is written (info). A longer
+  `Retry-After` of the server wins, at most 1 min. While the writer waits its input
+  fills, and the router drops new polls for it, so an outage costs the newest polls,
+  not a batch every few seconds. Other HTTP errors (bad token, unknown database) and
+  errors of the client itself drop the batch at once (logged). A partial
   write (the server rejects single lines and stores the rest) counts as written: the
   first rejected line is logged as a warning, further batches with rejected lines at
   debug, and info when every line is accepted again. The last batch is written when the
