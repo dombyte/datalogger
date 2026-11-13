@@ -281,7 +281,8 @@ writer that failed, or a missed deadline (drain or hard).
   connection each.
 
 ### HTTP reader
-- `method` GET (default) or POST with `body`; `headers` are sent as given; `insecure`
+- `method` GET (default) or POST with `body`; `headers` are sent as given (a `Host`
+  header sets the request's host, as Go ignores it in the header map); `insecure`
   disables certificate verification for this device.
 - `response_type`: `json` (default; values via gjson `json_path`; `type` float32/64,
   int16/32/64, uint16/32/64, bool or string converts, numbers sent as strings included;

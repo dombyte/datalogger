@@ -41,6 +41,7 @@ type harness struct {
 
 // request is what the client received.
 type request struct {
+	host   string
 	method string
 	url    string
 	header http.Header
@@ -118,8 +119,9 @@ func (h *harness) record(req *http.Request) request {
 	var readings []map[string]any
 	require.NoError(h.t, json.Unmarshal(body, &readings))
 	return request{
-		method: req.Method, url: req.URL.String(), header: req.Header, body: readings,
-		raw: string(body),
+		host: req.Host, method: req.Method, url: req.URL.String(), header: req.Header,
+		body: readings,
+		raw:  string(body),
 	}
 }
 
@@ -239,7 +241,9 @@ func TestBodyBytes(t *testing.T) {
 
 func TestSendsJSONContentTypeAndPUT(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, webhook.Settings{Method: "put"})
+	h := newHarness(t, webhook.Settings{Method: "put", Headers: map[string]string{
+		"host": "ingest.example.com",
+	}})
 	h.expect(http.StatusOK)
 
 	h.input <- []datasource.DataPoint{point("power", 1.0)}
@@ -247,6 +251,8 @@ func TestSendsJSONContentTypeAndPUT(t *testing.T) {
 	h.stop()
 
 	assert.Equal(t, http.MethodPut, r.method)
+	// Regression: a Host header had no effect, Go sends req.Host.
+	assert.Equal(t, "ingest.example.com", r.host)
 	assert.Equal(t, "application/json", r.header.Get("Content-Type"))
 }
 
