@@ -1,4 +1,3 @@
-// Package modbus provides Modbus TCP/RTU reading functionality.
 package modbus
 
 import (
