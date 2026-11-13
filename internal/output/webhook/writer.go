@@ -36,10 +36,12 @@ const (
 	// maxErrorBody is the part of an error response shown in the error message.
 	maxErrorBody = 256
 
-	// maxRetryAfter bounds the wait a Retry-After asks for: while the writer waits, its
-	// input fills up and drops new polls, so a longer wait would lose more than a retry
-	// that fails again.
+	// maxRetryAfter bounds the wait between attempts, also one a Retry-After asks for:
+	// an endpoint that is back is noticed within a minute.
 	maxRetryAfter = time.Minute
+
+	// backoffFactor doubles the wait between attempts while the endpoint is unavailable.
+	backoffFactor = 2
 )
 
 var (
@@ -77,6 +79,8 @@ type Writer struct {
 	clock    clock.Clock
 	logger   zerolog.Logger
 	failed   bool // the previous batch failed
+
+	unavailable bool // the batch failed MaxRetries retries and is still retried
 
 	// The JSON array of the batch: "[" and the readings so far, without the closing "]";
 	// reused by every batch, so encoding a reading allocates nothing.
@@ -247,7 +251,7 @@ func (w *Writer) flush(ctx context.Context) {
 	w.body.WriteByte(']')
 	// A copy for the requests: the transport may still read a body after Do returned
 	// (an early answer), while body already takes the next batch.
-	err := w.sendWithRetry(ctx, bytes.Clone(w.body.Bytes()))
+	err := w.sendUntilDone(ctx, bytes.Clone(w.body.Bytes()))
 	switch {
 	case err != nil:
 		log.Error().Err(err).Msg("Dropping batch after failed requests")
@@ -260,27 +264,51 @@ func (w *Writer) flush(ctx context.Context) {
 	}
 }
 
-// sendWithRetry sends body, the JSON array of the batch, 1 + MaxRetries times,
-// RetryDelay apart.
-func (w *Writer) sendWithRetry(ctx context.Context, body []byte) error {
-	var err error
-	for attempt := range w.settings.MaxRetries + 1 {
-		if attempt > 0 {
-			delay := w.retryDelay(err)
-			w.logger.Warn().Int("attempt", attempt+1).Stringer("retry_in", delay).Err(err).
-				Msg("Retrying webhook request")
-			if !clock.Sleep(ctx, w.clock, delay) {
-				return fmt.Errorf("cancelled while retrying: %w", err)
-			}
-		}
-		if err = w.send(ctx, body); err == nil {
+// sendUntilDone sends body, the JSON array of the batch, until it is accepted, fails
+// with an answer a retry cannot fix, or ctx ends. The first MaxRetries retries wait
+// RetryDelay; then the endpoint counts as unavailable: that is logged once, the batch
+// is kept and the wait doubles up to maxRetryAfter. Meanwhile the input fills and the
+// router drops (or spools) new polls. The InfluxDB writer retries the same way.
+func (w *Writer) sendUntilDone(ctx context.Context, body []byte) error {
+	for attempt := 1; ; attempt++ {
+		err := w.send(ctx, body)
+		if err == nil {
+			w.available(attempt)
 			return nil
 		}
 		if !retryable(err) {
 			return fmt.Errorf("not retried: %w", err)
 		}
+		delay := w.retryDelay(attempt, err)
+		w.logRetry(attempt, delay, err)
+		if !clock.Sleep(ctx, w.clock, delay) {
+			return fmt.Errorf("cancelled while retrying: %w", err)
+		}
 	}
-	return fmt.Errorf("after %d retries: %w", w.settings.MaxRetries, err)
+}
+
+// logRetry logs a failed attempt: a warning per retry at RetryDelay, one error when
+// the endpoint counts as unavailable, then debug until the batch is accepted.
+func (w *Writer) logRetry(attempt int, delay time.Duration, err error) {
+	event := w.logger.Debug()
+	msg := "Retrying webhook request"
+	switch {
+	case attempt <= w.settings.MaxRetries:
+		event = w.logger.Warn()
+	case !w.unavailable:
+		w.unavailable = true
+		event = w.logger.Error()
+		msg = "Webhook unavailable, keeping the batch and retrying until it is accepted"
+	}
+	event.Int("attempt", attempt+1).Stringer("retry_in", delay).Err(err).Msg(msg)
+}
+
+// available logs at info when the endpoint is back after it counted as unavailable.
+func (w *Writer) available(attempts int) {
+	if w.unavailable {
+		w.unavailable = false
+		w.logger.Info().Int("attempts", attempts).Msg("Webhook available again, batch sent")
+	}
 }
 
 // send sends one request with body; any 2xx status is a success.
@@ -338,15 +366,21 @@ func (e *statusError) Error() string {
 	return fmt.Sprintf("HTTP status %d: %s", e.code, e.body)
 }
 
-// retryDelay returns RetryDelay, or the Retry-After of the answer (at most
-// maxRetryAfter) if that is longer: retrying earlier only adds load to a server that
-// is busy. The InfluxDB writer waits the same way.
-func (w *Writer) retryDelay(err error) time.Duration {
+// retryDelay returns the wait before the next attempt: RetryDelay for the first
+// MaxRetries retries, then doubled per attempt up to maxRetryAfter; the Retry-After of
+// the answer (at most maxRetryAfter) wins if it is longer: retrying earlier only adds
+// load to a server that is busy.
+func (w *Writer) retryDelay(attempt int, err error) time.Duration {
+	delay := w.settings.RetryDelay
+	for i := w.settings.MaxRetries; i < attempt && delay < maxRetryAfter; i++ {
+		delay *= backoffFactor
+	}
+	delay = max(w.settings.RetryDelay, min(delay, maxRetryAfter))
 	var statusErr *statusError
 	if !errors.As(err, &statusErr) {
-		return w.settings.RetryDelay
+		return delay
 	}
-	return max(w.settings.RetryDelay, statusErr.retryAfter)
+	return max(delay, statusErr.retryAfter)
 }
 
 // parseRetryAfter returns the wait of a Retry-After header (seconds or an HTTP date),

@@ -192,9 +192,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   read errors. A failed poll is logged once, with `failure_count` and the backoff
   (`retry_in`): as a warning, from the third failure in a row as an error; the first
   successful poll after it logs the recovery at info (`failures`, `points`).
-- Write errors are handled inside the writer (InfluxDB: transient errors are retried
-  until the batch is written, other errors drop it; webhook: retries, then the batch is
-  dropped and logged; MQTT/CSV: log and continue with the next point).
+- Write errors are handled inside the writer (InfluxDB and webhook: transient errors are
+  retried until the batch is written, other errors drop it; MQTT/CSV: log and continue
+  with the next point).
 - A reader or writer that **stops** while the app is not shutting down makes `Run`
   return `ErrComponentStopped`; the process shuts down and exits 1, and the container
   runtime (`restart: unless-stopped`) restarts it. There is no in-process restart.
@@ -430,11 +430,12 @@ writer that failed, or a missed deadline (drain or hard).
 - Batching: a poll is sent at once unless further polls are queued; those join the same
   request, up to `max_batch` readings (default 1000; a larger poll is split). No timer:
   a single poll is never delayed.
-- Any 2xx is a success. Retries: `max_retries` (default 3) with `retry_delay` (default
-  1 s; a longer `Retry-After`, seconds or a date, wins, at most 1 min, as for InfluxDB),
-  only for transport errors, 5xx and 429; after that, or at once for other
-  statuses (bad token, rejected payload), the batch is dropped and logged with the status
-  and the start of the response body; the next success logs the recovery. Up to 64 KiB of
+- Any 2xx is a success. Transport errors, 5xx and 429 are retried like InfluxDB:
+  `max_retries` (default 3) at `retry_delay` (default 1 s; a longer `Retry-After`,
+  seconds or a date, wins, at most 1 min), then the endpoint counts as unavailable (one
+  error log) and the batch is kept and retried, the wait doubling up to 1 min, until it
+  is accepted (info). Other statuses (bad token, rejected payload) drop the batch at
+  once, logged with the status and the start of the response body. Up to 64 KiB of
   every response is read so the connection is reused.
 - URLs in errors are reduced to scheme, host and path (tokens in the query are not
   logged). The client does not connect at startup.

@@ -333,22 +333,32 @@ func TestRetryWaitsForRetryAfter(t *testing.T) {
 	}
 }
 
-func TestDropsAfterRetriesAndLogsRecovery(t *testing.T) {
+// Regression: a batch was dropped after MaxRetries, so an outage dropped a batch and
+// logged an error every few seconds. It is kept now and retried, the wait doubling,
+// until the endpoint accepts it.
+func TestKeepsBatchWhileUnavailable(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, webhook.Settings{MaxRetries: 1, RetryDelay: time.Second})
-	h.expect(silent(http.StatusBadGateway), errors.New("connection reset"), http.StatusOK)
+	h.expect(silent(http.StatusBadGateway), errors.New("connection reset"),
+		silent(http.StatusServiceUnavailable), http.StatusOK, http.StatusOK)
 
-	h.input <- []datasource.DataPoint{point("lost", 1.0)}
+	h.input <- []datasource.DataPoint{point("kept", 1.0)}
 	h.request()
 	h.advance(time.Second)
-	h.request() // last attempt: the batch is dropped
+	h.request() // the last retry: unavailable
+	h.advance(2 * time.Second)
+	h.request()
+	h.advance(4 * time.Second)
+	assert.Equal(t, []string{"kept"}, names(h.request()), "the same batch, sent at last")
 	h.input <- []datasource.DataPoint{point("next", 2.0)}
 	assert.Equal(t, []string{"next"}, names(h.request()))
 	h.stop()
 
-	assert.Contains(t, h.logs.String(), "HTTP status 502\"")
-	assert.Contains(t, h.logs.String(), "after 1 retries: connection reset")
-	assert.Contains(t, h.logs.String(), "recovered from previous error")
+	logs := h.logs.String()
+	assert.Contains(t, logs, "HTTP status 502\"")
+	assert.Contains(t, logs, "Webhook unavailable, keeping the batch")
+	assert.Contains(t, logs, "Webhook available again, batch sent")
+	assert.NotContains(t, logs, "Dropping batch")
 }
 
 // A 4xx answer (bad token, rejected payload) fails the same way again: no retry.
