@@ -124,13 +124,12 @@ func (w *Writer) handleDevice(rw http.ResponseWriter, r *http.Request) {
 // handlePoint returns the latest value of one point.
 func (w *Writer) handlePoint(rw http.ResponseWriter, r *http.Request) {
 	device, point := r.PathValue("device"), r.PathValue("point")
-	points, ok := w.store.device(device)
-	if !ok {
+	dp, served, found := w.store.point(device, point)
+	if !served {
 		w.writeJSON(rw, http.StatusNotFound, errorResponse{Error: "unknown device " + device})
 		return
 	}
-	dp, ok := points[point]
-	if !ok {
+	if !found {
 		w.writeJSON(rw, http.StatusNotFound, errorResponse{Error: "no value for point " + point})
 		return
 	}
