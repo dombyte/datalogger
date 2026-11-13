@@ -91,54 +91,54 @@ func (_c *MockClient_Close_Call) RunAndReturn(run func() error) *MockClient_Clos
 	return _c
 }
 
-// WritePoints provides a mock function for the type MockClient
-func (_mock *MockClient) WritePoints(ctx context.Context, points []*influxdb3.Point, opts ...influxdb3.WriteOption) error {
+// Write provides a mock function for the type MockClient
+func (_mock *MockClient) Write(ctx context.Context, lines []byte, opts ...influxdb3.WriteOption) error {
 	// influxdb3.WriteOption
 	_va := make([]any, len(opts))
 	for _i := range opts {
 		_va[_i] = opts[_i]
 	}
 	var _ca []any
-	_ca = append(_ca, ctx, points)
+	_ca = append(_ca, ctx, lines)
 	_ca = append(_ca, _va...)
 	ret := _mock.Called(_ca...)
 
 	if len(ret) == 0 {
-		panic("no return value specified for WritePoints")
+		panic("no return value specified for Write")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, []*influxdb3.Point, ...influxdb3.WriteOption) error); ok {
-		r0 = returnFunc(ctx, points, opts...)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []byte, ...influxdb3.WriteOption) error); ok {
+		r0 = returnFunc(ctx, lines, opts...)
 	} else {
 		r0 = ret.Error(0)
 	}
 	return r0
 }
 
-// MockClient_WritePoints_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'WritePoints'
-type MockClient_WritePoints_Call struct {
+// MockClient_Write_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Write'
+type MockClient_Write_Call struct {
 	*mock.Call
 }
 
-// WritePoints is a helper method to define mock.On call
+// Write is a helper method to define mock.On call
 //   - ctx context.Context
-//   - points []*influxdb3.Point
+//   - lines []byte
 //   - opts ...influxdb3.WriteOption
-func (_e *MockClient_Expecter) WritePoints(ctx any, points any, opts ...any) *MockClient_WritePoints_Call {
-	return &MockClient_WritePoints_Call{Call: _e.mock.On("WritePoints",
-		append([]any{ctx, points}, opts...)...)}
+func (_e *MockClient_Expecter) Write(ctx any, lines any, opts ...any) *MockClient_Write_Call {
+	return &MockClient_Write_Call{Call: _e.mock.On("Write",
+		append([]any{ctx, lines}, opts...)...)}
 }
 
-func (_c *MockClient_WritePoints_Call) Run(run func(ctx context.Context, points []*influxdb3.Point, opts ...influxdb3.WriteOption)) *MockClient_WritePoints_Call {
+func (_c *MockClient_Write_Call) Run(run func(ctx context.Context, lines []byte, opts ...influxdb3.WriteOption)) *MockClient_Write_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
-		var arg1 []*influxdb3.Point
+		var arg1 []byte
 		if args[1] != nil {
-			arg1 = args[1].([]*influxdb3.Point)
+			arg1 = args[1].([]byte)
 		}
 		var arg2 []influxdb3.WriteOption
 		variadicArgs := make([]influxdb3.WriteOption, len(args)-2)
@@ -157,12 +157,12 @@ func (_c *MockClient_WritePoints_Call) Run(run func(ctx context.Context, points 
 	return _c
 }
 
-func (_c *MockClient_WritePoints_Call) Return(err error) *MockClient_WritePoints_Call {
+func (_c *MockClient_Write_Call) Return(err error) *MockClient_Write_Call {
 	_c.Call.Return(err)
 	return _c
 }
 
-func (_c *MockClient_WritePoints_Call) RunAndReturn(run func(ctx context.Context, points []*influxdb3.Point, opts ...influxdb3.WriteOption) error) *MockClient_WritePoints_Call {
+func (_c *MockClient_Write_Call) RunAndReturn(run func(ctx context.Context, lines []byte, opts ...influxdb3.WriteOption) error) *MockClient_Write_Call {
 	_c.Call.Return(run)
 	return _c
 }
