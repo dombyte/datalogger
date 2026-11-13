@@ -333,6 +333,8 @@ outputs:
     api:
       listen: ":8080" # host:port; "127.0.0.1:8080" for local access only
       token: "" # optional: require "Authorization: Bearer <token>"
+      # Plain HTTP: with a token, serve it through a TLS reverse proxy and listen on
+      # 127.0.0.1 only.
     devices:
       - inverter
       - energy_meter
