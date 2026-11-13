@@ -288,7 +288,11 @@ writer that failed, or a missed deadline (drain or hard).
   the timeout. An answer that arrives only while the next request waits cannot be told
   apart; a `timeout` above the slowest answer of the device avoids it. A port that
   went away (an unplugged USB adapter) is reopened the same way, once it is back. Validation requires the same `speed`,
-  `data_bits`, `parity` and `stop_bits` on all devices of a port. TCP devices keep one
+  `data_bits`, `parity` and `stop_bits` on all devices of a port.
+- **Shared TCP connection** (`shared_connection: true`, optional): `tcp://` devices
+  with the same address share one bus like a serial port (a gateway that accepts a
+  single client), with the largest timeout of its devices; validation requires the
+  option on all devices of the address or on none. Otherwise TCP devices keep one
   connection each.
 
 ### HTTP reader

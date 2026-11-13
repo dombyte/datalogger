@@ -468,6 +468,11 @@ func TestNewSharesSerialPort(t *testing.T) {
 			Points: []config.Point{{Name: "p", Register: 1, Type: "uint16", Scale: 1}},
 		}
 	}
+	shared := func(name string) config.Device {
+		d := device(name, "tcp://127.0.0.1:2", 2*time.Second)
+		d.Modbus.SharedConnection = true
+		return d
+	}
 	const port = "rtu:///dev/datalogger-test-missing"
 	var logs bytes.Buffer
 	a, err := New(&config.Config{Devices: []config.Device{
@@ -477,9 +482,11 @@ func TestNewSharesSerialPort(t *testing.T) {
 		// RTU frames through a TCP gateway share their bus like a serial port.
 		device("rtu-a", "rtuovertcp://127.0.0.1:1", time.Second),
 		device("rtu-b", "rtuovertcp://127.0.0.1:1", time.Second),
+		// TCP devices with shared_connection share one connection to their gateway.
+		shared("tcp-a"), shared("tcp-b"),
 	}}, zerolog.New(zerolog.SyncWriter(&logs)), clocktest.NewFake(time.Now()))
 	require.NoError(t, err)
-	require.Len(t, a.buses, 3, "the serial port, the TCP device and the RTU gateway")
+	require.Len(t, a.buses, 4, "the serial port, the TCP device, the RTU and the TCP gateway")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -488,6 +495,8 @@ func TestNewSharesSerialPort(t *testing.T) {
 	assert.Contains(t, logs.String(), // read after Shutdown: the readers log too
 		`"port":"`+port+`","devices":["meter","inverter"],"timeout":"3s"`)
 	assert.Contains(t, logs.String(), `"port":"rtuovertcp://127.0.0.1:1","devices":["rtu-a","rtu-b"]`)
+	assert.Contains(t, logs.String(),
+		`"address":"tcp://127.0.0.1:2","devices":["tcp-a","tcp-b"],"timeout":"2s"`)
 }
 
 // A point without byte_order takes the device's; its own wins.

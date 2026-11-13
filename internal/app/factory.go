@@ -90,9 +90,10 @@ func modbusConnections(
 }
 
 // connKey identifies the connection of a Modbus device: devices on one serial port or
-// RTU-over-TCP gateway share it, every TCP device has its own.
+// RTU-over-TCP gateway share it, and TCP devices with the same address and
+// shared_connection; every other TCP device has its own.
 func connKey(d config.Device) string {
-	if rtuFrames(d.Modbus.Address) {
+	if rtuFrames(d.Modbus.Address) || d.Modbus.SharedConnection {
 		return d.Modbus.Address
 	}
 	return "device " + d.Name // never a Modbus address
@@ -107,13 +108,23 @@ func createBus(s modbus.ConnSettings, devices []string, log zerolog.Logger) (*mo
 		return nil, fmt.Errorf("serial port %s: %w", s.Address, err)
 	case err != nil:
 		return nil, fmt.Errorf("device %s: %w", devices[0], err)
-	case serial && len(devices) > 1:
-		log.Info().Str("port", s.Address).Strs("devices", devices).
-			Stringer("timeout", s.Timeout).Msg("Modbus devices share serial port")
+	case len(devices) > 1:
+		logSharing(s, serial, devices, log)
 	}
 	return modbus.NewBus(modbus.BusDeps{
 		Address: s.Address, Serial: serial, Opener: opener, Log: log,
 	})
+}
+
+// logSharing logs the devices that share one connection.
+func logSharing(s modbus.ConnSettings, serial bool, devices []string, log zerolog.Logger) {
+	if serial {
+		log.Info().Str("port", s.Address).Strs("devices", devices).
+			Stringer("timeout", s.Timeout).Msg("Modbus devices share serial port")
+		return
+	}
+	log.Info().Str("address", s.Address).Strs("devices", devices).
+		Stringer("timeout", s.Timeout).Msg("Modbus devices share a TCP connection")
 }
 
 // modbusConnSettings maps a device config onto the settings of its connection.

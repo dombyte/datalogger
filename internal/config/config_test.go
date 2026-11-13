@@ -1663,3 +1663,18 @@ func TestApplySerialDefaults(t *testing.T) {
 	tcp.applyDefaults()
 	assert.Zero(t, tcp.Modbus.Speed, "no serial settings for TCP")
 }
+
+// TCP devices with one address agree on shared_connection.
+func TestValidateSharedConnections(t *testing.T) {
+	t.Parallel()
+	tcp := func(c *Config, shared0, shared1 bool) {
+		for i, shared := range []bool{shared0, shared1} {
+			c.Devices[i].Modbus.Address = "tcp://gw:502"
+			c.Devices[i].Modbus.SharedConnection = shared
+		}
+	}
+	assert.NoError(t, rtuConfig(func(c *Config) { tcp(c, true, true) }).Validate())
+	assert.NoError(t, rtuConfig(func(c *Config) { tcp(c, false, false) }).Validate())
+	assert.ErrorContains(t, rtuConfig(func(c *Config) { tcp(c, true, false) }).Validate(),
+		"devices meter and inverter use tcp://gw:502 with different shared_connection")
+}
