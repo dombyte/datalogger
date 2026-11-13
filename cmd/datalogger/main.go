@@ -49,8 +49,20 @@ const (
 	drainTimeout = 7 * time.Second
 )
 
-// errConfigRequired is returned when -config is missing.
-var errConfigRequired = errors.New("-config flag is required")
+var (
+	// errConfigRequired is returned when -config is missing.
+	errConfigRequired = errors.New("-config flag is required")
+
+	// errLogFormat is returned for a -log-format other than console or json.
+	errLogFormat = errors.New("-log-format must be console or json")
+)
+
+// Log formats: console for people, json (one object per line) for journald and log
+// shippers.
+const (
+	logConsole = "console"
+	logJSON    = "json"
+)
 
 // cliFlags holds the parsed command line flags.
 type cliFlags struct {
@@ -58,6 +70,7 @@ type cliFlags struct {
 	debug       bool
 	showVersion bool
 	check       bool
+	logFormat   string
 }
 
 // parseFlags parses args (without the program name); usage and errors go to output.
@@ -68,6 +81,7 @@ func parseFlags(name string, args []string, output io.Writer) (cliFlags, error) 
 	fs.StringVar(&f.configPath, "config", "", "Path to configuration file (required)")
 	fs.BoolVar(&f.debug, "debug", false, "Enable debug logging")
 	fs.BoolVar(&f.showVersion, "version", false, "Show version and exit")
+	fs.StringVar(&f.logFormat, "log-format", logConsole, "Log format: console or json")
 	fs.BoolVar(&f.check, "check", false,
 		"Check the configuration (without connecting) and exit: 0 if it is valid, 2 if not")
 
@@ -77,6 +91,9 @@ func parseFlags(name string, args []string, output io.Writer) (cliFlags, error) 
 	if f.configPath == "" && !f.showVersion {
 		fs.Usage()
 		return f, errConfigRequired
+	}
+	if f.logFormat != logConsole && f.logFormat != logJSON {
+		return f, errLogFormat
 	}
 	return f, nil
 }
@@ -121,7 +138,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 
-	logger := setupLogger(f.debug, stderr)
+	logger := setupLogger(f.debug, f.logFormat, stderr)
 	logger.Info().
 		Str("version", Version).
 		Str("commit", Commit).
@@ -186,13 +203,16 @@ func shutdown(a *app.App, runErr error, logger zerolog.Logger) int {
 	}
 }
 
-// setupLogger builds the console logger on out (debug level with -debug).
-func setupLogger(debug bool, out io.Writer) zerolog.Logger {
+// setupLogger builds the logger on out: console or JSON lines, debug level with -debug.
+func setupLogger(debug bool, format string, out io.Writer) zerolog.Logger {
 	level := zerolog.InfoLevel
 	if debug {
 		level = zerolog.DebugLevel
 	}
-	return zerolog.New(zerolog.ConsoleWriter{Out: out}).
+	if format == logConsole {
+		out = zerolog.ConsoleWriter{Out: out}
+	}
+	return zerolog.New(out).
 		Level(level).
 		With().
 		Timestamp().
