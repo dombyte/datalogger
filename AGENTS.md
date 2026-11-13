@@ -367,7 +367,9 @@ writer that failed, or a missed deadline (drain or hard).
 
 ### CSV writer
 - Columns: `timestamp` (RFC3339Nano), `device`, `point`, `value`, `unit`; header written
-  when the file is empty. Rows are buffered and flushed when no further poll is queued
+  when the file is empty. A text value starting with `=`, `+`, `-`, `@`, tab or CR is
+  prefixed with `'` (OWASP CSV injection), so a spreadsheet shows it instead of running
+  it as a formula; numbers are never changed. Rows are buffered and flushed when no further poll is queued
   (a single poll reaches the file at once, a backlog in large blocks) and on shutdown. A
   failed write or flush is logged and the file reopened; the rows buffered then are lost.
 - Rotation: when the file is older than `max_age` (checked after each poll, so a poll
