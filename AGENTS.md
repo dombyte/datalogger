@@ -149,8 +149,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   without points sends nothing), so the router sees one consistent snapshot per poll.
 - **The router** applies the device's `transform.Transformer` to each poll (the router is
   its only user), then sends the poll to every output whose `devices` list contains the
-  device, as a new slice per output without the points its `exclude_points` lists (the
-  writer owns it; a poll with nothing left for an output sends nothing to it).
+  device, without the points its `exclude_points` lists: a new slice for an output with
+  excludes, else the poll itself, shared by those outputs (writers only read a batch,
+  never change it); a poll with nothing left for an output sends nothing to it.
   The send is **non-blocking**: if an output channel is full, the poll is **dropped for
   that output only**; a warning is logged when an output channel becomes full, and the
   count of dropped points when it takes data again (per device). A slow output never

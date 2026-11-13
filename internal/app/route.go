@@ -60,9 +60,13 @@ func (t *target) send(points []datasource.DataPoint, log zerolog.Logger) {
 	}
 }
 
-// filter returns a new slice with the points the target does not exclude: every
-// output owns the batch it receives.
+// filter returns the points the target does not exclude. Without excludes it is the
+// poll itself, shared with the other outputs (writers only read it); with excludes a
+// new slice.
 func (t *target) filter(points []datasource.DataPoint) []datasource.DataPoint {
+	if len(t.exclude) == 0 {
+		return points
+	}
 	batch := make([]datasource.DataPoint, 0, len(points))
 	for _, dp := range points {
 		if !t.exclude[dp.PointName] {
