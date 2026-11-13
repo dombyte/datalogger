@@ -293,6 +293,9 @@ outputs:
       topic: "datalogger" # default: datalogger
       # <topic>/availability holds a retained "online" while connected and "offline"
       # after a stop or a lost connection (last will).
+      # discovery_prefix: homeassistant publishes a Home Assistant discovery config per
+      # point (retained), so every point appears as a sensor (bools: binary sensors).
+      discovery_prefix: "" # empty: off
       qos: 1 # 0, 1 or 2
       retain: false
       username: "<user>"

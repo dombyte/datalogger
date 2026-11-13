@@ -121,6 +121,9 @@ type MqttConfig struct {
 	Username string `mapstructure:"username"` // Optional
 	Password string `mapstructure:"password"` // Optional
 	Insecure bool   `mapstructure:"insecure"`
+	// DiscoveryPrefix turns on Home Assistant MQTT discovery ("homeassistant"); empty
+	// is off.
+	DiscoveryPrefix string `mapstructure:"discovery_prefix"`
 }
 
 // CsvConfig contains CSV-specific configuration.

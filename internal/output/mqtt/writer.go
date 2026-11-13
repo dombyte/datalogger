@@ -57,6 +57,9 @@ type Settings struct {
 	// AvailabilityTopic, if set, gets a retained "online" after every connect and
 	// "offline" on stop; set the dialer's WillTopic to the same topic.
 	AvailabilityTopic string
+	// DiscoveryPrefix, if set, turns on Home Assistant discovery: a retained config
+	// message per point below this prefix (usually "homeassistant").
+	DiscoveryPrefix string
 }
 
 // Deps are the dependencies of a Writer; all are required.
@@ -81,6 +84,8 @@ type Writer struct {
 	nextDial time.Time
 	dropped  int
 	topics   map[topicKey]string // topic of every point published so far
+
+	announced map[topicKey]bool // points whose discovery config this session published
 }
 
 // topicKey identifies the topic of a point.
@@ -106,6 +111,8 @@ func New(d Deps) (*Writer, error) {
 		clock:    d.Clock,
 		logger:   d.Log.With().Str("component", "mqtt").Str("output", d.Settings.Name).Logger(),
 		topics:   make(map[topicKey]string),
+
+		announced: make(map[topicKey]bool),
 	}, nil
 }
 
@@ -146,6 +153,7 @@ func (w *Writer) publishPoll(ctx context.Context, points []datasource.DataPoint)
 		w.dropped += len(points)
 		return
 	}
+	w.discover(ctx, points)
 	msgs := w.messages(points)
 	var results []result
 	if w.settings.QoS == 0 {
@@ -306,6 +314,7 @@ func (w *Writer) connected(ctx context.Context) bool {
 	// The backoff is reset by the first successful publish, not here: a broker that
 	// accepts the connection but drops it on publish must not be redialed per point.
 	w.session = session
+	clear(w.announced) // a new session publishes the discovery configs again
 	w.announce(Online)
 	log := w.logger.Info()
 	if w.dropped > 0 {
