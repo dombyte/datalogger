@@ -1,6 +1,7 @@
 package http
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -163,4 +164,60 @@ func TestValuesThatAreNoReadingAreErrors(t *testing.T) {
 			assert.ErrorContains(t, err, tt.wantErr)
 		})
 	}
+}
+
+// Regression: a text response ignored type, scale and offset and kept surrounding white
+// space ("23.5\n" was a string), and device text reached the outputs unchecked.
+func TestTextValues(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, body string
+		point      Point
+		want       any
+		wantErr    string
+	}{
+		{name: "string", body: "OK 42", point: Point{}, want: "OK 42"},
+		{name: "trimmed", body: " on \r\n", point: Point{}, want: "on"},
+		{name: "float", body: "23.5\n", point: Point{Type: "float64"}, want: 23.5},
+		{name: "scaled", body: "235", point: Point{Type: "int16", Scale: 0.1}, want: 23.5},
+		{name: "bool", body: "1", point: Point{Type: "bool"}, want: true},
+		{name: "not a number", body: "N/A", point: Point{Type: "uint16"}, wantErr: "not a valid"},
+		{name: "not a bool", body: "maybe", point: Point{Type: "bool"}, wantErr: "not a bool"},
+		{
+			name: "control characters", body: "on\x1b[31m\rred\x00\tok\nline",
+			point: Point{}, want: "on[31mred\tok\nline",
+		},
+		{name: "invalid utf-8", body: "a\xffb", point: Point{}, want: "a\uFFFDb"},
+		{
+			name: "too long", body: strings.Repeat("x", maxStringSize+1), point: Point{},
+			wantErr: "longer than",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.point.Scale == 0 {
+				tt.point.Scale = 1
+			}
+			got, err := extractTextValue([]byte(tt.body), tt.point)
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// JSON strings are cleaned like text: no control characters, at most maxStringSize.
+func TestJSONStringsAreCleaned(t *testing.T) {
+	t.Parallel()
+	got, err := extractJSONValue([]byte(`{"s": "a\u001b[2Jb\r"}`), Point{JSONPath: "s", Scale: 1})
+	require.NoError(t, err)
+	assert.Equal(t, "a[2Jb", got)
+
+	long := `{"s": "` + strings.Repeat("x", maxStringSize+1) + `"}`
+	_, err = extractJSONValue([]byte(long), Point{JSONPath: "s", Type: "string", Scale: 1})
+	assert.ErrorContains(t, err, "longer than")
 }

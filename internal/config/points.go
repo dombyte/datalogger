@@ -156,8 +156,8 @@ func validateHTTPPoint(p Point, responseType string) error {
 	return validateHTTPSource(p, responseType)
 }
 
-// validateHTTPSource checks where the value comes from: json_path for JSON; a text
-// response has neither json_path nor type.
+// validateHTTPSource checks where the value comes from: json_path for JSON, the whole
+// body for text.
 func validateHTTPSource(p Point, responseType string) error {
 	switch {
 	case responseType == "json" && p.JSONPath == "":
@@ -166,8 +166,6 @@ func validateHTTPSource(p Point, responseType string) error {
 		return nil
 	case p.JSONPath != "":
 		return errors.New("json_path is only used with response_type json")
-	case p.Type != "":
-		return errors.New("type is only used with response_type json")
 	}
 	return nil
 }
