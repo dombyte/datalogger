@@ -79,7 +79,29 @@ func (c *Config) validateDevices() (map[string]map[string]bool, error) {
 			devices[d.Name][p.Name] = true
 		}
 	}
-	return devices, c.validateSerialPorts()
+	return devices, errors.Join(c.validateSerialPorts(), c.validateSharedConnections())
+}
+
+// validateSharedConnections checks that the tcp:// devices with one address agree on
+// shared_connection: a gateway that accepts one client cannot also get a connection of
+// its own per device, and the option on one device only would be ignored.
+func (c *Config) validateSharedConnections() error {
+	first := make(map[string]Device)
+	for _, d := range c.Devices {
+		if d.Type != "modbus" || !strings.HasPrefix(d.Modbus.Address, "tcp://") {
+			continue
+		}
+		other, ok := first[d.Modbus.Address]
+		if !ok {
+			first[d.Modbus.Address] = d
+			continue
+		}
+		if other.Modbus.SharedConnection != d.Modbus.SharedConnection {
+			return fmt.Errorf("devices %s and %s use %s with different shared_connection; "+
+				"set it alike", other.Name, d.Name, d.Modbus.Address)
+		}
+	}
+	return nil
 }
 
 // serialSettings are the settings of a serial port.

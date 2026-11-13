@@ -66,6 +66,9 @@ devices:
       register_mode: range
       ranges: ["33049-33058", "33095-33121", "33135-33150"]
       byte_order: ABCD # default byte order of the points (see below)
+      # shared_connection: true lets the tcp:// devices with this address use one
+      # connection (a gateway that accepts a single client; set it on all of them).
+      # Their requests then run one after the other.
     # Point options (Modbus):
     #   register       start register address
     #   count          number of registers: 1 for 16-bit types and bool,

@@ -62,6 +62,9 @@ type ModbusConfig struct {
 	// ByteOrder is the default byte order of the points: ABCD (default, high word
 	// first), CDAB, BADC or DCBA.
 	ByteOrder string `mapstructure:"byte_order"`
+	// SharedConnection lets the tcp:// devices with the same address use one connection
+	// (gateways that accept a single client); every one of them sets it.
+	SharedConnection bool `mapstructure:"shared_connection"`
 }
 
 // HTTPConfig contains HTTP-specific configuration.
