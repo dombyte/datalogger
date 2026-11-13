@@ -134,7 +134,9 @@ func (r *Reader) Start(ctx context.Context) <-chan []datasource.DataPoint {
 	return dataCh
 }
 
-// pollLoop polls at once and on every tick until ctx is cancelled.
+// pollLoop polls at once and on every tick until ctx is cancelled. After a failed
+// poll the next one runs when the backoff has passed, not on the next tick: the
+// backoff is the time to the retry, also with a long poll interval.
 func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
 	defer close(dataCh)
 
@@ -143,28 +145,39 @@ func (r *Reader) pollLoop(ctx context.Context, dataCh chan<- []datasource.DataPo
 
 	// The first poll runs at once: with a long poll interval the first data would
 	// otherwise arrive one interval after the start.
-	if ctx.Err() == nil {
+	for ctx.Err() == nil {
 		r.pollOnce(ctx, dataCh)
-	}
-	for {
-		select {
-		case <-ctx.Done():
+		if !r.waitNext(ctx, ticker) {
 			return
-		case <-ticker.C():
-			r.pollOnce(ctx, dataCh)
 		}
 	}
 }
 
-// pollOnce waits out the backoff, requests the endpoint and sends the parsed points.
-func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
+// waitNext waits for the next poll: the backoff after a failed poll, else the next
+// tick. It returns false when ctx ends first.
+func (r *Reader) waitNext(ctx context.Context, ticker clock.Ticker) bool {
 	if r.backoff > 0 {
 		r.logger.Debug().Stringer("wait", r.backoff).Msg("Waiting before retry after a failure")
 		if !clock.Sleep(ctx, r.clock, r.backoff) {
-			return
+			return false
 		}
+		// A tick that came during the wait would poll again right after the retry.
+		select {
+		case <-ticker.C():
+		default:
+		}
+		return true
 	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-ticker.C():
+		return true
+	}
+}
 
+// pollOnce reads all points and sends what was read.
+func (r *Reader) pollOnce(ctx context.Context, dataCh chan<- []datasource.DataPoint) {
 	r.logger.Debug().Msg("Starting HTTP poll")
 	points, err := r.poll(ctx)
 	if err != nil {

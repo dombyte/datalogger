@@ -180,7 +180,9 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
 
 ### Failure handling
 - Poll errors are handled inside the reader: exponential backoff (100 ms doubling, max
-  30 s, waited on the injected clock and cut short by shutdown), and a reconnect on
+  30 s, waited on the injected clock and cut short by shutdown; the retry runs when the
+  backoff has passed, not on the next tick, and a tick during the wait is dropped), and
+  a reconnect on
   connection errors, detected by type: Modbus on `net.OpError`, EOF, closed connection,
   `ECONNRESET`, `EPIPE`, a connection that cannot be opened, and `EIO`, `ENXIO`,
   `ENODEV`, `EBADF` (a serial port that went away); the next poll dials again. Timeouts
