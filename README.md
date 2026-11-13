@@ -85,6 +85,8 @@ With Go (version in `go.mod`): `make build` builds `./datalogger` with version i
 One YAML file, passed with `-config`. [example/config.yaml](example/config.yaml) is the
 complete reference with every option explained. Unknown keys (for example a typo) stop
 the program at startup. Keep tokens and passwords only in your local `config.yaml`.
+Durations without a unit are seconds (`5` = 5 s); otherwise use `ms`, `s`, `min` (or
+`m`) and `h`, also combined (`1h30min`).
 
 Every device and output has a `type`; the settings of that type go in a block with the
 same name (`http:`, `modbus:`, `influxdb:`, `mqtt:`, `csv:`, `api:`, `webhook:`). A
