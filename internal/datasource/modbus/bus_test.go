@@ -119,6 +119,35 @@ func TestBusTimeoutKeepsConnection(t *testing.T) {
 	}
 }
 
+// Regression: a TCP device that went away without a reset (power loss) kept its dead
+// connection until the kernel gave up, many minutes later. After three timeouts in a
+// row the bus opens a new connection.
+func TestBusRedialsAfterTimeoutsInRow(t *testing.T) {
+	t.Parallel()
+	bus, opener, client := startBus(t)
+	opener.EXPECT().Open().Return(client, nil).Twice()
+	read := func(err error, n int) {
+		client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+			Return(nil, err).Times(n)
+	}
+	read(lib.ErrRequestTimedOut, 2)
+	read(lib.ErrIllegalDataAddress, 1) // an answer: the count starts again
+	read(lib.ErrRequestTimedOut, 3)
+	client.EXPECT().ReadSlave(uint8(1), uint16(0), uint16(1), lib.HOLDING_REGISTER).
+		Return([]uint16{7}, nil).Once()
+	client.EXPECT().Close().Return(nil).Twice() // after the third timeout, and on stop
+
+	c, err := bus.Dialer(1).Dial(context.Background())
+	require.NoError(t, err)
+	for range 6 {
+		_, err = c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+		assert.Error(t, err)
+	}
+	values, err := c.ReadRegisters(context.Background(), 0, 1, lib.HOLDING_REGISTER)
+	require.NoError(t, err, "read on the new connection")
+	assert.Equal(t, []uint16{7}, values)
+}
+
 // Regression: a serial frame has no transaction ID, and the port stayed open after a
 // timeout. An answer that arrived late was taken for the answer to the next request,
 // and every later request got the answer before it. The port is reopened, which

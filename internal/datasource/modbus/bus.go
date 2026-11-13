@@ -9,6 +9,12 @@ import (
 	"github.com/simonvetter/modbus"
 )
 
+// timeoutsBeforeRedial is the number of TCP requests in a row that time out after which
+// the connection is closed and opened again: a device or gateway that went away without
+// a reset (power loss, a NAT entry that expired) leaves a connection that the kernel
+// keeps for many minutes, and only a new one can reach it when it is back.
+const timeoutsBeforeRedial = 3
+
 var (
 	// ErrBusStopped is returned by the clients of a Bus that has stopped.
 	ErrBusStopped = errors.New("modbus: bus stopped")
@@ -56,8 +62,9 @@ type Bus struct {
 	done     chan struct{}
 
 	// Used only by the run goroutine.
-	client BusClient // nil while closed
-	resync bool      // the port was closed to discard a late answer, not because it broke
+	client   BusClient // nil while closed
+	resync   bool      // the port was closed to discard a late answer, not because it broke
+	timeouts int       // TCP requests in a row that timed out
 }
 
 // request is one call to the bus: open the connection (open) or read registers of a
@@ -154,6 +161,9 @@ func (b *Bus) connect() error {
 // afterRead closes the connection after a read error that makes it unusable: a
 // connection error, and on a serial port an error that can leave an answer on the line.
 func (b *Bus) afterRead(err error) {
+	if !errors.Is(err, modbus.ErrRequestTimedOut) {
+		b.timeouts = 0
+	}
 	switch {
 	case err == nil:
 	case isConnectionError(err):
@@ -163,7 +173,22 @@ func (b *Bus) afterRead(err error) {
 		b.logger.Debug().Err(err).Msg("Reopening serial port to discard a late answer")
 		b.disconnect()
 		b.resync = true
+	case errors.Is(err, modbus.ErrRequestTimedOut):
+		b.tcpTimeout()
 	}
+}
+
+// tcpTimeout counts a timeout on a TCP connection and redials after
+// timeoutsBeforeRedial in a row.
+func (b *Bus) tcpTimeout() {
+	b.timeouts++
+	if b.timeouts < timeoutsBeforeRedial {
+		return
+	}
+	b.logger.Warn().Int("timeouts", b.timeouts).
+		Msg("No answer to Modbus requests in a row, reconnecting on the next request")
+	b.timeouts = 0
+	b.disconnect()
 }
 
 // leavesAnswerOnLine reports whether the answer to a failed request may still arrive:

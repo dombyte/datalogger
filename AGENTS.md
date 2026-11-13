@@ -186,7 +186,7 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
   connection errors, detected by type: Modbus on `net.OpError`, EOF, closed connection,
   `ECONNRESET`, `EPIPE`, a connection that cannot be opened, and `EIO`, `ENXIO`,
   `ENODEV`, `EBADF` (a serial port that went away); the next poll dials again. Timeouts
-  and Modbus exceptions keep a TCP connection; a serial port is reopened after a timeout
+  and Modbus exceptions keep a TCP connection (three timeouts in a row redial it); a serial port is reopened after a timeout
   (section 7); HTTP closes idle connections on every transport error (`net.Error`)
   and truncated bodies (status and parse errors do not). A reader never stops because of
   read errors. A failed poll is logged once, with `failure_count` and the backoff
@@ -263,7 +263,9 @@ writer that failed, or a missed deadline (drain or hard).
   request at once, also while it is in flight: the library cannot cancel a request, so
   the bus finishes it alone and skips requests whose caller has gone. The connection
   opens on the first request and reopens after a connection error; a timeout keeps a
-  TCP connection open.
+  TCP connection open, but three timeouts in a row close it (a device that went away
+  without a reset leaves a connection the kernel keeps for minutes), so the next
+  request dials again.
 - **Serial port (RTU):** all devices with one `rtu://` address share its bus (an RS-485
   bus with one `slave_id` each, or one device split in two). Devices on a port wait for
   each other: a slave that does not answer holds the port for its timeout. The port has
