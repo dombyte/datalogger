@@ -75,6 +75,7 @@ internal/app/            composition root: Create* factories (config → Setting
                          Run/Shutdown
 internal/config/         Config structs (viper/mapstructure), Load() (defaults + Validate)
 internal/clock/          Clock interface (Now, tickers, After) + Sleep; clocktest/ fake
+internal/status/         status snapshot, health rule, Unix socket server and client
 internal/datasource/     DataPoint type, DeviceReader interface
   modbus/                Modbus TCP/RTU reader: direct + range mode, chunking, reconnect;
                          Bus: one connection (TCP device or shared serial port)
@@ -105,8 +106,8 @@ validated by `New` (`ErrMissingDependency`), small interfaces for its client (`C
 Imports (paths below `internal/`):
 
 ```
-cmd/datalogger    → app, clock, config
-app               → clock, config, datasource{,/modbus,/http},
+cmd/datalogger    → app, clock, config, status
+app               → clock, config, status, datasource{,/modbus,/http},
                     output{,/csv,/influxdb,/mqtt,/api,/webhook}, transform
 transform         → datasource, expr-lang/expr
 datasource/modbus → clock, datasource, simonvetter/modbus
@@ -118,6 +119,7 @@ output/mqtt       → clock, datasource, paho.golang
 output/api        → clock, datasource
 output/webhook    → clock, datasource
 config            → viper
+status            → zerolog
 clock, datasource → stdlib only
 ```
 
@@ -177,7 +179,10 @@ DeviceReader.Start ──data channel (unbuffered, one []DataPoint per poll)─�
    does not compile or names an unknown point or lookup, an API port that cannot be
    bound) ends the process with exit 1. **Connecting is not construction:** readers connect on their first poll, so a
    device that is down at startup does not stop the others and recovers on its own.
-3. `app.Run` starts the writers, then one `modbus.Bus` per Modbus connection, then the readers
+3. `main` binds the status socket (`-status-socket`, default `/tmp/datalogger.sock`,
+   `""` = off; a socket left by a crash is removed, any other file there fails startup
+   with exit 1) and serves `App.Status` on it until `run` returns (then the socket file
+   is removed). `app.Run` starts the writers, then one `modbus.Bus` per Modbus connection, then the readers
    with one router each. Each reader polls at once, then every `poll_interval`.
 
 ### Failure handling
@@ -599,6 +604,16 @@ deadline (drain or hard).
   port does at shutdown: the library cannot cancel a read, and a reader that waits for
   one would hold the shutdown for up to the device timeout; a reader on a bus stops
   waiting when its context ends.
+- **Health from a status socket, not a heartbeat file:** the process answers
+  `-healthcheck` itself over a Unix socket, so the check proves it is not hung (no
+  answer within 2 s) and sees what is wrong: a component that stopped, or an output
+  whose queue holds polls but has taken none for `status.StallAfter` (5 min; measured
+  between `Status` calls, which the healthcheck makes every 30 s). A device without data
+  is only reported, since a restart does not fix a device that is off. Counters are
+  atomics written by the routers (`deviceState`, `outputState`) and read by `Status`;
+  the queues are created in `newApp`, so `Status` works before and during `Run`. No TCP
+  port and no API output are needed; the image ships an empty `/tmp` (1777) so it runs
+  as any user, and the systemd unit uses its `RuntimeDirectory` (its `/tmp` is private).
 - **Hand-written fake clock instead of a mock:** `clock.Clock`/`clock.Ticker` are faked by
   `clocktest.Fake`, not by mockery. Tests need time that moves consistently across tickers
   and `After` (`Advance`); call expectations cannot model that.

@@ -98,15 +98,29 @@ func TestRunCleanShutdown(t *testing.T) {
 	csvPath := filepath.Join(t.TempDir(), "data", "data.csv")
 	configPath := writeConfig(t, csvConfig(device.URL, csvPath))
 
+	socket := filepath.Join(t.TempDir(), "status.sock")
 	var stderr lockedBuffer
 	exit := make(chan int, 1)
 	go func() {
-		exit <- run([]string{"datalogger", "-config", configPath}, io.Discard, &stderr)
+		exit <- run([]string{"datalogger", "-config", configPath, "-status-socket", socket},
+			io.Discard, &stderr)
 	}()
 
 	// Rows are only written after the signal handler is installed, so SIGINT is safe now.
 	require.Eventually(t, func() bool { return len(readRows(csvPath)) >= 3 },
 		5*time.Second, 10*time.Millisecond, "no rows written; log:\n%s", stderr.String())
+
+	// The running process answers on its status socket.
+	var out, errOut lockedBuffer
+	assert.Equal(t, 0, run([]string{"datalogger", "-healthcheck", "-status-socket", socket},
+		&out, &errOut), errOut.String())
+	assert.Equal(t, "healthy\n", out.String())
+	var status lockedBuffer
+	require.Equal(t, 0, run([]string{"datalogger", "-status", "-status-socket", socket},
+		&status, io.Discard))
+	assert.Contains(t, status.String(), `"name": "meter"`)
+	assert.Contains(t, status.String(), `"name": "out"`)
+
 	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGINT))
 
 	select {
@@ -125,6 +139,20 @@ func TestRunCleanShutdown(t *testing.T) {
 		assert.Equal(t, []string{"meter", "power", "-42.5", "W"}, row[1:], "expr applied")
 	}
 	assert.Contains(t, stderr.String(), "Shutdown complete")
+	_, err := os.Stat(socket)
+	assert.ErrorIs(t, err, os.ErrNotExist, "the socket is removed on exit")
+}
+
+// -healthcheck fails when nothing answers on the socket.
+func TestHealthcheckWithoutProcess(t *testing.T) {
+	t.Parallel()
+	var stderr lockedBuffer
+	code := run([]string{
+		"datalogger", "-healthcheck", "-status-socket",
+		filepath.Join(t.TempDir(), "none.sock"),
+	}, io.Discard, &stderr)
+	assert.Equal(t, 1, code)
+	assert.Contains(t, stderr.String(), "unhealthy: status: connect")
 }
 
 // TestRunStartupErrors checks the exit codes of runs that end before the app starts.

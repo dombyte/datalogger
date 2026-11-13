@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -22,6 +23,7 @@ import (
 	"github.com/dombyte/datalogger/internal/app"
 	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/config"
+	"github.com/dombyte/datalogger/internal/status"
 )
 
 // Build info, set via -ldflags.
@@ -43,6 +45,14 @@ const (
 	// config that does not load or a setting the libraries reject): the systemd unit
 	// does not restart on it (RestartPreventExitStatus).
 	exitConfig = 2
+
+	// defaultStatusSocket is where the status socket is by default; the systemd unit
+	// sets /run/datalogger/datalogger.sock (its /tmp is private).
+	defaultStatusSocket = "/tmp/datalogger.sock"
+
+	// statusTimeout is how long -status and -healthcheck wait for the answer: a
+	// datalogger that does not answer in time counts as hung.
+	statusTimeout = 2 * time.Second
 
 	// drainTimeout is how long the outputs may drain; then they are cancelled and get
 	// the rest of shutdownTimeout to close their files and connections.
@@ -71,6 +81,10 @@ type cliFlags struct {
 	showVersion bool
 	check       bool
 	logFormat   string
+
+	statusSocket string // "" turns the status socket off
+	showStatus   bool
+	healthcheck  bool
 }
 
 // parseFlags parses args (without the program name); usage and errors go to output.
@@ -82,20 +96,37 @@ func parseFlags(name string, args []string, output io.Writer) (cliFlags, error) 
 	fs.BoolVar(&f.debug, "debug", false, "Enable debug logging")
 	fs.BoolVar(&f.showVersion, "version", false, "Show version and exit")
 	fs.StringVar(&f.logFormat, "log-format", logConsole, "Log format: console or json")
+	fs.StringVar(&f.statusSocket, "status-socket", defaultStatusSocket,
+		"Unix socket of the status (empty: off)")
+	fs.BoolVar(&f.showStatus, "status", false,
+		"Print the status of the running datalogger (from -status-socket) and exit")
+	fs.BoolVar(&f.healthcheck, "healthcheck", false,
+		"Exit 0 if the running datalogger is healthy, 1 if not (for container healthchecks)")
 	fs.BoolVar(&f.check, "check", false,
 		"Check the configuration (without connecting) and exit: 0 if it is valid, 2 if not")
 
 	if err := fs.Parse(args); err != nil {
 		return f, err
 	}
-	if f.configPath == "" && !f.showVersion {
-		fs.Usage()
-		return f, errConfigRequired
-	}
-	if f.logFormat != logConsole && f.logFormat != logJSON {
-		return f, errLogFormat
+	if err := f.validate(); err != nil {
+		if errors.Is(err, errConfigRequired) {
+			fs.Usage()
+		}
+		return f, err
 	}
 	return f, nil
+}
+
+// validate checks that -config is set where it is needed and the log format is known.
+func (f cliFlags) validate() error {
+	queriesOnly := f.showVersion || f.showStatus || f.healthcheck
+	if f.configPath == "" && !queriesOnly {
+		return errConfigRequired
+	}
+	if f.logFormat != logConsole && f.logFormat != logJSON {
+		return errLogFormat
+	}
+	return nil
 }
 
 // flagsOrExit parses args (with the program name first). ok is false when the process
@@ -111,6 +142,10 @@ func flagsOrExit(args []string, stdout, stderr io.Writer) (f cliFlags, code int,
 	case f.showVersion:
 		printVersion(stdout)
 		return f, 0, false
+	case f.showStatus:
+		return f, printStatus(f.statusSocket, stdout, stderr), false
+	case f.healthcheck:
+		return f, healthcheck(f.statusSocket, stdout, stderr), false
 	}
 	return f, 0, true
 }
@@ -155,6 +190,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return check(cfg, logger, stdout)
 	}
 
+	return start(cfg, f.statusSocket, logger)
+}
+
+// start runs the app of cfg with its status socket until SIGINT or SIGTERM and returns
+// the exit code.
+func start(cfg *config.Config, statusSocket string, logger zerolog.Logger) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -166,11 +207,74 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
+	stopStatus, err := serveStatus(statusSocket, a, logger)
+	if err != nil {
+		logger.Error().Err(err).Msg("Startup failed")
+		return 1
+	}
+	defer stopStatus()
 	runErr := a.Run(ctx)
 	if runErr != nil {
 		logger.Error().Err(runErr).Msg("Stopping after a component failure")
 	}
 	return shutdown(a, runErr, logger)
+}
+
+// serveStatus serves the status of a on the socket at path (nothing if path is empty)
+// and returns the function that stops it and removes the socket.
+func serveStatus(path string, a *app.App, logger zerolog.Logger) (func(), error) {
+	if path == "" {
+		return func() {}, nil
+	}
+	ln, err := status.Listen(path)
+	if err != nil {
+		return nil, err
+	}
+	server := status.NewServer(ln, a.Status, logger)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.Serve()
+	}()
+	return func() {
+		if err := server.Close(); err != nil {
+			logger.Debug().Err(err).Msg("Closing status socket")
+		}
+		<-done
+	}, nil
+}
+
+// printStatus prints the status of the running datalogger as JSON and returns the exit
+// code: 0, or 1 if it does not answer.
+func printStatus(path string, stdout, stderr io.Writer) int {
+	s, err := status.Query(path, statusTimeout)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(s); err != nil {
+		_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// healthcheck returns 0 if the running datalogger answers within statusTimeout and
+// reports no problem, else 1 with the reason on stderr.
+func healthcheck(path string, stdout, stderr io.Writer) int {
+	s, err := status.Query(path, statusTimeout)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "unhealthy: %v\n", err)
+		return 1
+	}
+	if problems := s.Problems(); len(problems) > 0 {
+		_, _ = fmt.Fprintf(stderr, "unhealthy: %s\n", status.Describe(problems))
+		return 1
+	}
+	_, _ = fmt.Fprintln(stdout, "healthy")
+	return 0
 }
 
 // check checks cfg with app.Check and returns the exit code: 0 if it is valid, else 2.

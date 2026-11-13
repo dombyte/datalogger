@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/clock/clocktest"
 	"github.com/dombyte/datalogger/internal/config"
 	"github.com/dombyte/datalogger/internal/datasource"
@@ -130,6 +131,7 @@ func TestRoutesToListedOutputsAndDrainsOnShutdown(t *testing.T) {
 			{writer: fakeWriter(t, "dev1", onlyDev1), devices: []string{"dev1"}, bufferSize: 10},
 		},
 		zerolog.Nop(),
+		clock.Real{},
 	)
 
 	cancel, runErr := runApp(a)
@@ -152,7 +154,7 @@ func TestReaderThatStopsFailsRun(t *testing.T) {
 		close(ch)
 		return ch
 	}).Once()
-	a := newApp([]source{{reader: r, transform: noTransform(t)}}, nil, zerolog.Nop())
+	a := newApp([]source{{reader: r, transform: noTransform(t)}}, nil, zerolog.Nop(), clock.Real{})
 
 	_, runErr := runApp(a)
 	err := <-runErr
@@ -172,7 +174,7 @@ func TestWriterThatStopsFailsRunAndShutdown(t *testing.T) {
 			close(done)
 			return done
 		}).Once()
-	a := newApp(nil, []outputRoute{{writer: w, bufferSize: 1}}, zerolog.Nop())
+	a := newApp(nil, []outputRoute{{writer: w, bufferSize: 1}}, zerolog.Nop(), clock.Real{})
 
 	_, runErr := runApp(a)
 	require.ErrorIs(t, <-runErr, ErrComponentStopped)
@@ -197,7 +199,7 @@ func TestShutdownCancelsWritersAtDrainDeadline(t *testing.T) {
 			}()
 			return done
 		}).Once()
-	a := newApp(nil, []outputRoute{{writer: w, bufferSize: 1}}, zerolog.Nop())
+	a := newApp(nil, []outputRoute{{writer: w, bufferSize: 1}}, zerolog.Nop(), clock.Real{})
 
 	cancel, runErr := runApp(a)
 	cancel()
@@ -220,8 +222,13 @@ func TestRouteDropsOnlyForFullOutput(t *testing.T) {
 	full := make(chan []datasource.DataPoint) // nobody reads
 	roomy := make(chan []datasource.DataPoint, 1)
 
-	route(data, noTransform(t), "dev1",
-		[]target{{name: "full", in: full}, {name: "roomy", in: roomy}}, zerolog.Nop())
+	route(data, deviceRoute{
+		name: "dev1", transform: noTransform(t), state: &deviceState{},
+		targets: []target{
+			{name: "full", in: full, state: &outputState{}},
+			{name: "roomy", in: roomy, state: &outputState{}},
+		},
+	}, clock.Real{}, zerolog.Nop())
 
 	require.Len(t, roomy, 1, "one batch per poll")
 	assert.Len(t, <-roomy, 3)
@@ -240,10 +247,13 @@ func TestRouteSendsFilteredCopyPerOutput(t *testing.T) {
 	all := make(chan []datasource.DataPoint, 2)
 	noB := make(chan []datasource.DataPoint, 2)
 
-	route(data, noTransform(t), "dev1", []target{
-		{name: "all", in: all},
-		{name: "noB", in: noB, exclude: map[string]bool{"b": true}},
-	}, zerolog.Nop())
+	route(data, deviceRoute{
+		name: "dev1", transform: noTransform(t), state: &deviceState{},
+		targets: []target{
+			{name: "all", in: all, state: &outputState{}},
+			{name: "noB", in: noB, exclude: map[string]bool{"b": true}, state: &outputState{}},
+		},
+	}, clock.Real{}, zerolog.Nop())
 
 	require.Len(t, noB, 1, "the second poll has nothing for noB")
 	assert.Equal(t, []datasource.DataPoint{a}, <-noB)
@@ -258,7 +268,7 @@ func TestRouteLogsDropsOncePerStall(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	in := make(chan []datasource.DataPoint, 1)
-	targets := []target{{name: "slow", in: in}}
+	targets := []target{{name: "slow", in: in, state: &outputState{}}}
 	log := zerolog.New(&logs)
 
 	poll := []datasource.DataPoint{point("dev1"), point("dev1")}
@@ -324,6 +334,7 @@ func TestRouteTransformsAndExcludesPerOutput(t *testing.T) {
 			},
 		},
 		zerolog.Nop(),
+		clock.Real{},
 	)
 
 	cancel, runErr := runApp(a)
@@ -508,4 +519,40 @@ func TestModbusPointsTakeDeviceByteOrder(t *testing.T) {
 	}, "CDAB")
 	assert.Equal(t, "CDAB", points[0].ByteOrder)
 	assert.Equal(t, "BADC", points[1].ByteOrder)
+}
+
+// Status reports the polls of a device and the queue of an output; an output whose
+// queue holds polls without moving counts its stall from the first call that saw it.
+func TestStatusReportsStalledOutput(t *testing.T) {
+	t.Parallel()
+	clk := clocktest.NewFake(time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC))
+	w := outmocks.NewMockWriter(t)
+	w.EXPECT().Name().Return("db").Maybe()
+	r := dsmocks.NewMockDeviceReader(t)
+	r.EXPECT().Name().Return("meter")
+	a := newApp([]source{{reader: r, transform: noTransform(t)}},
+		[]outputRoute{{writer: w, devices: []string{"meter"}, bufferSize: 4}},
+		zerolog.Nop(), clk)
+
+	s := a.sources[0].state
+	s.polled(3, clk.Now())
+	target := a.targets("meter", map[string]chan<- []datasource.DataPoint{"db": a.inputs[0]})[0]
+	target.send([]datasource.DataPoint{point("meter")}, zerolog.Nop())
+
+	first := a.Status()
+	require.Len(t, first.Devices, 1)
+	assert.Equal(t, int64(1), first.Devices[0].Polls)
+	assert.Equal(t, int64(3), first.Devices[0].Points)
+	require.NotNil(t, first.Devices[0].LastPoll)
+	assert.Equal(t, 1, first.Outputs[0].Queued)
+	assert.Zero(t, first.Outputs[0].StalledSeconds)
+
+	clk.Advance(6 * time.Minute)
+	stuck := a.Status()
+	assert.Equal(t, int64(360), stuck.Outputs[0].StalledSeconds)
+	assert.NotEmpty(t, stuck.Problems())
+
+	<-a.inputs[0] // the writer takes the poll
+	clk.Advance(time.Minute)
+	assert.Zero(t, a.Status().Outputs[0].StalledSeconds)
 }

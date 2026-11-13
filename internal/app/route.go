@@ -3,34 +3,41 @@ package app
 import (
 	"github.com/rs/zerolog"
 
+	"github.com/dombyte/datalogger/internal/clock"
 	"github.com/dombyte/datalogger/internal/datasource"
 	"github.com/dombyte/datalogger/internal/transform"
 )
 
 // target is the input of one output with the points of the device it skips. Each
-// router has its own targets, so dropped needs no lock.
+// router has its own targets, so dropped needs no lock; state is shared by the routers
+// of the output and read by Status.
 type target struct {
 	name    string
 	in      chan<- []datasource.DataPoint
 	exclude map[string]bool // point names
 	dropped int             // points dropped since the input was last free
+	state   *outputState
+}
+
+// deviceRoute is what the router of one device needs: its transformer, its targets
+// and the state Status reports.
+type deviceRoute struct {
+	name      string
+	transform *transform.Transformer
+	targets   []target
+	state     *deviceState
 }
 
 // route applies the transformer to every poll from data and sends its points to each
 // target until data is closed. A full target drops the poll for that target only, so
 // a slow output never blocks a device or the other outputs.
-func route(
-	data <-chan []datasource.DataPoint,
-	tr *transform.Transformer,
-	device string,
-	targets []target,
-	log zerolog.Logger,
-) {
-	log = log.With().Str("device", device).Logger()
+func route(data <-chan []datasource.DataPoint, d deviceRoute, clk clock.Clock, log zerolog.Logger) {
+	log = log.With().Str("device", d.name).Logger()
 	for points := range data {
-		points = tr.Apply(points)
-		for i := range targets {
-			targets[i].send(points, log)
+		d.state.polled(len(points), clk.Now())
+		points = d.transform.Apply(points)
+		for i := range d.targets {
+			d.targets[i].send(points, log)
 		}
 	}
 }
@@ -46,6 +53,7 @@ func (t *target) send(points []datasource.DataPoint, log zerolog.Logger) {
 	}
 	select {
 	case t.in <- batch:
+		t.state.sent.Add(1)
 		if t.dropped > 0 {
 			log.Info().Str("output", t.name).Int("dropped", t.dropped).
 				Msg("Output channel takes data points again")
@@ -57,6 +65,7 @@ func (t *target) send(points []datasource.DataPoint, log zerolog.Logger) {
 				Msg("Output channel full, dropping data points until it has room")
 		}
 		t.dropped += len(batch)
+		t.state.dropped.Add(int64(len(batch)))
 	}
 }
 
