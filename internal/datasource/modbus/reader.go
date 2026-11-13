@@ -87,9 +87,10 @@ type Reader struct {
 	registers [][]uint16
 	slots     []slot
 
-	client    Client // nil while disconnected
-	failCount int
-	backoff   time.Duration
+	client       Client // nil while disconnected
+	failCount    int
+	backoff      time.Duration
+	failedPoints map[string]bool // points whose last read failed
 }
 
 // New creates a Reader; it does not connect.
@@ -104,6 +105,8 @@ func New(d Deps) (*Reader, error) {
 		clock:    d.Clock,
 		logger:   d.Log.With().Str("component", "modbus").Str("device", d.Settings.Name).Logger(),
 		regType:  regType(d.Settings.Points),
+
+		failedPoints: make(map[string]bool),
 	}
 
 	if d.Settings.RangeMode {

@@ -237,7 +237,8 @@ writer that failed, or a missed deadline (drain or hard).
   `function_code` 3 (holding) or 4 (input); default holding. Mixing 3 and 4 in one device
   is rejected by validation; use two devices.
 - **Direct mode:** one read per point (`register`, `count`, default 1), one after the
-  other. A failed point is logged and skipped; the rest of the poll is still delivered. Reads not started yet are skipped after a connection
+  other. A failed point is skipped (warned once per point, then debug, info when it can
+  be read again); the rest of the poll is still delivered. Reads not started yet are skipped after a connection
   error and after two timeouts in a row (the device does not answer; one timeout may be a
   register it ignores), so a silent device does not hold a poll for points × timeout.
 - **Range mode:** the `ranges` (`"start-end"`, inclusive) are read in chunks of at most
