@@ -345,11 +345,11 @@ outputs:
       insecure: false
       timeout: 10s # per request (default 10s)
       max_batch: 1000 # readings per request (default 1000)
-      # Network errors, 5xx and 429 are retried max_retries times at retry_delay; then
-      # InfluxDB counts as unavailable (logged once) and the batch is kept and retried,
-      # waiting up to 1 min, until it is written. New polls queue up (buffer_size), then
-      # are dropped. Other errors (bad token, unknown database) drop the batch at once.
-      max_retries: 3 # retries at retry_delay before InfluxDB counts as unavailable (default 3)
+      # Network errors, 5xx and 429 are retried max_retries times at retry_delay; then the
+      # endpoint counts as unavailable (logged once) and the batch is kept and retried,
+      # waiting up to 1 min, until it is accepted. New polls queue up (buffer_size), then
+      # are dropped. Other answers (401, 400) drop the batch at once.
+      max_retries: 3 # retries at retry_delay before it counts as unavailable (default 3)
       retry_delay: 1s # wait between retries (default 1s)
     devices:
       - energy_meter
