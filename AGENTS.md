@@ -374,6 +374,8 @@ writer that failed, or a missed deadline (drain or hard).
   it as a formula; numbers are never changed. Rows are buffered and flushed when no further poll is queued
   (a single poll reaches the file at once, a backlog in large blocks) and on shutdown. A
   failed write or flush is logged and the file reopened; the rows buffered then are lost.
+  The first failure is an error, repeats are logged at debug until a flush works again
+  (then info), so a full disk does not log an error per block of rows.
 - Rotation: when the file is older than `max_age` (checked after each poll, so a poll
   stays in one file; the age of an
   existing file counts from the timestamp of its first row, so restarts do not reset it),

@@ -156,6 +156,12 @@ func TestReopenFailureIsLoggedAndRetried(t *testing.T) {
 	w.writePoll([]datasource.DataPoint{row(1)})
 	w.flush()
 	assert.Equal(t, []string{"error", "error"}, levels(&logs), "flush and reopen failed")
+	// Regression: every block of rows logged an error while the disk stayed full.
+	for range 3 {
+		w.writePoll([]datasource.DataPoint{row(1)})
+		w.flush()
+	}
+	assert.Equal(t, []string{"error", "error"}, levels(&logs), "repeats at debug")
 
 	require.NoError(t, os.Remove(path))
 	// row 2 fails on the old writer, which keeps its error, and reopens the file.
