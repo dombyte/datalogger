@@ -454,7 +454,8 @@ writer that failed, or a missed deadline (drain or hard).
   unique; outputs may only reference existing devices; `exclude_points` entries must be
   `device/point` with a device of that output and an existing point; API `listen` must be
   `host:port`; every device needs at least one point; point names are unique per
-  device; device and point names must not contain `/`; the `topic`, devices and
+  device; device and point names must not contain `/`; no two CSV outputs write the
+  same file; the `topic`, devices and
   non-excluded points of an MQTT output must not contain `+` or `#` (wildcards: a broker
   closes the connection); Modbus devices on one serial port have the same serial
   settings; a device of an InfluxDB output sends at most 499 points that

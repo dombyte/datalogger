@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -133,6 +134,28 @@ func (c *Config) validateOutputs(devices map[string]map[string]bool) error {
 		if err := o.validateReferences(devices); err != nil {
 			return err
 		}
+	}
+	return c.validateCSVFiles()
+}
+
+// validateCSVFiles checks that no two CSV outputs write the same file: both would
+// append to it, and each would rotate it under the other.
+func (c *Config) validateCSVFiles() error {
+	files := make(map[string]string)
+	for _, o := range c.Outputs {
+		if o.Type != "csv" {
+			continue
+		}
+		// Abs only fails without a working directory; the cleaned path still compares.
+		path, err := filepath.Abs(o.Csv.FilePath)
+		if err != nil {
+			path = filepath.Clean(o.Csv.FilePath)
+		}
+		if other, ok := files[path]; ok {
+			return fmt.Errorf("outputs %s and %s write the same file %s; use one output with "+
+				"both devices or another file_path", other, o.Name, o.Csv.FilePath)
+		}
+		files[path] = o.Name
 	}
 	return nil
 }
