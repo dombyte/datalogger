@@ -1,6 +1,7 @@
-// Datalogger polls Modbus and HTTP devices and forwards every reading to InfluxDB 3,
-// MQTT and CSV outputs. This package only parses flags, builds the logger and loads the
-// config; the wiring lives in internal/app.
+// Datalogger polls Modbus and HTTP devices and forwards every reading to its outputs:
+// InfluxDB 3, MQTT, CSV files, a read-only HTTP API and webhooks. This package only
+// parses flags, builds the logger and loads the config; the wiring lives in
+// internal/app.
 package main
 
 import (
