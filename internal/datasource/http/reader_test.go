@@ -203,8 +203,9 @@ func TestStatusErrorBacksOffAndRecovers(t *testing.T) {
 	assert.Equal(t, nethttp.StatusInternalServerError, <-calls)
 	h.expectNothing()
 
-	h.advance(1, interval)
-	h.advance(2, 100*time.Millisecond) // backoff
+	// Regression: the retry waited for the next tick and then the backoff. It runs after
+	// the backoff alone now (ticker + backoff wait), long before the poll interval.
+	h.advance(2, 100*time.Millisecond)
 	assert.Equal(t, "v", h.receive().PointName)
 }
 
@@ -230,7 +231,6 @@ func TestResponseWithoutPointsFailsPoll(t *testing.T) {
 	<-calls
 	h.expectNothing()
 
-	h.advance(1, interval)
 	h.advance(2, 100*time.Millisecond) // the backoff of a failed poll
 	<-calls
 	assert.Equal(t, "v", h.receive().PointName)
@@ -320,7 +320,6 @@ func TestShutdownEndsBackoffWait(t *testing.T) {
 	h := newHarness(t, settings("http://device", http.Point{Name: "v", JSONPath: "v", Scale: 1}),
 		client)
 	h.start()                                                            // fails: backoff
-	h.advance(1, interval)                                               // next tick waits out the backoff
 	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 }, // ticker + backoff
 		time.Second, time.Millisecond)
 	h.stop() // returns only if the backoff wait ends at once; no second request

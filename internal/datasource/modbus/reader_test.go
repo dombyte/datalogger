@@ -232,8 +232,7 @@ func TestReconnectsAfterConnectionError(t *testing.T) {
 		Return([]uint16{42}, nil).Once()
 	second.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)             // next tick, then the reader waits out the backoff
-	h.advance(2, 100*time.Millisecond) // initial backoff
+	h.advance(2, 100*time.Millisecond) // the retry runs after the initial backoff
 	assert.InDelta(t, 42.0, h.receive().Value, 0)
 	h.stop() // before second's expectations are checked
 }
@@ -252,7 +251,8 @@ func TestUnreachableDeviceRecovers(t *testing.T) {
 		Return([]uint16{1}, nil).Once()
 	h.client.EXPECT().Close().Return(nil).Once()
 
-	h.advance(1, interval)
+	// Regression: the retry waited for the next tick, then the backoff. It runs after the
+	// backoff alone now (ticker + backoff wait), long before the poll interval.
 	h.advance(2, 100*time.Millisecond)
 	assert.Equal(t, "p", h.receive().PointName)
 }
@@ -407,8 +407,7 @@ func TestDirectModeSkipsRestAfterTimeoutsInRow(t *testing.T) {
 	h.start()
 	<-read
 	<-read
-	// The failed poll makes the next tick wait out the backoff (ticker + backoff).
-	h.advance(1, interval)
+	// The failed poll waits out the backoff (ticker + backoff).
 	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 },
 		time.Second, time.Millisecond)
 }
@@ -470,7 +469,7 @@ func TestRangeModeStopsAfterFailedChunk(t *testing.T) {
 
 	h.start()
 	<-failed
-	h.advance(1, interval) // next tick: waits out the backoff, so the poll has ended
+	// The reader waits out the backoff, so the poll has ended.
 	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 },
 		time.Second, time.Millisecond)
 }
@@ -566,8 +565,8 @@ func TestDirectModeAllPointsFailedBacksOff(t *testing.T) {
 	h.client.EXPECT().Close().Return(nil).Once()
 
 	h.start()
-	h.advance(1, interval)                                               // the next tick waits out the backoff: the poll failed
-	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 }, // ticker + backoff
+	// The reader waits out the backoff (ticker + backoff): the poll failed.
+	require.Eventually(t, func() bool { return h.clock.Waiters() >= 2 },
 		time.Second, time.Millisecond)
 	h.stop() // ends the backoff wait at once
 	assert.Empty(t, h.pending)
@@ -672,4 +671,31 @@ func TestPollTimestamps(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// A tick that comes while the reader waits out its backoff does not start another
+// poll right after the retry: the next poll is on the tick after it.
+func TestRetryDropsTickDuringBackoff(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, settings(modbus.Point{Name: "p", Register: 5, Type: "uint16", Scale: 1}))
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	failed := signal(h.dialer.EXPECT().Dial(mock.Anything).Return(nil, refused).Once())
+	h.start()
+	<-failed
+
+	h.dialer.EXPECT().Dial(mock.Anything).Return(h.client, nil).Once()
+	read := h.client.EXPECT().ReadRegisters(mock.Anything, uint16(5), uint16(1),
+		lib.HOLDING_REGISTER).Return([]uint16{1}, nil)
+	read.Once()
+	h.client.EXPECT().Close().Return(nil).Once()
+
+	h.advance(2, interval) // the backoff and a tick pass together
+	assert.Equal(t, "p", h.receive().PointName)
+
+	// The second read only comes with the next tick; a poll on the dropped tick would
+	// read before it.
+	read.Return([]uint16{2}, nil).Once()
+	h.advance(1, interval)
+	assert.InDelta(t, 2.0, h.receive().Value, 0)
+	h.stop()
 }
