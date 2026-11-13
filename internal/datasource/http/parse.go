@@ -16,6 +16,46 @@ const (
 	kindUint  = "uint"
 )
 
+// numberType is the kind and bit size of a numeric point type.
+type numberType struct {
+	kind string
+	bits int
+}
+
+// numberTypeOf returns the kind and bit size of a numeric point type. Values are
+// delivered as float64, int64 or uint64; the bit size only bounds the range, so a value
+// that does not fit the type (70000 for int16) is an error instead of a wrapped number.
+// float32 is parsed as float64: float32 would round the value.
+func numberTypeOf(targetType string) (numberType, bool) {
+	const bits16, bits32, bits64 = 16, 32, 64
+	types := [...]struct {
+		name string
+		typ  numberType
+	}{
+		{"float32", numberType{kindFloat, bits64}},
+		{"float64", numberType{kindFloat, bits64}},
+		{"int16", numberType{kindInt, bits16}},
+		{"int32", numberType{kindInt, bits32}},
+		{"int64", numberType{kindInt, bits64}},
+		{"uint16", numberType{kindUint, bits16}},
+		{"uint32", numberType{kindUint, bits32}},
+		{"uint64", numberType{kindUint, bits64}},
+	}
+	for _, t := range types {
+		if t.name == targetType {
+			return t.typ, true
+		}
+	}
+	return numberType{}, false
+}
+
+// validType reports whether a point type is known: "" (detect), bool, string or a
+// number type.
+func validType(targetType string) bool {
+	_, number := numberTypeOf(targetType)
+	return number || targetType == "" || targetType == "bool" || targetType == "string"
+}
+
 // extractValue returns the value of a point from the response body.
 func (r *Reader) extractValue(body []byte, p Point) (any, error) {
 	switch r.settings.ResponseType {
@@ -54,65 +94,51 @@ func convertJSONResult(result gjson.Result, targetType string) (any, error) {
 		return nil, errors.New("value is null")
 	}
 	switch targetType {
+	case "":
+		return autoDetect(result)
 	case "bool":
 		return convertBool(result)
 	case "string":
 		return result.String(), nil
 	}
-	if kind := numberKind(targetType); kind != "" {
-		return convertNumber(result, kind)
-	}
-	return autoDetect(result)
+	return convertNumber(result, targetType)
 }
 
-// numberKind returns the number kind of a point type, "" for other types.
-func numberKind(targetType string) string {
-	switch targetType {
-	case "float32", "float64":
-		return kindFloat
-	case "int16", "int32", "int64":
-		return kindInt
-	case "uint16", "uint32", "uint64":
-		return kindUint
+// convertNumber converts a JSON number, or a string holding one, to a number type.
+func convertNumber(result gjson.Result, targetType string) (any, error) {
+	typ, ok := numberTypeOf(targetType)
+	if !ok {
+		return nil, fmt.Errorf("unknown type %q", targetType) // rejected by New
+	}
+	switch result.Type {
+	case gjson.String:
+		return parseNumber(strings.TrimSpace(result.Str), targetType, typ)
+	case gjson.Number:
+		// The raw text, not gjson's float: an int64 above 2^53 keeps its digits, and
+		// 2.5 is no integer instead of being cut to 2.
+		return parseNumber(result.Raw, targetType, typ)
 	default:
-		return ""
-	}
-}
-
-// convertNumber converts a JSON number, or a string holding one, to the number kind.
-func convertNumber(result gjson.Result, kind string) (any, error) {
-	switch {
-	case result.Type == gjson.String:
-		return parseNumber(strings.TrimSpace(result.Str), kind)
-	case result.Type != gjson.Number:
 		return nil, fmt.Errorf("%s is not a number", result.Raw)
-	case kind == kindFloat:
-		return result.Float(), nil
-	case kind == kindInt:
-		return result.Int(), nil
-	case result.Num < 0:
-		return nil, fmt.Errorf("%s is negative, type is unsigned", result.Raw)
-	default:
-		return result.Uint(), nil
 	}
 }
 
-// parseNumber parses a number sent as a JSON string.
-func parseNumber(s, kind string) (any, error) {
+// parseNumber parses a number of the type; a fraction for an integer type, a negative
+// number for an unsigned one and a value outside the type's range are errors.
+func parseNumber(s, name string, typ numberType) (any, error) {
 	var (
 		value any
 		err   error
 	)
-	switch kind {
+	switch typ.kind {
 	case kindFloat:
-		value, err = strconv.ParseFloat(s, 64)
+		value, err = strconv.ParseFloat(s, typ.bits)
 	case kindInt:
-		value, err = strconv.ParseInt(s, 10, 64)
+		value, err = strconv.ParseInt(s, 10, typ.bits)
 	default:
-		value, err = strconv.ParseUint(s, 10, 64)
+		value, err = strconv.ParseUint(s, 10, typ.bits)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%q is not a valid %s number", s, kind)
+		return nil, fmt.Errorf("%q is not a valid %s number", s, name)
 	}
 	return value, nil
 }

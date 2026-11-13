@@ -1012,6 +1012,39 @@ func TestValidatePoints(t *testing.T) {
 			device:  http("json", Point{Name: "p"}),
 			wantErr: "points[0] p: json_path required",
 		},
+		{name: "http int16", device: http("json", Point{Name: "p", JSONPath: "a", Type: "int16"})},
+		// Regression: unknown types and settings of the other device type were ignored.
+		{
+			name:   "http typo in type",
+			device: http("json", Point{Name: "p", JSONPath: "a", Type: "flaot64"}),
+			wantErr: `points[0] p: type must be float32, float64, int16, int32, int64, uint16, ` +
+				`uint32, uint64, bool or string, got "flaot64"`,
+		},
+		{
+			name:    "http int8",
+			device:  http("json", Point{Name: "p", JSONPath: "a", Type: "int8"}),
+			wantErr: `got "int8"`,
+		},
+		{
+			name:    "http register",
+			device:  http("json", Point{Name: "p", JSONPath: "a", Register: 5}),
+			wantErr: "points[0] p: register, count and function_code are Modbus settings",
+		},
+		{
+			name:    "http text with path",
+			device:  http("text", Point{Name: "p", JSONPath: "a"}),
+			wantErr: "points[0] p: json_path is only used with response_type json",
+		},
+		{
+			name:    "http text with type",
+			device:  http("text", Point{Name: "p", Type: "float64"}),
+			wantErr: "points[0] p: type is only used with response_type json",
+		},
+		{
+			name:    "modbus json path",
+			device:  modbus(Point{Name: "p", Type: "uint16", JSONPath: "a"}),
+			wantErr: "points[0] p: json_path is an HTTP setting",
+		},
 	}
 
 	for _, tt := range tests {

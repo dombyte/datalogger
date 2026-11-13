@@ -278,10 +278,13 @@ writer that failed, or a missed deadline (drain or hard).
 ### HTTP reader
 - `method` GET (default) or POST with `body`; `headers` are sent as given; `insecure`
   disables certificate verification for this device.
-- `response_type`: `json` (default; values via gjson `json_path`; `type` float*/int*/uint*/
-  bool/string converts, numbers sent as strings included; otherwise numbers become
-  float64 and bools and strings stay) or `text` (the whole body as one string); anything
-  else is rejected by validation. JSON points need a `json_path`.
+- `response_type`: `json` (default; values via gjson `json_path`; `type` float32/64,
+  int16/32/64, uint16/32/64, bool or string converts, numbers sent as strings included;
+  otherwise numbers become float64 and bools and strings stay) or `text` (the whole body
+  as one string); anything else is rejected by validation. JSON points need a
+  `json_path`; validation rejects an unknown `type`, `json_path` or `type` with `text`,
+  and the Modbus keys `register`, `count`, `function_code` (and `json_path` on a Modbus
+  point), which would be ignored.
 - `scale`/`offset` apply to numeric JSON values: value × scale + offset as float64. With
   the defaults (1, 0) the value keeps its parsed type, so existing InfluxDB field types do
   not change; bools and strings are never scaled.
@@ -290,7 +293,9 @@ writer that failed, or a missed deadline (drain or hard).
   receive timestamp.
 - A point that cannot be extracted is skipped: its `json_path` is not in the response,
   the value is `null`, an object or array without `type: string`, or does not fit its
-  `type` (`"N/A"` for `int64`, a negative number for `uint*`); gjson would deliver 0 or
+  `type` (`"N/A"` or `2.5` for `int64`, `70000` for `int16`, a negative number for
+  `uint*`; integers are parsed from the raw text, so an `int64` keeps every digit); gjson
+  would deliver 0 or
   false, which looks like a reading. Such a point is warned about once, further failures
   are logged at debug, and an info line follows when it can be read again.
 - One request per poll; points are parsed in order. A response from which no point can

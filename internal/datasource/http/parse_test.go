@@ -113,7 +113,6 @@ func TestConvertedNumbersAndBools(t *testing.T) {
 		{name: "bool from string", point: Point{JSONPath: "t", Type: "bool"}, want: true},
 		{name: "bool from string zero", point: Point{JSONPath: "zero", Type: "bool"}, want: false},
 		{name: "string without type", point: Point{JSONPath: "s"}, want: "text"},
-		{name: "unknown type detects", point: Point{JSONPath: "n", Type: "xyz"}, want: 1.0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -131,7 +130,7 @@ func TestConvertedNumbersAndBools(t *testing.T) {
 func TestValuesThatAreNoReadingAreErrors(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"null": null, "na": "N/A", "obj": {"a": 1}, "list": [1, 2],
-		"neg": -3, "frac": "2.5", "on": true}`)
+		"neg": -3, "frac": "2.5", "on": true, "num": 3.7, "big": 70000, "huge": 3000000000}`)
 	tests := []struct {
 		name    string
 		point   Point
@@ -146,7 +145,13 @@ func TestValuesThatAreNoReadingAreErrors(t *testing.T) {
 		{name: "text as bool", point: Point{JSONPath: "na", Type: "bool"}, wantErr: "not a bool"},
 		{name: "object as bool", point: Point{JSONPath: "obj", Type: "bool"}, wantErr: "not a bool"},
 		{name: "bool as number", point: Point{JSONPath: "on", Type: "int16"}, wantErr: "not a number"},
-		{name: "negative as uint", point: Point{JSONPath: "neg", Type: "uint64"}, wantErr: "negative"},
+		{name: "negative as uint", point: Point{JSONPath: "neg", Type: "uint64"}, wantErr: "not a valid uint64"},
+		// Regression: 3.7 as int64 was cut to 3, and 70000 as int16 was delivered.
+		{name: "fraction as int", point: Point{JSONPath: "num", Type: "int64"}, wantErr: "not a valid int64"},
+		{name: "int16 overflow", point: Point{JSONPath: "big", Type: "int16"}, wantErr: "not a valid int16"},
+		{name: "uint16 overflow", point: Point{JSONPath: "big", Type: "uint16"}, wantErr: "not a valid uint16"},
+		{name: "int32 overflow", point: Point{JSONPath: "huge", Type: "int32"}, wantErr: "not a valid int32"},
+		{name: "unknown type", point: Point{JSONPath: "neg", Type: "flaot64"}, wantErr: "unknown type"},
 		{name: "object without type", point: Point{JSONPath: "obj"}, wantErr: "object or array"},
 		{name: "array without type", point: Point{JSONPath: "list"}, wantErr: "object or array"},
 	}
