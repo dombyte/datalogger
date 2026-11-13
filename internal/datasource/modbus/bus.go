@@ -32,8 +32,9 @@ type BusOpener interface {
 // BusDeps are the dependencies of a Bus; all are required.
 type BusDeps struct {
 	Address string // the connection address, for logs
-	// Serial is set for a serial port: its frames carry no transaction ID, so the port is
-	// reopened after a request that may leave a late answer on the line.
+	// Serial is set for RTU frames (a serial port or an RTU-over-TCP gateway): they carry
+	// no transaction ID, so the connection is reopened after a request that may leave a
+	// late answer on the line.
 	Serial bool
 	Opener BusOpener
 	Log    zerolog.Logger

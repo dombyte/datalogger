@@ -32,6 +32,14 @@ const (
 	rtuScheme = "rtu://"
 )
 
+// modbusSchemes are the Modbus address schemes the reader supports: Modbus TCP, RTU on
+// a serial port and RTU frames through a TCP gateway. The library knows more (udp,
+// rtuoverudp, tcp+tls), which the reader does not handle: tcp+tls needs certificates
+// there is no setting for, and UDP has no connection to reopen after a late answer.
+func modbusSchemes() []string {
+	return []string{"tcp://", rtuScheme, "rtuovertcp://"}
+}
+
 // Validate validates the entire configuration.
 func (c *Config) Validate() error {
 	if len(c.Devices) == 0 {
@@ -282,8 +290,8 @@ func (d *Device) validateCommon() error {
 
 // Validate validates Modbus configuration.
 func (m *ModbusConfig) Validate() error {
-	if m.Address == "" {
-		return errors.New("address required")
+	if err := validateModbusAddress(m.Address); err != nil {
+		return err
 	}
 
 	if m.SlaveID == 0 {
@@ -303,6 +311,19 @@ func (m *ModbusConfig) Validate() error {
 	}
 	if len(m.Ranges) > 0 {
 		return errors.New("ranges are only read with register_mode range")
+	}
+	return nil
+}
+
+// validateModbusAddress checks that the address is set and has a supported scheme.
+func validateModbusAddress(address string) error {
+	if address == "" {
+		return errors.New("address required")
+	}
+	if !slices.ContainsFunc(modbusSchemes(), func(scheme string) bool {
+		return strings.HasPrefix(address, scheme)
+	}) {
+		return fmt.Errorf("address %q must start with tcp://, rtu:// or rtuovertcp://", address)
 	}
 	return nil
 }

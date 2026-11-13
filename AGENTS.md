@@ -225,8 +225,11 @@ writer that failed, or a missed deadline (drain or hard).
 ## 7. Behaviour Reference
 
 ### Modbus reader
-- Address URL: `tcp://host:port` or `rtu:///dev/ttyUSB0` (RTU: `speed`, `data_bits`,
-  `parity` N/E/O, `stop_bits`). `slave_id` is required.
+- Address URL: `tcp://host:port`, `rtu:///dev/ttyUSB0` (RTU: `speed`, `data_bits`,
+  `parity` N/E/O, `stop_bits`) or `rtuovertcp://host:port` (RTU frames through a TCP
+  gateway: handled like a serial port, one shared bus per address, reopened after a
+  timeout). Other schemes of the library (`udp`, `rtuoverudp`, `tcp+tls`) are rejected
+  by validation. `slave_id` is required.
 - **Register type** is chosen once per device from the first point with
   `function_code` 3 (holding) or 4 (input); default holding. Mixing 3 and 4 in one device
   is rejected by validation; use two devices.

@@ -383,6 +383,27 @@ func TestModbusConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "rtu over tcp",
+			config:  ModbusConfig{Address: "rtuovertcp://gw:502", SlaveID: 1, RegisterMode: "direct"},
+			wantErr: false,
+		},
+		// Regression: the library accepts these, the reader does not handle them.
+		{
+			name:    "udp",
+			config:  ModbusConfig{Address: "udp://gw:502", SlaveID: 1, RegisterMode: "direct"},
+			wantErr: true,
+		},
+		{
+			name:    "tcp+tls",
+			config:  ModbusConfig{Address: "tcp+tls://gw:802", SlaveID: 1, RegisterMode: "direct"},
+			wantErr: true,
+		},
+		{
+			name:    "no scheme",
+			config:  ModbusConfig{Address: "gw:502", SlaveID: 1, RegisterMode: "direct"},
+			wantErr: true,
+		},
+		{
 			name:    "unknown parity",
 			config:  ModbusConfig{Address: "rtu:///dev/ttyUSB0", SlaveID: 1, RegisterMode: "direct", Parity: "X"},
 			wantErr: true,

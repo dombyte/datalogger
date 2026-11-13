@@ -474,9 +474,12 @@ func TestNewSharesSerialPort(t *testing.T) {
 		device("meter", port, time.Second),
 		device("inverter", port, 3*time.Second),
 		device("gateway", "tcp://127.0.0.1:1", time.Second),
+		// RTU frames through a TCP gateway share their bus like a serial port.
+		device("rtu-a", "rtuovertcp://127.0.0.1:1", time.Second),
+		device("rtu-b", "rtuovertcp://127.0.0.1:1", time.Second),
 	}}, zerolog.New(zerolog.SyncWriter(&logs)), clocktest.NewFake(time.Now()))
 	require.NoError(t, err)
-	require.Len(t, a.buses, 2, "the serial port and the TCP device")
+	require.Len(t, a.buses, 3, "the serial port, the TCP device and the RTU gateway")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -484,4 +487,5 @@ func TestNewSharesSerialPort(t *testing.T) {
 	require.NoError(t, a.Shutdown(context.Background()), "the readers stop before their bus")
 	assert.Contains(t, logs.String(), // read after Shutdown: the readers log too
 		`"port":"`+port+`","devices":["meter","inverter"],"timeout":"3s"`)
+	assert.Contains(t, logs.String(), `"port":"rtuovertcp://127.0.0.1:1","devices":["rtu-a","rtu-b"]`)
 }
