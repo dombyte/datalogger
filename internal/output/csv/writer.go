@@ -129,19 +129,32 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 func (w *Writer) writePoll(points []datasource.DataPoint) {
 	for _, dp := range points {
 		if err := w.write(dp); err != nil {
-			w.logger.Error().Str("device", dp.DeviceName).Str("point", dp.PointName).Err(err).
-				Msg("Failed to write CSV row")
-			w.failed = true
-			w.reopen()
+			w.writeFailed(err, "Failed to write CSV row")
 		}
 	}
 	if now := w.clock.Now(); w.rotationDue(now) {
 		if err := w.rotate(now); err != nil {
-			w.logger.Error().Err(err).Msg("Failed to rotate CSV file")
-			w.failed = true
-			w.reopen()
+			w.writeFailed(err, "Failed to rotate CSV file")
 		}
 	}
+}
+
+// writeFailed logs a failed write and reopens the file. The first failure is an error,
+// repeats are logged at debug until a flush works again: a full disk would otherwise
+// log an error for every block of rows.
+func (w *Writer) writeFailed(err error, msg string) {
+	level := w.failureLevel()
+	w.logger.WithLevel(level).Err(err).Msg(msg)
+	w.failed = true
+	w.reopen(level)
+}
+
+// failureLevel is error for the first failure, debug while the writer keeps failing.
+func (w *Writer) failureLevel() zerolog.Level {
+	if w.failed {
+		return zerolog.DebugLevel
+	}
+	return zerolog.ErrorLevel
 }
 
 // flush writes the buffered rows to the file and logs a failure or the recovery
@@ -150,9 +163,7 @@ func (w *Writer) writePoll(points []datasource.DataPoint) {
 func (w *Writer) flush() {
 	w.csv.Flush()
 	if err := w.csv.Error(); err != nil {
-		w.logger.Error().Err(err).Msg("Failed to write CSV rows")
-		w.failed = true
-		w.reopen()
+		w.writeFailed(err, "Failed to write CSV rows")
 		return
 	}
 	if w.failed {
@@ -207,13 +218,13 @@ func firstRowTime(file io.Reader) (time.Time, bool) {
 // reopen replaces the file and its CSV writer after a failed write: the buffered writer
 // keeps its first error, so without a new one every later row would fail too. If the
 // file cannot be opened, the next point tries again.
-func (w *Writer) reopen() {
+func (w *Writer) reopen(level zerolog.Level) {
 	// The write error is already logged and the file may be closed (failed rotation).
 	if err := w.file.Close(); err != nil {
 		w.logger.Debug().Err(err).Msg("Closing CSV file after a failed write")
 	}
 	if err := w.open(); err != nil {
-		w.logger.Error().Err(err).Msg("Failed to reopen CSV file")
+		w.logger.WithLevel(level).Err(err).Msg("Failed to reopen CSV file")
 	}
 }
 
