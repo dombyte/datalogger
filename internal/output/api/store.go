@@ -44,6 +44,16 @@ func (s *store) device(name string) (map[string]datasource.DataPoint, bool) {
 	return maps.Clone(points), ok
 }
 
+// point returns the latest value of one point, whether the device is served and
+// whether the point has a value, without copying the other points of the device.
+func (s *store) point(device, name string) (dp datasource.DataPoint, served, found bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	points, served := s.latest[device]
+	dp, found = points[name]
+	return dp, served, found
+}
+
 // summary is the number of points of a device and the time of its newest one (zero
 // without points).
 type summary struct {
