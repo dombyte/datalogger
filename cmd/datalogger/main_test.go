@@ -27,12 +27,12 @@ func TestParseFlags(t *testing.T) {
 		{
 			name: "config and debug",
 			args: []string{"-config", "test.yaml", "-debug"},
-			want: cliFlags{configPath: "test.yaml", debug: true, logFormat: "console"},
+			want: cliFlags{configPath: "test.yaml", debug: true, logFormat: "console", statusSocket: defaultStatusSocket},
 		},
 		{
 			name: "json logs",
 			args: []string{"-config", "test.yaml", "-log-format", "json"},
-			want: cliFlags{configPath: "test.yaml", logFormat: "json"},
+			want: cliFlags{configPath: "test.yaml", logFormat: "json", statusSocket: defaultStatusSocket},
 		},
 		{
 			name:    "unknown log format",
@@ -42,7 +42,7 @@ func TestParseFlags(t *testing.T) {
 		{
 			name: "version without config",
 			args: []string{"-version"},
-			want: cliFlags{showVersion: true, logFormat: "console"},
+			want: cliFlags{showVersion: true, logFormat: "console", statusSocket: defaultStatusSocket},
 		},
 		{
 			name:    "missing config",

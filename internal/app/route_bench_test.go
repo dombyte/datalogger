@@ -25,7 +25,9 @@ func BenchmarkSend(b *testing.B) {
 	inputs := make([]chan []datasource.DataPoint, len(targets))
 	for i := range targets {
 		inputs[i] = make(chan []datasource.DataPoint, 1)
-		targets[i] = target{name: strconv.Itoa(i), in: inputs[i], exclude: map[string]bool{}}
+		targets[i] = target{
+			name: strconv.Itoa(i), in: inputs[i], exclude: map[string]bool{}, state: &outputState{},
+		}
 	}
 	targets[2].exclude["p7"] = true
 	log := zerolog.Nop()

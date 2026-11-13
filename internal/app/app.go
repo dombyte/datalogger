@@ -47,6 +47,7 @@ var (
 type source struct {
 	reader    datasource.DeviceReader
 	transform *transform.Transformer
+	state     *deviceState // set by newApp
 }
 
 // outputRoute is a writer with the devices it accepts, the points it skips
@@ -56,6 +57,7 @@ type outputRoute struct {
 	devices       []string
 	excludePoints []string
 	bufferSize    int
+	state         *outputState // set by newApp
 }
 
 // App runs all readers and writers of one config.
@@ -64,12 +66,17 @@ type App struct {
 	outputs []outputRoute
 	buses   []*modbus.Bus // Modbus connections, one per serial port or TCP device
 	log     zerolog.Logger
+	clock   clock.Clock
+
+	// inputs are the queues of the outputs, by index in outputs; created by newApp, so
+	// Status can read them before and during Run.
+	inputs   []chan []datasource.DataPoint
+	statusMu sync.Mutex // the progress of the outputs, see Status
 
 	cancelBuses   context.CancelFunc
 	busesDone     []<-chan struct{}
 	cancelSources context.CancelFunc
 	cancelOutputs context.CancelFunc
-	inputs        []chan []datasource.DataPoint
 	routers       sync.WaitGroup
 	writers       sync.WaitGroup
 	stopping      atomic.Bool
@@ -100,7 +107,7 @@ func New(cfg *config.Config, log zerolog.Logger, clk clock.Clock) (*App, error) 
 		return nil, err
 	}
 
-	a := newApp(sources, outputs, log)
+	a := newApp(sources, outputs, log, clk)
 	// A serial port's bus is shared by its devices: start it once.
 	for _, bus := range buses {
 		if !slices.Contains(a.buses, bus) {
@@ -174,11 +181,24 @@ func outputError(o config.Output, err error) error {
 	return fmt.Errorf("%w: output %s: %w", ErrInvalidConfig, o.Name, err)
 }
 
-// newApp wires already created components; tests use it with mocks.
-func newApp(sources []source, outputs []outputRoute, log zerolog.Logger) *App {
+// newApp wires already created components and creates the output queues; tests use it
+// with mocks.
+func newApp(
+	sources []source, outputs []outputRoute, log zerolog.Logger, clk clock.Clock,
+) *App {
+	for i := range sources {
+		sources[i].state = &deviceState{}
+	}
+	inputs := make([]chan []datasource.DataPoint, len(outputs))
+	for i := range outputs {
+		outputs[i].state = &outputState{}
+		inputs[i] = make(chan []datasource.DataPoint, outputs[i].bufferSize)
+	}
 	return &App{
 		sources: sources,
 		outputs: outputs,
+		inputs:  inputs,
+		clock:   clk,
 		log:     log.With().Str("component", "app").Logger(),
 	}
 }
@@ -279,21 +299,21 @@ func (a *App) startWriters(
 	failed chan<- error,
 ) map[string]chan<- []datasource.DataPoint {
 	inputs := make(map[string]chan<- []datasource.DataPoint, len(a.outputs))
-	for _, o := range a.outputs {
-		in := make(chan []datasource.DataPoint, o.bufferSize)
-		a.inputs = append(a.inputs, in)
+	for i, o := range a.outputs {
+		in := a.inputs[i]
 		inputs[o.writer.Name()] = in
 
 		done := o.writer.Start(ctx, in)
 		a.writers.Add(1)
-		go a.watchWriter(o.writer.Name(), done, failed)
+		go a.watchWriter(o, done, failed)
 	}
 	return inputs
 }
 
 // watchWriter waits for a writer to finish and records why it stopped.
-func (a *App) watchWriter(name string, done <-chan error, failed chan<- error) {
+func (a *App) watchWriter(o outputRoute, done <-chan error, failed chan<- error) {
 	defer a.writers.Done()
+	name := o.writer.Name()
 
 	var err error
 	for e := range done {
@@ -306,6 +326,7 @@ func (a *App) watchWriter(name string, done <-chan error, failed chan<- error) {
 		a.mu.Unlock()
 	}
 	if !a.stopping.Load() {
+		o.state.stopped.Store(true)
 		failed <- fmt.Errorf("%w: output %s", ErrComponentStopped, name)
 	}
 }
@@ -319,13 +340,16 @@ func (a *App) startReaders(
 ) {
 	for _, s := range a.sources {
 		name := s.reader.Name()
-		targets := a.targets(name, inputs)
+		d := deviceRoute{
+			name: name, transform: s.transform, targets: a.targets(name, inputs), state: s.state,
+		}
 		data := s.reader.Start(ctx)
 		a.routers.Add(1)
 		go func() {
 			defer a.routers.Done()
-			route(data, s.transform, name, targets, a.log)
+			route(data, d, a.clock, a.log)
 			if ctx.Err() == nil {
+				s.state.stopped.Store(true)
 				failed <- fmt.Errorf("%w: device %s", ErrComponentStopped, name)
 			}
 		}()
@@ -340,7 +364,10 @@ func (a *App) targets(device string, inputs map[string]chan<- []datasource.DataP
 		if !slices.Contains(o.devices, device) {
 			continue
 		}
-		t := target{name: o.writer.Name(), in: inputs[o.writer.Name()], exclude: map[string]bool{}}
+		t := target{
+			name: o.writer.Name(), in: inputs[o.writer.Name()], exclude: map[string]bool{},
+			state: o.state,
+		}
 		for _, entry := range o.excludePoints {
 			if d, point, _ := strings.Cut(entry, pathSeparator); d == device {
 				t.exclude[point] = true

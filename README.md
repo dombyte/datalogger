@@ -38,7 +38,9 @@ docker compose up -d
 ```
 
 The compose file mounts `./config.yaml` read-only and `./data` to `/app/data` (write CSV
-files below `/app/data`). Publish a port only if you use the `api` output. Pin a version
+files below `/app/data`). Publish a port only if you use the `api` output. The image runs
+as root unless you set `user:` in the compose file (for example `user: "1000:1000"`);
+that user needs to read `config.yaml` and write `./data`. Pin a version
 tag (`vX.Y.Z`, `vX.Y`, `v2`) instead of `latest` if you want controlled upgrades.
 
 ### Package (.deb / .rpm)
@@ -310,6 +312,17 @@ outputs:
   that cannot be opened), when a component stops unexpectedly, or when the shutdown takes
   too long. Run it with a restart policy: `restart: unless-stopped` in the compose file;
   the packaged systemd service restarts on failure, but not after exit code 2.
+- **Status and health:** the running process answers on a Unix socket
+  (`-status-socket`, default `/tmp/datalogger.sock`; the systemd service uses
+  `/run/datalogger/datalogger.sock`; `-status-socket ""` turns it off).
+  `datalogger -status` prints every device (polls, points, last poll) and output
+  (queued polls, dropped points, how long it has taken no data) as JSON.
+  `datalogger -healthcheck` exits 0 when healthy and 1 when the process does not answer
+  within 2 s, a component has stopped, or an output has held queued polls without
+  taking one for 5 minutes. A device without data is only reported: restarting does
+  not bring back a device that is off. The Docker image runs the healthcheck every
+  30 s (`docker ps` shows `healthy`); Docker only marks the container, it does not
+  restart it.
 - Logs go to stderr (`docker compose logs -f`, `journalctl -u datalogger -f`). A device
   that fails is logged once as a warning, from the third failure in a row as an error,
   and again when it recovers. `-debug` adds per-poll and per-point detail.

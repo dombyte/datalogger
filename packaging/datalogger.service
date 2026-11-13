@@ -10,7 +10,12 @@ After=network-online.target
 Type=simple
 User=datalogger
 Group=datalogger
-ExecStart=/usr/bin/datalogger -config /etc/datalogger/config.yaml
+# The status socket is in the RuntimeDirectory: /tmp is private (PrivateTmp). Check with
+#   sudo -u datalogger datalogger -status -status-socket /run/datalogger/datalogger.sock
+ExecStart=/usr/bin/datalogger -config /etc/datalogger/config.yaml \
+    -status-socket /run/datalogger/datalogger.sock
+RuntimeDirectory=datalogger
+RuntimeDirectoryMode=0750
 # Relative paths in the config (./data/data.csv) land in /var/lib/datalogger, the only
 # directory the service may write to.
 StateDirectory=datalogger

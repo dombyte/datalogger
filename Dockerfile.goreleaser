@@ -2,7 +2,7 @@
 # ca-certificates and zoneinfo are arch-independent: this stage runs natively on the
 # build host, so no step here needs QEMU (release.yml still sets it up, as goreleaser requires).
 FROM --platform=$BUILDPLATFORM alpine:3.24.3 AS builder
-RUN apk --no-cache add ca-certificates tzdata
+RUN apk --no-cache add ca-certificates tzdata && mkdir -m 1777 -p /rootfs/tmp
 
 FROM scratch
 WORKDIR /app
@@ -10,4 +10,8 @@ ARG TARGETPLATFORM
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 COPY $TARGETPLATFORM/datalogger /app
+# /tmp holds the status socket; 1777 so the image runs as root or any user (compose user:).
+COPY --from=builder /rootfs/ /
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["/app/datalogger", "-healthcheck"]
 ENTRYPOINT ["/app/datalogger"]
