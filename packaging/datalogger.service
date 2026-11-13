@@ -16,10 +16,12 @@ ExecStart=/usr/bin/datalogger -config /etc/datalogger/config.yaml
 StateDirectory=datalogger
 StateDirectoryMode=0750
 WorkingDirectory=/var/lib/datalogger
-# Exit 1 = a component stopped or the config is invalid: start again, like the
-# container's restart policy.
+# Exit 1 = a component stopped or a file or port could not be opened: start again,
+# like the container's restart policy. Exit 2 = the config can never run: restarting
+# every 5 s would only repeat the error; fix the config and start the service.
 Restart=on-failure
 RestartSec=5s
+RestartPreventExitStatus=2
 # datalogger exits within its 8 s hard deadline.
 TimeoutStopSec=15s
 StandardOutput=journal

@@ -145,7 +145,7 @@ func TestRunStartupErrors(t *testing.T) {
 	}{
 		{
 			name:    "missing config flag",
-			want:    1,
+			want:    2,
 			wantLog: "-config flag is required",
 		},
 		{
@@ -156,19 +156,19 @@ func TestRunStartupErrors(t *testing.T) {
 		{
 			name:    "config file missing",
 			args:    []string{"-config", filepath.Join(t.TempDir(), "missing.yaml")},
-			want:    1,
+			want:    2,
 			wantLog: "Failed to load config",
 		},
 		{
 			name:    "invalid config",
 			config:  fmt.Sprintf(startupConfig, "http://192.0.2.1", "csv", "    csv: {}"),
-			want:    1,
+			want:    2,
 			wantLog: "Failed to load config",
 		},
 		{
 			name:    "setting rejected by the client library",
 			config:  fmt.Sprintf(startupConfig, "http://192.0.2.1", "mqtt", mqttOutput),
-			want:    1,
+			want:    2,
 			wantLog: "Startup failed",
 		},
 		{
