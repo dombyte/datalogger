@@ -207,6 +207,9 @@ outputs:
 - Unknown devices and points without a value are `404`. NaN and infinite values are
   `null`.
 - Values live in memory only: after a restart the API is empty until the first poll.
+- The API speaks plain HTTP. With a `token`, put a reverse proxy with TLS (Caddy, nginx,
+  Traefik) in front and bind `listen` to `127.0.0.1` (or the container network): over
+  plain HTTP the token travels unencrypted.
 
 ### Webhook
 

@@ -571,6 +571,9 @@ deadline (drain or hard).
 - **API docs as static files, no Swagger UI:** three routes need no generator; a
   plain page and a hand-written spec are embedded, work offline and need no vendored
   JavaScript that Renovate cannot track. Tests keep the spec and the handlers in step.
+- **API without TLS:** the API speaks plain HTTP; HTTPS belongs to a reverse proxy
+  (certificates, renewal and access logs are its job). The README tells users with a
+  token to put one in front and bind `listen` to localhost.
 - **API output serves latest values only:** no history, no staleness setting; `age_ms`
   lets the client decide what is too old, and history belongs in InfluxDB or CSV. The
   values live in a mutex-guarded map inside the writer: its goroutine is the only
