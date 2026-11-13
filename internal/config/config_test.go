@@ -1577,3 +1577,22 @@ outputs:
 	_, err = Load(path)
 	assert.ErrorContains(t, err, "invalid duration")
 }
+
+// Regression: two CSV outputs with the same file both appended to it and rotated it
+// under each other.
+func TestValidateCSVFiles(t *testing.T) {
+	t.Parallel()
+	second := func(path string) func(*Config) {
+		return func(c *Config) {
+			c.Outputs = append(c.Outputs, Output{
+				Name: "copy", Type: "csv", Devices: []string{"meter"},
+				Csv: &CsvConfig{FilePath: path},
+			})
+		}
+	}
+	assert.NoError(t, namesConfig(second("y.csv")).Validate())
+	for _, path := range []string{"x.csv", "./x.csv", "data/../x.csv"} {
+		assert.ErrorContains(t, namesConfig(second(path)).Validate(),
+			"outputs out and copy write the same file", path)
+	}
+}
