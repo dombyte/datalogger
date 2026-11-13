@@ -78,6 +78,7 @@ func TestDialConnectsWithCredentialsAndPublishes(t *testing.T) {
 	addr, received := fakeBroker(t)
 	d, err := mqtt.NewDialer(mqtt.ConnSettings{
 		Address: addr, ClientID: "logger-1", Username: "user", Password: "secret",
+		WillTopic: "logger/availability",
 	})
 	require.NoError(t, err)
 
@@ -89,6 +90,11 @@ func TestDialConnectsWithCredentialsAndPublishes(t *testing.T) {
 	assert.Equal(t, "logger-1", connect.ClientID)
 	assert.Equal(t, "user", connect.Username)
 	assert.Equal(t, []byte("secret"), connect.Password)
+	assert.True(t, connect.WillFlag)
+	assert.Equal(t, "logger/availability", connect.WillTopic)
+	assert.Equal(t, []byte("offline"), connect.WillMessage)
+	assert.True(t, connect.WillRetain)
+	assert.Equal(t, byte(1), connect.WillQOS)
 
 	_, err = session.Publish(context.Background(), &paho.Publish{Topic: "a/b", Payload: []byte("x")})
 	require.NoError(t, err)

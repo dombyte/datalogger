@@ -387,6 +387,10 @@ deadline (drain or hard).
   drops the session once.
 - The connection serialises whole packets (`packets.NewThreadSafeConn`): paho writes
   from several goroutines and a `tls.Conn` would interleave their frames.
+- Availability: `<topic>/availability` gets a retained `online` (QoS 1) after every
+  connect and `offline` on stop (at most 2 s, so a hanging broker cannot hold the
+  shutdown); the CONNECT carries the same topic with `offline` as last will, which the
+  broker publishes when the connection breaks without a DISCONNECT.
 - Topic: `<topic>/<device>/<point>` (`topic` default `datalogger`); payload
   `{"value": …, "unit": "…", "timestamp": "<RFC3339Nano>"}` (NaN/±Inf values are
   `null`, as in the API); `qos` 0–2, `retain`.

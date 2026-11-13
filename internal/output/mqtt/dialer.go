@@ -44,6 +44,9 @@ type ConnSettings struct {
 	Username string // optional
 	Password string // optional
 	Insecure bool   // TLS without certificate verification (also turns tcp:// into TLS)
+	// WillTopic, if set, gets a retained "offline" from the broker when the connection
+	// is lost without a DISCONNECT (the last will).
+	WillTopic string
 }
 
 // PahoDialer dials with github.com/eclipse/paho.golang (MQTT v5).
@@ -109,6 +112,11 @@ func (d *PahoDialer) Dial(ctx context.Context) (Publisher, error) {
 		ClientID:   d.settings.ClientID,
 		KeepAlive:  keepAliveSeconds,
 		CleanStart: true,
+	}
+	if d.settings.WillTopic != "" {
+		connect.WillMessage = &paho.WillMessage{
+			Topic: d.settings.WillTopic, Payload: []byte(Offline), QoS: 1, Retain: true,
+		}
 	}
 	if d.settings.Username != "" {
 		connect.Username, connect.UsernameFlag = d.settings.Username, true

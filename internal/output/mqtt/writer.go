@@ -31,6 +31,17 @@ const (
 	maxInflight = 64
 )
 
+// Payloads of the availability topic: retained, so a subscriber sees at once whether the
+// datalogger is connected.
+const (
+	Online  = "online"
+	Offline = "offline"
+
+	// offlineTimeout bounds the "offline" publish on stop, so a hanging broker cannot
+	// hold the shutdown; the last will covers a stop that did not get it out.
+	offlineTimeout = 2 * time.Second
+)
+
 // errNotSent is the result of a QoS 0 publish skipped after a failure in its poll.
 var errNotSent = errors.New("not sent after a failed publish")
 
@@ -43,6 +54,9 @@ type Settings struct {
 	Topic  string // prefix: <topic>/<device>/<point>
 	QoS    byte
 	Retain bool
+	// AvailabilityTopic, if set, gets a retained "online" after every connect and
+	// "offline" on stop; set the dialer's WillTopic to the same topic.
+	AvailabilityTopic string
 }
 
 // Deps are the dependencies of a Writer; all are required.
@@ -107,6 +121,7 @@ func (w *Writer) Start(ctx context.Context, input <-chan []datasource.DataPoint)
 	go func() {
 		defer close(done)
 		defer w.disconnect()
+		defer w.announce(Offline)
 		for {
 			select {
 			case <-ctx.Done():
@@ -291,6 +306,7 @@ func (w *Writer) connected(ctx context.Context) bool {
 	// The backoff is reset by the first successful publish, not here: a broker that
 	// accepts the connection but drops it on publish must not be redialed per point.
 	w.session = session
+	w.announce(Online)
 	log := w.logger.Info()
 	if w.dropped > 0 {
 		log = log.Int("dropped", w.dropped)
@@ -298,6 +314,23 @@ func (w *Writer) connected(ctx context.Context) bool {
 	}
 	log.Msg("Connected to MQTT broker")
 	return true
+}
+
+// announce publishes the availability payload, retained with QoS 1, if the writer has
+// an availability topic and a session. A failure is logged: the data publishes notice
+// a broken connection anyway.
+func (w *Writer) announce(payload string) {
+	if w.settings.AvailabilityTopic == "" || w.session == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), offlineTimeout)
+	defer cancel()
+	_, err := w.session.Publish(ctx, &paho.Publish{
+		Topic: w.settings.AvailabilityTopic, Payload: []byte(payload), QoS: 1, Retain: true,
+	})
+	if err != nil {
+		w.logger.Warn().Err(err).Str("payload", payload).Msg("Failed to publish availability")
+	}
 }
 
 // disconnect ends the current session, if any.

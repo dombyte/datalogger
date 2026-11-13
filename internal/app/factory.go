@@ -32,6 +32,10 @@ const (
 	// a serial port, its frames carry no transaction ID and its devices share the line
 	// behind the gateway.
 	rtuOverTCPScheme = "rtuovertcp://"
+
+	// mqttAvailabilityTopic follows the MQTT topic prefix: <topic>/availability carries
+	// "online" or "offline" (retained).
+	mqttAvailabilityTopic = "availability"
 )
 
 // rtuFrames reports whether a Modbus address carries RTU frames (a serial port or an
@@ -337,22 +341,25 @@ func createMQTTWriter(
 	clk clock.Clock,
 ) (output.Writer, error) {
 	m := o.Mqtt
+	availability := m.Topic + "/" + mqttAvailabilityTopic
 	dialer, err := mqtt.NewDialer(mqtt.ConnSettings{
-		Address:  m.Address,
-		ClientID: m.ClientID,
-		Username: m.Username,
-		Password: m.Password,
-		Insecure: m.Insecure,
+		Address:   m.Address,
+		ClientID:  m.ClientID,
+		Username:  m.Username,
+		Password:  m.Password,
+		Insecure:  m.Insecure,
+		WillTopic: availability,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return mqtt.New(mqtt.Deps{
 		Settings: mqtt.Settings{
-			Name:   o.Name,
-			Topic:  m.Topic,
-			QoS:    byte(m.QoS), // validated: 0-2
-			Retain: m.Retain,
+			Name:              o.Name,
+			Topic:             m.Topic,
+			QoS:               byte(m.QoS), // validated: 0-2
+			Retain:            m.Retain,
+			AvailabilityTopic: availability,
 		},
 		Dialer: dialer,
 		Clock:  clk,
