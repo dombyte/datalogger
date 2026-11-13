@@ -11,6 +11,14 @@ const (
 	defaultResponseType = "json"
 	defaultMQTTTopic    = "datalogger"
 
+	// Serial defaults of the Modbus library, filled in so that devices that share a port
+	// compare equal whether they set them or not.
+	defaultSpeed          = 19200
+	defaultDataBits       = 8
+	defaultParity         = "N"
+	stopBitsWithoutParity = 2 // the Modbus serial line spec: no parity, two stop bits
+	stopBitsWithParity    = 1
+
 	// clientIDSuffixLen is the length of the random part of a generated MQTT client ID.
 	clientIDSuffixLen = 8
 
@@ -47,12 +55,42 @@ func (d *Device) applyDefaults() {
 		}
 	}
 
-	if h := d.HTTP; h != nil {
-		if h.Method == "" {
-			h.Method = defaultHTTPMethod
-		}
-		if h.ResponseType == "" {
-			h.ResponseType = defaultResponseType
+	if m := d.Modbus; m != nil && strings.HasPrefix(m.Address, rtuScheme) {
+		m.applySerialDefaults()
+	}
+
+	if d.HTTP != nil {
+		d.HTTP.applyDefaults()
+	}
+}
+
+// applyDefaults fills in the method and the response type.
+func (h *HTTPConfig) applyDefaults() {
+	if h.Method == "" {
+		h.Method = defaultHTTPMethod
+	}
+	if h.ResponseType == "" {
+		h.ResponseType = defaultResponseType
+	}
+}
+
+// applySerialDefaults fills in the serial settings the Modbus library would use when
+// they are omitted: 19200 baud, 8 data bits, no parity, and 2 stop bits without parity
+// (1 with parity).
+func (m *ModbusConfig) applySerialDefaults() {
+	if m.Speed == 0 {
+		m.Speed = defaultSpeed
+	}
+	if m.DataBits == 0 {
+		m.DataBits = defaultDataBits
+	}
+	if m.Parity == "" {
+		m.Parity = defaultParity
+	}
+	if m.StopBits == 0 {
+		m.StopBits = stopBitsWithParity
+		if m.Parity == defaultParity {
+			m.StopBits = stopBitsWithoutParity
 		}
 	}
 }

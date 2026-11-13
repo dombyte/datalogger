@@ -52,10 +52,10 @@ type ModbusConfig struct {
 	// Address is "tcp://host:port" or "rtu:///dev/ttyUSB0".
 	Address      string   `mapstructure:"address"`
 	SlaveID      uint8    `mapstructure:"slave_id"`
-	Speed        int      `mapstructure:"speed"`         // RTU only
+	Speed        int      `mapstructure:"speed"`         // RTU only, default 19200
 	DataBits     int      `mapstructure:"data_bits"`     // RTU only, default 8
-	Parity       string   `mapstructure:"parity"`        // RTU only: "N", "E", "O"
-	StopBits     int      `mapstructure:"stop_bits"`     // RTU only, default 1
+	Parity       string   `mapstructure:"parity"`        // RTU only: "N" (default), "E", "O"
+	StopBits     int      `mapstructure:"stop_bits"`     // RTU only, default 2 with N, else 1
 	RegisterMode string   `mapstructure:"register_mode"` // "direct" or "range"
 	Ranges       []string `mapstructure:"ranges"`        // e.g. ["3000-3011", "3012-3060"]
 }

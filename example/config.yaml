@@ -140,6 +140,8 @@ devices:
     modbus:
       address: "rtu:///dev/ttyUSB0"
       slave_id: 1
+      # Serial defaults: speed 19200, data_bits 8, parity N, stop_bits 2 without parity
+      # (the Modbus spec), 1 with parity. Many devices use 8N1: set stop_bits: 1.
       speed: 9600
       data_bits: 8
       parity: "N" # N = none, E = even, O = odd
