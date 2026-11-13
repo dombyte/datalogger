@@ -647,7 +647,8 @@ deadline (drain or hard).
   which exits 1.
 
 ### 9.3 Logging
-- One `zerolog.Logger` is built in `main` and injected; every component gets
+- One `zerolog.Logger` is built in `main` (`-log-format console`, the default, or `json`
+  for one object per line) and injected; every component gets
   `log.With().Str("component", name).Logger()`.
 - Constant messages, data in fields: `.Str("device", name).Err(err).Msg(...)`; no
   `Msgf`, no `fmt.Sprintf` into `Msg`.

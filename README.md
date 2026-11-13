@@ -76,6 +76,7 @@ Download the archive for Linux (amd64, arm64, armv7) or macOS (amd64, arm64) fro
 ```bash
 datalogger -config config.yaml [-debug]   # -version prints the build info
 datalogger -check -config config.yaml     # validate only: exit 0 if valid, 2 if not
+datalogger -config config.yaml -log-format json   # JSON lines for log shippers
 ```
 
 `-check` loads the config and builds every device and output without connecting,
