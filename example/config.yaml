@@ -6,7 +6,8 @@
 #
 # Never commit real addresses, tokens or passwords. Keep them in your local config.yaml.
 #
-# Durations use Go syntax: 250ms, 1s, 30s, 5m, 1h.
+# Durations: a number without a unit is seconds (5 = 5s); otherwise the units ms, s,
+# min (or m) and h, also combined: 250ms, 1s, 30s, 5min, 1h, 1h30min.
 
 # =====================================================================================
 # Lookups (optional): named tables of integer code -> text for point expressions, used as
@@ -194,7 +195,7 @@ devices:
   # response_type: json (default) or text (the whole body as one string value).
   - name: cloud_api
     type: http
-    poll_interval: 1m
+    poll_interval: 1min
     timeout: 10s
     http:
       address: "https://api.example.com/v1/status"

@@ -450,6 +450,9 @@ writer that failed, or a missed deadline (drain or hard).
   every setting only that type uses; validation requires that block and rejects a block
   of another type.
 - Unknown keys are an error (a typo would otherwise fall back to a default silently).
+- Durations (`durationHook` in `config/duration.go`): a number without a unit is seconds
+  (YAML numbers were nanoseconds before); units `ms`, `s`, `min` (or `m`), `h`, also
+  combined (`1h30min`); smaller units are rejected.
 - `config.Load` reads the file, fills defaults (`applyDefaults`: device `timeout` = the
   poll interval, at least 3 s and at most 10 s; point `scale` 1; HTTP method GET and response type json;
   MQTT topic `datalogger` and client ID `logger-<random>`) and then

@@ -1462,3 +1462,68 @@ func TestLoadErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestParseDuration checks the duration formats of the config.
+func TestParseDuration(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]time.Duration{
+		"5":       5 * time.Second,
+		"1.5":     1500 * time.Millisecond,
+		" 30 ":    30 * time.Second,
+		"500ms":   500 * time.Millisecond,
+		"30s":     30 * time.Second,
+		"5min":    5 * time.Minute,
+		"5m":      5 * time.Minute,
+		"1h":      time.Hour,
+		"1h30min": 90 * time.Minute,
+		"2.5s":    2500 * time.Millisecond,
+	} {
+		got, err := parseDuration(in)
+		require.NoError(t, err, in)
+		assert.Equal(t, want, got, in)
+	}
+	for _, in := range []string{"5us", "10ns", "-5s", "-5", "NaN", "Inf", "1e9", "soon", "5 s", "1d", ""} {
+		_, err := parseDuration(in)
+		assert.Error(t, err, in)
+	}
+}
+
+// TestLoadDurations is a regression test: numbers without a unit were nanoseconds, so
+// poll_interval: 5 polled every 5 ns and max_age: 10 rotated (and deleted) the CSV file
+// after every poll.
+func TestLoadDurations(t *testing.T) {
+	t.Parallel()
+	content := `
+devices:
+  - name: d
+    type: http
+    poll_interval: 5
+    timeout: 2.5
+    http: {address: "http://localhost"}
+    points: [{name: p, json_path: a}]
+outputs:
+  - name: o
+    type: csv
+    devices: [d]
+    csv: {file_path: /tmp/x.csv, max_age: "10"}
+  - name: i
+    type: influxdb
+    devices: [d]
+    influxdb: {address: "http://localhost", token: t, database: db, batch_timeout: 250ms,
+      retry_delay: 2min}
+`
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Second, cfg.Devices[0].PollInterval)
+	assert.Equal(t, 2500*time.Millisecond, cfg.Devices[0].Timeout)
+	assert.Equal(t, 10*time.Second, cfg.Outputs[0].Csv.MaxAge)
+	assert.Equal(t, 250*time.Millisecond, cfg.Outputs[1].Influxdb.BatchTimeout)
+	assert.Equal(t, 2*time.Minute, cfg.Outputs[1].Influxdb.RetryDelay)
+
+	require.NoError(t, os.WriteFile(path, []byte(
+		"devices:\n  - name: d\n    poll_interval: 5us\n"), 0o600))
+	_, err = Load(path)
+	assert.ErrorContains(t, err, "invalid duration")
+}
