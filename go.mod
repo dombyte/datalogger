@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	github.com/InfluxCommunity/influxdb3-go/v2 v2.17.0
 	github.com/eclipse/paho.golang v0.23.0
-	github.com/expr-lang/expr v1.18.0
+	github.com/expr-lang/expr v1.18.1
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/rs/zerolog v1.35.1
 	github.com/simonvetter/modbus v1.6.4
